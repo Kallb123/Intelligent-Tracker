@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyInstance } from 'fastify';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 
 /** An error the client should see: `{ error: code, message }` with the given status. */
 export class AppError extends Error {
@@ -12,6 +13,9 @@ export class AppError extends Error {
     super(message);
   }
 }
+
+/** The body of every error response, for the OpenAPI document. */
+export const errorResponseSchema = z.object({ error: z.string(), message: z.string() });
 
 export const unauthorized = (message = 'Log in to continue') =>
   new AppError(401, 'unauthorized', message);

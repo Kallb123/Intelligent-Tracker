@@ -27,21 +27,41 @@ import { one } from '../rows.js';
 export function registerLinkRoutes(app: FastifyInstance, ctx: ApiContext): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
   const params = z.object({ token: z.string().min(1).max(200) });
+  const tags = ['Links'];
 
   function register(purpose: PasswordTokenPurpose, infoPath: string, redeemPath: string): void {
-    r.get(infoPath, { schema: { params, response: { 200: linkInfoSchema } } }, async (request) => {
-      const target = await lookupPasswordToken(ctx, request.params.token, purpose);
-      return {
-        name: target.name,
-        username: target.username,
-        householdName: target.householdName,
-        expiresAt: target.expiresAt.toISOString(),
-      };
-    });
+    r.get(
+      infoPath,
+      {
+        schema: {
+          tags,
+          summary: `Look up a ${purpose} link`,
+          params,
+          response: { 200: linkInfoSchema },
+        },
+      },
+      async (request) => {
+        const target = await lookupPasswordToken(ctx, request.params.token, purpose);
+        return {
+          name: target.name,
+          username: target.username,
+          householdName: target.householdName,
+          expiresAt: target.expiresAt.toISOString(),
+        };
+      },
+    );
 
     r.post(
       redeemPath,
-      { schema: { params, body: setPasswordBodySchema, response: { 200: sessionInfoSchema } } },
+      {
+        schema: {
+          tags,
+          summary: `Use a ${purpose} link to set a password`,
+          params,
+          body: setPasswordBodySchema,
+          response: { 200: sessionInfoSchema },
+        },
+      },
       async (request, reply) => {
         // Validate the link before spending a password hash on it.
         const target = await lookupPasswordToken(ctx, request.params.token, purpose);
