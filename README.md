@@ -45,18 +45,24 @@ It is a pnpm workspace; every package is named `@tracker/<name>` and is consumed
 pnpm install            # install all workspace dependencies
 pnpm test               # run every package's tests once (Vitest)
 pnpm test:watch         # Vitest in watch mode
+pnpm test:coverage      # tests with coverage; the recurrence engine must stay at 100%
 pnpm typecheck          # tsc --noEmit in every package
 pnpm lint               # ESLint (zero warnings allowed)
 pnpm format             # Prettier, write
 pnpm format:check       # Prettier, check only
 ```
 
+`packages/core` is pure domain logic with no I/O. Its recurrence engine (`src/recurrence`) expands
+RFC 5545 rules in the household time zone (Europe/London by default, so "every day at 08:00" survives
+BST/GMT changes), handles all-day vs timed dues and "N days after completion" tasks, and decides
+which occurrences to materialise ahead of time. See `packages/core/src/recurrence/index.ts` for the API.
+
 `pnpm build` bundles each backend app into `apps/<name>/dist/main.js` (esbuild) and builds the SPA
 with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watch) and
 `pnpm --filter @tracker/web dev` (Vite on :5173, proxying `/api` and `/ical` to
 `VITE_API_PROXY_TARGET`, default `http://localhost:3000`).
 
-CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test` and `build` on
+CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test`, `test:coverage` and `build` on
 pushes to `main` and on every pull request. A `db` job checks the schema against the migrations,
 applies them to a Postgres 16 service container and runs the database integration tests, and a
 `docker` job builds the images, starts the stack and smoke-tests it (including that the api

@@ -10,6 +10,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@tracker/shared": "workspace:*"
+    "@tracker/shared": "workspace:*",
+    "luxon": "^3.7.2",
+    "rrule": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.6",
+    "fast-check": "^4.10.2"
   }
 }

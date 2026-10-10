@@ -39,6 +39,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Coverage (recurrence engine must stay at 100%)
+        run: pnpm test:coverage
+
       - name: Build
         run: pnpm build
 
