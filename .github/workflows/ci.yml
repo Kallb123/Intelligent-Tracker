@@ -38,3 +38,29 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the stack
+        run: docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Smoke test
+        run: |
+          curl -fsS http://localhost:8080/ | grep -q 'Intelligent Tracker'
+          curl -fsS http://localhost:8080/some/spa/route | grep -q 'Intelligent Tracker'
+          curl -fsS http://localhost:8080/api/health | tee /dev/stderr | grep -q '"status":"ok"'
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose ps -a && docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

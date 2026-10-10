@@ -1,0 +1,4 @@
+# Entry point so a plain `docker compose up` works from the repo root.
+# The real definitions live in deploy/.
+include:
+  - deploy/docker-compose.yml

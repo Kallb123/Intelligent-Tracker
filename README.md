@@ -8,23 +8,26 @@ Runs locally with Docker Compose, with a Vue web UI.
 
 > Status: scaffolding in progress. Planning is done (decisions agreed: TypeScript, per-member
 > login, Cloudflare Tunnel for the calendar feed, one house Telegram group, rule-based smarts,
-> UK defaults) and PR 1 (monorepo + CI) is in place: the workspace packages are empty
-> placeholders. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
+> UK defaults), PR 1 (monorepo + CI) is in place and PR 2 (Docker Compose skeleton) adds a
+> runnable stack with a "hello" SPA; the workspace packages are otherwise placeholders. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
 > design and the PR-by-PR implementation plan.
 
 ## Repository layout
 
 ```
 apps/
-  api/        HTTP API (placeholder)
-  worker/     scheduler tick and reminder delivery (placeholder)
-  bot/        Telegram bot (placeholder)
-  web/        Vue 3 SPA (placeholder, browser-flavoured tsconfig)
+  api/        Fastify HTTP API (just GET /api/health so far)
+  worker/     scheduler tick and reminder delivery (idles with a heartbeat)
+  bot/        Telegram bot (idles with a heartbeat)
+  web/        Vite SPA (a "hello" page for now; Vue 3 arrives later)
 packages/
   core/       pure domain logic: recurrence, rotation, reminder planning
   db/         database schema, migrations, repositories
   shared/     schemas, types and defaults shared across apps
+deploy/       Caddyfile and Docker Compose files
 docs/         design and implementation plan
+Dockerfile    one backend image (api/worker/bot) and the Caddy web image
+compose.yaml  root entry point that includes deploy/docker-compose.yml
 ```
 
 It is a pnpm workspace; every package is named `@tracker/<name>` and is consumed from source
@@ -47,5 +50,37 @@ pnpm format             # Prettier, write
 pnpm format:check       # Prettier, check only
 ```
 
-CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck` and `test` on pushes to
-`main` and on every pull request.
+`pnpm build` bundles each backend app into `apps/<name>/dist/main.js` (esbuild) and builds the SPA
+with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watch) and
+`pnpm --filter @tracker/web dev` (Vite on :5173, proxying `/api` and `/ical` to
+`VITE_API_PROXY_TARGET`, default `http://localhost:3000`).
+
+CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test` and `build` on
+pushes to `main` and on every pull request, and a second job builds the Docker images, starts the
+stack and smoke-tests it.
+
+## Running with Docker
+
+All commands run from the repo root. No `.env` is needed to try it out; to customise, copy
+`.env.example` to `.env` (ports, Postgres credentials, secrets, timezone).
+
+```sh
+docker compose up -d --build --wait   # or: pnpm docker:up
+```
+
+Then open <http://localhost:8080> (`WEB_PORT` changes the port). Caddy serves the SPA, which
+calls `/api/health`, and proxies `/api/*` and `/ical/*` to the `api` container. Services: `db`
+(Postgres 16, data in the `db-data` volume), `api`, `worker`, `bot` (the same backend image with
+different commands) and `web` (Caddy). Each has a healthcheck; check with `docker compose ps`.
+Stop with `docker compose down` (add `-v` to also delete the database volume). The Cloudflare
+tunnel and backup services come in later PRs.
+
+For development with hot reload (`tsx watch` for the backend, the Vite dev server for the web):
+
+```sh
+docker compose -f compose.yaml -f deploy/docker-compose.dev.yml up --build   # or: pnpm docker:dev
+```
+
+The web UI is at <http://localhost:5173>, the API at <http://localhost:3000> and Postgres at
+`localhost:5432` (all bound to loopback except the web port). Only `src` directories are
+mounted, so rebuild (`--build`) after changing dependencies or config files.
