@@ -42,6 +42,52 @@ jobs:
       - name: Build
         run: pnpm build
 
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/tracker
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/tracker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Schema matches migrations
+        run: pnpm db:check
+
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      - name: Migrations are a no-op the second time
+        run: pnpm db:migrate
+
+      - name: Seed
+        run: pnpm db:seed -- --demo
+
+      - name: Database integration tests
+        run: pnpm exec vitest run --project @tracker/db
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -56,6 +102,15 @@ jobs:
           curl -fsS http://localhost:8080/ | grep -q 'Intelligent Tracker'
           curl -fsS http://localhost:8080/some/spa/route | grep -q 'Intelligent Tracker'
           curl -fsS http://localhost:8080/api/health | tee /dev/stderr | grep -q '"status":"ok"'
+
+      - name: Check the api migrated and seeded the database
+        run: |
+          psql() { docker compose exec -T db psql -U tracker -d tracker -tAc "$1"; }
+          migrations=$(psql 'select count(*) from drizzle.__drizzle_migrations')
+          holidays=$(psql 'select count(*) from bank_holiday')
+          echo "migrations=$migrations bank_holidays=$holidays"
+          test "$migrations" -gt 0
+          test "$holidays" -gt 0
 
       - name: Show logs on failure
         if: failure()

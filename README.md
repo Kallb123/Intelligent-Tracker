@@ -8,8 +8,9 @@ Runs locally with Docker Compose, with a Vue web UI.
 
 > Status: scaffolding in progress. Planning is done (decisions agreed: TypeScript, per-member
 > login, Cloudflare Tunnel for the calendar feed, one house Telegram group, rule-based smarts,
-> UK defaults), PR 1 (monorepo + CI) is in place and PR 2 (Docker Compose skeleton) adds a
-> runnable stack with a "hello" SPA; the workspace packages are otherwise placeholders. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
+> UK defaults), PR 1 (monorepo + CI) is in place, PR 2 (Docker Compose skeleton) adds a
+> runnable stack with a "hello" SPA and PR 3 adds the database schema and migrations; the other
+> workspace packages are still placeholders. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
 > design and the PR-by-PR implementation plan.
 
 ## Repository layout
@@ -22,7 +23,7 @@ apps/
   web/        Vite SPA (a "hello" page for now; Vue 3 arrives later)
 packages/
   core/       pure domain logic: recurrence, rotation, reminder planning
-  db/         database schema, migrations, repositories
+  db/         Drizzle schema, SQL migrations, migration runner, seed data
   shared/     schemas, types and defaults shared across apps
 deploy/       Caddyfile and Docker Compose files
 docs/         design and implementation plan
@@ -56,8 +57,34 @@ with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watc
 `VITE_API_PROXY_TARGET`, default `http://localhost:3000`).
 
 CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test` and `build` on
-pushes to `main` and on every pull request, and a second job builds the Docker images, starts the
-stack and smoke-tests it.
+pushes to `main` and on every pull request. A `db` job checks the schema against the migrations,
+applies them to a Postgres 16 service container and runs the database integration tests, and a
+`docker` job builds the images, starts the stack and smoke-tests it (including that the api
+migrated and seeded the database).
+
+## Database
+
+The schema lives in `packages/db/src/schema` (Drizzle ORM, Postgres 16) and the generated SQL
+migrations are committed in `packages/db/migrations`. The `api` applies pending migrations (guarded
+by a Postgres advisory lock) and seeds reference data (bank holidays) every time it starts, if
+`DATABASE_URL` is set. To work on the database from the host, point `DATABASE_URL` at a running
+Postgres (for example the dev compose `db` on `localhost:5432`, see `.env.example`; the scripts
+read the repo-root `.env`):
+
+```sh
+pnpm db:migrate             # apply pending migrations
+pnpm db:seed                # upsert reference data (England & Wales bank holidays)
+pnpm db:seed -- --demo      # ...and create a "Home" household with UK defaults if none exists
+pnpm db:generate --name add_thing   # after editing the schema: write a new migration to commit
+pnpm db:check               # fail if the schema has changes that no migration covers
+```
+
+The integration tests need a Postgres server and are skipped without one. Give them a connection
+string for any database on the server; each run creates (and drops) its own throwaway database:
+
+```sh
+TEST_DATABASE_URL=postgres://tracker:tracker@localhost:5432/postgres pnpm test
+```
 
 ## Running with Docker
 
