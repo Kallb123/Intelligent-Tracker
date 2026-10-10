@@ -1,0 +1,103 @@
+name: intelligent-tracker
+
+x-backend: &backend
+  build:
+    context: ..
+    target: backend
+  image: intelligent-tracker-backend
+  restart: unless-stopped
+  env_file:
+    - path: ../.env
+      required: false
+  environment:
+    &backend-env # Always points at the db service, even if .env sets a host-oriented DATABASE_URL.
+    DATABASE_URL: postgres://${POSTGRES_USER:-tracker}:${POSTGRES_PASSWORD:-tracker}@db:5432/${POSTGRES_DB:-tracker}
+    TZ: ${TZ:-Europe/London}
+  depends_on:
+    db:
+      condition: service_healthy
+
+# Worker and bot touch this file every minute; unhealthy if it goes stale (3 minutes).
+x-heartbeat-healthcheck: &heartbeat-healthcheck
+  test:
+    - CMD
+    - node
+    - -e
+    - "process.exit(Date.now() - require('node:fs').statSync(process.env.HEARTBEAT_FILE).mtimeMs < 180000 ? 0 : 1)"
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 15s
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tracker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tracker}
+      POSTGRES_DB: ${POSTGRES_DB:-tracker}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      HOST: 0.0.0.0
+      PORT: '3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    <<: *backend
+    command: ['node', 'apps/worker/dist/main.js']
+    environment:
+      <<: *backend-env
+      HEARTBEAT_FILE: /tmp/heartbeat
+    healthcheck: *heartbeat-healthcheck
+
+  bot:
+    <<: *backend
+    command: ['node', 'apps/bot/dist/main.js']
+    environment:
+      <<: *backend-env
+      HEARTBEAT_FILE: /tmp/heartbeat
+    healthcheck: *heartbeat-healthcheck
+
+  web:
+    build:
+      context: ..
+      target: web
+    image: intelligent-tracker-web
+    restart: unless-stopped
+    ports:
+      - '${WEB_PORT:-8080}:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:80/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+# The `tunnel` (cloudflared) and `backup` services arrive in later PRs.
+
+volumes:
+  db-data:

@@ -1,0 +1,71 @@
+# Dev override: hot reload for every service. Use from the repo root. Paths here are relative
+# to the repo root (the project directory), not to deploy/:
+#   docker compose -f compose.yaml -f deploy/docker-compose.dev.yml up --build
+# (or `pnpm docker:dev`). Only src directories and config files are bind-mounted;
+# node_modules stays inside the image, so rebuild after changing dependencies.
+
+x-dev-build: &dev-build
+  context: .
+  target: dev
+
+services:
+  db:
+    ports:
+      - '127.0.0.1:${DB_PORT:-5432}:5432'
+
+  api:
+    build: *dev-build
+    image: intelligent-tracker-dev
+    working_dir: /app/apps/api
+    command: ['pnpm', 'dev']
+    init: true
+    ports:
+      - '127.0.0.1:${API_PORT:-3000}:3000'
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./packages/core/src:/app/packages/core/src
+      - ./packages/db/src:/app/packages/db/src
+      - ./packages/shared/src:/app/packages/shared/src
+
+  worker:
+    build: *dev-build
+    image: intelligent-tracker-dev
+    working_dir: /app/apps/worker
+    command: ['pnpm', 'dev']
+    init: true
+    volumes:
+      - ./apps/worker/src:/app/apps/worker/src
+      - ./packages/core/src:/app/packages/core/src
+      - ./packages/db/src:/app/packages/db/src
+      - ./packages/shared/src:/app/packages/shared/src
+
+  bot:
+    build: *dev-build
+    image: intelligent-tracker-dev
+    working_dir: /app/apps/bot
+    command: ['pnpm', 'dev']
+    init: true
+    volumes:
+      - ./apps/bot/src:/app/apps/bot/src
+      - ./packages/core/src:/app/packages/core/src
+      - ./packages/db/src:/app/packages/db/src
+      - ./packages/shared/src:/app/packages/shared/src
+
+  # Vite dev server on :5173 replaces Caddy and proxies /api and /ical to the api service.
+  web:
+    build: *dev-build
+    image: intelligent-tracker-dev
+    working_dir: /app/apps/web
+    command: ['pnpm', 'dev']
+    init: true
+    environment:
+      VITE_API_PROXY_TARGET: http://api:3000
+    ports: !override
+      - '5173:5173'
+    volumes:
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/index.html:/app/apps/web/index.html
+      - ./apps/web/vite.config.ts:/app/apps/web/vite.config.ts
+      - ./packages/shared/src:/app/packages/shared/src
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:5173/']

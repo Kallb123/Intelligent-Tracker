@@ -1,0 +1,27 @@
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	encode zstd gzip
+
+	# API and calendar feed go to the backend; everything else is the SPA.
+	@backend path /api/* /ical/*
+	handle @backend {
+		reverse_proxy api:3000
+	}
+
+	handle {
+		root * /srv
+
+		# Vite emits content-hashed files under /assets, so they can be cached forever.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /assets/*
+		header @pages Cache-Control "no-cache"
+
+		try_files {path} /index.html
+		file_server
+	}
+}
