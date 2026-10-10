@@ -6,5 +6,6 @@ getting quotes". It talks to you over Telegram and publishes a calendar feed tha
 
 Runs locally with Docker Compose, with a Vue web UI.
 
-> Status: planning. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model,
+> Status: planning (decisions agreed: TypeScript, per-member login, Cloudflare Tunnel for the
+> calendar feed, one house Telegram group, rule-based smarts, UK defaults). See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model,
 > reminder design and the PR-by-PR implementation plan.
