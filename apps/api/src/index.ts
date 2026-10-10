@@ -1,0 +1,7 @@
+import { DEFAULT_TIMEZONE } from '@tracker/core';
+
+export const APP_NAME = 'api';
+
+export function startupMessage(): string {
+  return `[${APP_NAME}] starting (timezone: ${DEFAULT_TIMEZONE})`;
+}
