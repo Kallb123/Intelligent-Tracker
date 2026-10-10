@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@tracker/core": "workspace:*",
     "@tracker/shared": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "postgres": "^3.4.9"

@@ -139,6 +139,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@tracker/core':
+        specifier: workspace:*
+        version: link:../core
       '@tracker/shared':
         specifier: workspace:*
         version: link:../shared

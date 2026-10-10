@@ -4,6 +4,12 @@ import * as schema from './schema/index.js';
 
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 
+/**
+ * What queries need: a `Database` or a transaction from `db.transaction(async (tx) => ...)`.
+ * Repository functions take this so callers can run them inside their own transaction.
+ */
+export type DbOrTransaction = Pick<Database, 'select' | 'insert' | 'update' | 'delete'>;
+
 export interface DbHandle {
   /** Drizzle instance with the full schema attached. */
   db: Database;
