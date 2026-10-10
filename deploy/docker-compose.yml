@@ -52,6 +52,8 @@ services:
       <<: *backend-env
       HOST: 0.0.0.0
       PORT: '3000'
+      # Only Caddy reaches the api, so its X-Forwarded-For is the real client IP (login rate limit).
+      TRUST_PROXY: 'true'
     healthcheck:
       test:
         - CMD

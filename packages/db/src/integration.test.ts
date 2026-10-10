@@ -9,6 +9,7 @@ import {
   household,
   member,
   occurrence,
+  passwordToken,
   task,
   taskAssignee,
   taskMilestone,
@@ -87,6 +88,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
         'household',
         'member',
         'occurrence',
+        'password_token',
         'session',
         'task',
         'task_assignee',
@@ -100,6 +102,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
         'bank_holiday_region',
         'member_role',
         'occurrence_status',
+        'password_token_purpose',
         'reminder_profile',
         'reminder_slot',
         'schedule_kind',
@@ -253,6 +256,41 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
           .values({ householdId: h.id, name: 'Other Sam', username: 'sam-CI' }),
       );
       expect(err).toMatchObject({ code: '23505', constraint_name: 'member_username_lower_uq' });
+    });
+
+    it('treats emails as case-insensitive, but allows members without one', async () => {
+      const h = await newHousehold();
+      await handle.db
+        .insert(member)
+        .values({ householdId: h.id, name: 'A', username: 'a-email', email: 'Sam@Example.com' });
+      const err = await pgError(
+        handle.db
+          .insert(member)
+          .values({ householdId: h.id, name: 'B', username: 'b-email', email: 'sam@example.com' }),
+      );
+      expect(err).toMatchObject({ code: '23505', constraint_name: 'member_email_lower_uq' });
+
+      await handle.db.insert(member).values([
+        { householdId: h.id, name: 'C', username: 'c-email' },
+        { householdId: h.id, name: 'D', username: 'd-email' },
+      ]);
+    });
+
+    it('deletes password tokens with their member', async () => {
+      const h = await newHousehold();
+      const [m] = await handle.db
+        .insert(member)
+        .values({ householdId: h.id, name: 'Sam', username: 'sam-token' })
+        .returning();
+      await handle.db.insert(passwordToken).values({
+        id: 'hash-of-token',
+        memberId: (m as { id: string }).id,
+        purpose: 'invite',
+        expiresAt: new Date(Date.now() + 1000),
+      });
+
+      await handle.db.delete(member).where(eq(member.id, (m as { id: string }).id));
+      expect(await handle.db.select().from(passwordToken)).toEqual([]);
     });
 
     it('gives each member a generated iCal token and an empty reminder-times list', async () => {

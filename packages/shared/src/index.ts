@@ -16,3 +16,5 @@ export const HOUSEHOLD_DEFAULTS = {
 } as const;
 
 export type HouseholdDefaults = typeof HOUSEHOLD_DEFAULTS;
+
+export * from './auth.js';

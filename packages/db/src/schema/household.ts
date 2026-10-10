@@ -14,7 +14,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { createdAt, updatedAt } from './columns.js';
-import { bankHolidayRegion, memberRole, reminderProfile } from './enums.js';
+import { bankHolidayRegion, memberRole, passwordTokenPurpose, reminderProfile } from './enums.js';
 
 export const household = pgTable('household', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -50,7 +50,7 @@ export const member = pgTable(
     username: text('username').notNull(),
     email: text('email'),
     role: memberRole('role').notNull().default('member'),
-    // Null until the member sets a password via the setup/invite flow (PR 5).
+    // Argon2id PHC string. Null until the member sets a password via setup or an invite link.
     passwordHash: text('password_hash'),
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).unique(),
     telegramLinkCode: text('telegram_link_code').unique(),
@@ -70,6 +70,8 @@ export const member = pgTable(
   (t) => [
     // Usernames are case-insensitive: "Sam" and "sam" are the same login.
     uniqueIndex('member_username_lower_uq').on(sql`lower(${t.username})`),
+    // Members can also log in by email, so it must identify one member (NULLs never collide).
+    uniqueIndex('member_email_lower_uq').on(sql`lower(${t.email})`),
     index('member_household_id_idx').on(t.householdId),
   ],
 );
@@ -77,7 +79,8 @@ export const member = pgTable(
 export const session = pgTable(
   'session',
   {
-    // Opaque token id; how it is derived or hashed is decided with auth in PR 5.
+    // SHA-256 (hex) of the random token in the session cookie, so a leaked database does not
+    // leak usable sessions.
     id: text('id').primaryKey(),
     memberId: uuid('member_id')
       .notNull()
@@ -90,6 +93,28 @@ export const session = pgTable(
     index('session_member_id_idx').on(t.memberId),
     index('session_expires_at_idx').on(t.expiresAt),
   ],
+);
+
+/**
+ * A one-time link that lets a member set their password: an invite for a member created by an
+ * admin (no password yet) or a reset of an existing one. Only a hash of the link's token is kept.
+ */
+export const passwordToken = pgTable(
+  'password_token',
+  {
+    // SHA-256 (hex) of the token in the link.
+    id: text('id').primaryKey(),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => member.id, { onDelete: 'cascade' }),
+    purpose: passwordTokenPurpose('purpose').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    // Set when the link is used; a used link can never be used again.
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => member.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('password_token_member_id_idx').on(t.memberId)],
 );
 
 /** Reference data (not per household): looked up by the household's `bank_holiday_region`. */
@@ -109,5 +134,7 @@ export type Member = typeof member.$inferSelect;
 export type NewMember = typeof member.$inferInsert;
 export type Session = typeof session.$inferSelect;
 export type NewSession = typeof session.$inferInsert;
+export type PasswordToken = typeof passwordToken.$inferSelect;
+export type NewPasswordToken = typeof passwordToken.$inferInsert;
 export type BankHoliday = typeof bankHoliday.$inferSelect;
 export type NewBankHoliday = typeof bankHoliday.$inferInsert;

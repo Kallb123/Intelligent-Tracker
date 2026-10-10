@@ -64,7 +64,7 @@ with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watc
 
 CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test`, `test:coverage` and `build` on
 pushes to `main` and on every pull request. A `db` job checks the schema against the migrations,
-applies them to a Postgres 16 service container and runs the database integration tests, and a
+applies them to a Postgres 16 service container and runs the database and auth API integration tests, and a
 `docker` job builds the images, starts the stack and smoke-tests it (including that the api
 migrated and seeded the database).
 
@@ -91,6 +91,28 @@ string for any database on the server; each run creates (and drops) its own thro
 ```sh
 TEST_DATABASE_URL=postgres://tracker:tracker@localhost:5432/postgres pnpm test
 ```
+
+## Authentication
+
+Every member has their own login (no shared account). The first visit to a fresh install creates
+the household and its admin (`GET`/`POST /api/setup`, only while no household exists); the admin
+then invites the others (`POST /api/invites`), which returns a one-time link where the invitee
+chooses their own password. Admins can issue a password-reset link for any member
+(`POST /api/members/:id/password-reset`), which also signs that member out everywhere. Links
+expire (invites after 7 days, resets after 1 day) and work once.
+
+- Passwords are hashed with Argon2id (`hash-wasm`, WebAssembly, so it works in the single-file
+  production bundle) and stored as PHC strings.
+- A login sets an HTTP-only, `SameSite=Lax` session cookie holding a random token; only its
+  SHA-256 hash is stored in the `session` table. Sessions last a day, or 30 days with "remember
+  me". Logout deletes the row.
+- Mutating requests on a session need an `X-CSRF-Token` header (returned by login, setup and
+  `GET /api/auth/me`). Cross-origin `Origin` headers are refused and only JSON bodies are accepted.
+- Failed logins are rate limited in memory: 5 per username and 10 per IP per 15 minutes, then 429.
+
+Settings (see `.env.example`): `PUBLIC_BASE_URL` (used to build invite links), `COOKIE_SECURE`
+(defaults to on when `PUBLIC_BASE_URL` is https) and `TRUST_PROXY` (set in the Docker compose file,
+since the api sits behind Caddy).
 
 ## Running with Docker
 

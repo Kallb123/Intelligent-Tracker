@@ -2,6 +2,9 @@ import { pgEnum } from 'drizzle-orm/pg-core';
 
 export const memberRole = pgEnum('member_role', ['admin', 'member']);
 
+/** What a one-time password link is for: a new member's first password, or an admin reset. */
+export const passwordTokenPurpose = pgEnum('password_token_purpose', ['invite', 'reset']);
+
 export const scheduleKind = pgEnum('schedule_kind', ['once', 'fixed', 'after_completion']);
 
 export const reminderSlot = pgEnum('reminder_slot', ['evening', 'morning', 'custom_time']);

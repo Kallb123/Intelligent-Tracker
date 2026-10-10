@@ -88,8 +88,8 @@ jobs:
       - name: Seed
         run: pnpm db:seed -- --demo
 
-      - name: Database integration tests
-        run: pnpm exec vitest run --project @tracker/db
+      - name: Database integration tests (schema, auth API)
+        run: pnpm exec vitest run --project @tracker/db --project @tracker/api
 
   docker:
     runs-on: ubuntu-latest
