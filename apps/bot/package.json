@@ -1,0 +1,17 @@
+{
+  "name": "@tracker/bot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tracker/core": "workspace:*",
+    "@tracker/db": "workspace:*",
+    "@tracker/shared": "workspace:*"
+  }
+}
