@@ -25,6 +25,7 @@ services:
       - ./apps/api/src:/app/apps/api/src
       - ./packages/core/src:/app/packages/core/src
       - ./packages/db/src:/app/packages/db/src
+      - ./packages/db/migrations:/app/packages/db/migrations
       - ./packages/shared/src:/app/packages/shared/src
 
   worker:

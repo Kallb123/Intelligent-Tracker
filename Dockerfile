@@ -43,10 +43,14 @@ RUN pnpm --filter @tracker/web build
 
 FROM node:${NODE_VERSION}-alpine AS backend
 ENV NODE_ENV=production
+# The api applies these on start. The esbuild bundle can't find them relative to its own file,
+# so the runner reads the folder from MIGRATIONS_DIR.
+ENV MIGRATIONS_DIR=/app/migrations
 WORKDIR /app
 COPY --from=build-backend --chown=node:node /app/apps/api/dist apps/api/dist
 COPY --from=build-backend --chown=node:node /app/apps/worker/dist apps/worker/dist
 COPY --from=build-backend --chown=node:node /app/apps/bot/dist apps/bot/dist
+COPY --from=build-backend --chown=node:node /app/packages/db/migrations migrations
 USER node
 EXPOSE 3000
 CMD ["node", "apps/api/dist/main.js"]

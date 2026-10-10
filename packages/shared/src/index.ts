@@ -2,6 +2,9 @@
 export const HOUSEHOLD_DEFAULTS = {
   timezone: 'Europe/London',
   locale: 'en-GB',
+  bankHolidayRegion: 'england-and-wales',
+  icalPublicHost: 'calendar.kallum.uk',
+  defaultReminderProfile: 'standard',
   slots: {
     morningDigest: '08:00',
     eveningDigest: '19:00',
