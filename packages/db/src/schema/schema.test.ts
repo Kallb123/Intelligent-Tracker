@@ -7,6 +7,7 @@ const tables = {
   household: schema.household,
   member: schema.member,
   session: schema.session,
+  password_token: schema.passwordToken,
   bank_holiday: schema.bankHoliday,
   task: schema.task,
   task_assignee: schema.taskAssignee,
