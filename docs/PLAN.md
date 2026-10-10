@@ -126,7 +126,9 @@ DST, rotation fairness, reminder planning). The worker and bot are thin adapters
 
 ```
 household (id, name, timezone='Europe/London', locale='en-GB',
-           telegram_group_chat_id?, default_reminder_profile, digest_time, quiet_hours{start,end})
+           bank_holiday_region='england-and-wales', ical_public_host='calendar.kallum.uk',
+           telegram_group_chat_id?, default_reminder_profile,
+           morning_slot='08:00', evening_slot='19:00', quiet_hours{start='21:30',end='07:30'})
 member    (id, household_id, name, email/username, role[admin|member], password_hash,
            telegram_user_id?, telegram_link_code?, preferred_reminder_times[],
            away_until?, ical_token)
@@ -135,6 +137,7 @@ bank_holiday (date, region[england-and-wales|scotland|northern-ireland], title)
 
 task  (the definition / "series")
   id, household_id, title, notes, category, tags[], priority,
+  reminder_slot: evening | morning | custom_time,  -- default evening
   effort_minutes?,                 -- used by the reminder planner
   schedule_kind: once | fixed | after_completion
   due: date | datetime (+ all_day flag), rrule?, interval_after_completion?,
@@ -202,8 +205,8 @@ and can be ticked off on its own.
 ### 4.3 Escalation that respects state
 Between `start_at` and `due`, nudges get closer together as the deadline approaches.
 The default `standard` profile nudges at about 50%, 75% and 90% of the window, then on
-the due day, then during overdue. Every nudge is snapped to the member's preferred times
-(e.g. 08:30 / 18:30), and nudges are always at least 1 day apart.
+the due day, then during overdue. Every nudge is snapped to a household reminder slot
+(see 4.5), and nudges are always at least 1 day apart.
 - Tapping **Started** turns the next nudges down a level (you're on it).
 - **Done** cancels everything. **Snooze** shifts the next reminder only.
 - `silent` (digest only), `gentle` (heads-up + due day), and `persistent` (daily when overdue,
@@ -215,12 +218,21 @@ Some jobs happen *before* an event. "Bins are collected Tuesday morning" means
 the event, so the reminder fires the evening before instead of on the due day.
 
 ### 4.5 Delivery hygiene
-- **Quiet hours** (household-wide, because everything goes to one group) and per-member
-  reminder times. Nothing fires at 03:00.
-- **Group-friendly batching:** a shared group gets noisy quickly, so reminders that land in the
-  same slot are combined into one message with a line per task, each with its own buttons.
-  There is a morning digest (*Today*, *Starting soon*, *Overdue*) and an optional weekly
-  Sunday-evening "week ahead".
+- **Two daily slots.** Reminders are delivered in two household-wide slots instead of at
+  arbitrary times:
+  - **Morning, 08:00:** a short digest for planning the day: *Today*, *Starting soon*, *Overdue*,
+    and bank holidays. It's informational and has no nagging.
+  - **Evening, 19:00: "Tonight's jobs".** This is the main slot, because it's when the kids
+    are settling and things actually get done. Nudges, milestones, due-today and overdue chores land
+    here with action buttons, sorted so quick jobs (low `effort_minutes`) come first.
+
+  Each task defaults to the evening slot and can be switched to morning or a specific time
+  (e.g. "take meds 07:30"). Evening-before tasks like bin night also land at 19:00.
+- **Quiet hours** 21:30–07:30 (household-wide, because everything goes to one group). A snooze
+  that would land in quiet hours moves to the next slot. Nothing fires at 03:00.
+- **Group-friendly batching:** a shared group gets noisy quickly, so each slot sends one message
+  with a line per task, each with its own buttons, instead of a message per task. There's also an
+  optional Sunday 19:00 "week ahead".
 - **Bank-holiday aware:** UK bank holidays (from the gov.uk feed, cached in the DB) can shift
   tasks that are flagged "working days only", and show up in the digest
   ("Bank holiday Monday: bin collection may be a day late").
@@ -297,7 +309,7 @@ Everything goes to **one house group chat**.
 - **Mentions:** reminders tag the assignee with a `tg://user?id=…` mention, which notifies them
   even if they've muted the group (provided they haven't turned off mention notifications).
   Rotation and "anyone" tasks tag the current assignee, or say "Anyone 🙋".
-- **Inline buttons on every reminder:** ✅ Done · ▶️ Started · ⏰ Snooze (1h / tonight / tomorrow / 3d) ·
+- **Inline buttons on every reminder:** ✅ Done · ▶️ Started · ⏰ Snooze (tonight / tomorrow evening / weekend / 3d) ·
   🔁 Reassign · ⏭ Skip this one. The press is attributed to whoever tapped it ("✅ Done by Sam").
   A tap from an unlinked Telegram user gets a private pop-up alert asking them to link first.
   After an action, the original message is edited in place (struck through / updated) instead of
@@ -307,7 +319,9 @@ Everything goes to **one house group chat**.
   messages, and @mentions. It never reads normal family chat.
 - **Quick-add from the group:** `/add MOT due 14/03, remind a month before` or a reply to the bot
   goes through the rule-based parser, then a confirmation card with [Save] [Edit in app] [Cancel].
-- **Digests:** a morning digest and an optional Sunday "week ahead" are posted to the group.
+- **Digests:** the 08:00 morning digest, the 19:00 "Tonight's jobs" message and an optional Sunday
+  "week ahead" are posted to the group. Snooze options are "Tonight 19:00", "Tomorrow evening",
+  "Weekend" and "3 days".
 
 ### 5.2 Google Calendar (ICS feed)
 - `GET /ical/{token}/me.ics`: the member's assigned occurrences.
@@ -318,7 +332,7 @@ Everything goes to **one house group chat**.
   Done items get a ✅ prefix (or are hidden, per feed setting).
 - Tokens are 32+ random bytes, can be regenerated from the UI, and the feeds are read-only.
 - **Exposure:** a `cloudflared` service (Cloudflare Tunnel, free tier, no open router ports) points
-  a hostname such as `tasks-cal.example.co.uk` at Caddy. Caddy serves **only** `/ical/*` on that
+  **`calendar.kallum.uk`** at Caddy. Caddy serves **only** `/ical/*` on that
   hostname, returns 404 for everything else, and rate-limits it. The UI and API stay LAN-only, or
   you can reach them over Tailscale if you want access away from home. The docs also cover
   Tailscale Funnel as an alternative.
@@ -335,7 +349,7 @@ Everything goes to **one house group chat**.
   and "Apply template" with suggestions.
 - **Quick-add bar** with natural language and a parse preview.
 - **People:** members, rotation order, away dates, Telegram link status, fairness stats.
-- **Settings:** household time zone, bank-holiday region, digest times, quiet hours, Telegram group
+- **Settings:** household time zone, bank-holiday region, morning/evening slot times, quiet hours, Telegram group
   link, calendar feed URLs (copy/regenerate).
 - **Suggestions inbox:** history-based suggestions to accept or dismiss.
 - **Auth:** a login for each member (username/email + password, argon2 hashes) with an HTTP-only,
@@ -359,8 +373,8 @@ Everything goes to **one house group chat**.
   whether it is stale.
 - **Backups:** a `backup` sidecar runs `pg_dump` nightly to a mounted volume and keeps N days.
 - Logs: pino JSON to stdout.
-- First run: a setup wizard in the UI creates the household (Europe/London, en-GB, bank-holiday
-  region) and the first admin, then offers to install the UK template pack.
+- First run: a setup wizard in the UI creates the household (Europe/London, en-GB, England & Wales
+  bank holidays, 08:00/19:00 slots) and the first admin, then offers to install the UK template pack.
 
 ---
 
@@ -387,10 +401,10 @@ deployable. Milestones mark points where the app is usable.
 | # | PR | Scope | Done when |
 |---|----|-------|-----------|
 | 9 | **Assignment modes + rotation** | fixed / any / rotation in core + API + UI; away mode; People page; per-person filters | Unit tests for rotation with skips/away; UI shows next assignee |
-| 10 | **Reminder planner v1 (core)** | Pure `planReminders`: lead time / start_at, milestones, profiles, escalation, preferred times, household quiet hours, evening-before offsets | Table-driven tests, incl. the car-insurance and bin-night examples |
+| 10 | **Reminder planner v1 (core)** | Pure `planReminders`: lead time / start_at, milestones, profiles, escalation, morning/evening slots, household quiet hours, evening-before offsets | Table-driven tests, incl. the car-insurance and bin-night examples |
 | 11 | **Worker: reminder scheduling + outbox** | Persist planned reminders; re-plan on change; outbox with `dedupe_key`, retries, backoff; in-app notifications + UI bell; worker heartbeat | Kill/restart the worker mid-run → no duplicate or lost reminders |
 | 12 | **Telegram bot: group + member linking, reminders** | `bot` service (grammY, long polling, privacy mode on); `/linkgroup <code>`; deep-link member linking; deliver batched reminders to the group with `tg://user` mentions and inline buttons; attribute button presses to the member; edit messages in place after actions; pop-up for unlinked users | Tested with a mocked Telegram API; manual test in a real group |
-| 13 | **Telegram commands + digests** | `/today` `/week` `/mine` `/add` `/away` `/digest`; morning digest; Sunday "week ahead"; overdue escalation messages | Digest snapshot tests |
+| 13 | **Telegram commands + digests** | `/today` `/week` `/mine` `/add` `/away` `/digest`; 08:00 morning digest; 19:00 "Tonight's jobs"; Sunday "week ahead"; overdue escalation messages | Digest snapshot tests |
 
 ### Milestone 0.3: Google Calendar
 
@@ -403,7 +417,7 @@ deployable. Milestones mark points where the app is usable.
 
 | # | PR | Scope | Done when |
 |---|----|-------|-----------|
-| 16 | **UK template pack + bank holidays** | Built-in UK templates (section 4.6) with milestones; user templates; keyword → template suggestions in the editor; gov.uk bank-holiday sync (weekly, cached, region-aware); "working days only" option | Suggestion unit tests; "Apply template" in UI; bank holidays shown in digest |
+| 16 | **UK template pack + bank holidays** | Built-in UK templates (section 4.6) with milestones; user templates; keyword → template suggestions in the editor; gov.uk bank-holiday sync (`england-and-wales` division, weekly, cached); "working days only" option | Suggestion unit tests; "Apply template" in UI; bank holidays shown in digest |
 | 17 | **Rule-based quick-add (en-GB)** | `chrono.en.GB` + recurrence grammar + lead-time phrases + assignee + template match (section 4.8); quick-add bar in UI and `/add` in Telegram with confirm card | Corpus of ~80 UK-phrased examples with expected parses |
 | 18 | **Workload smoothing + effort-aware leads** | Stagger heads-ups across days; propose lead time from effort | Planner tests for clustered windows |
 | 19 | **History-based suggestions** | Activity analytics (lateness, snoozes, fairness); suggestions inbox in UI + Telegram; accept → updates task | Tests with synthetic histories |
@@ -435,11 +449,11 @@ deployable. Milestones mark points where the app is usable.
    *Get quotes* (−30d), *Decide* (−14d), *Renew* (−7d), profile `standard`, assignee Alex.
    Alex taps [Save].
 3. The worker materialises the 1 Nov occurrence (horizon ≥ lead + 30d) and plans the reminders:
-   - 2 Oct 08:30: heads-up + *Get quotes* milestone
-   - 18 Oct 08:30: *Decide* milestone
-   - 25 Oct 08:30: *Renew* milestone
-   - nudges at about 50% / 75% / 90% of the window if not Started, then 1 Nov due-day, then daily overdue
-4. On 2 Oct the group gets: *"🚗 @Alex Car insurance renews in 30 days (1 Nov). Time to get
+   - 2 Oct 19:00: heads-up + *Get quotes* milestone
+   - 18 Oct 19:00: *Decide* milestone
+   - 25 Oct 19:00: *Renew* milestone
+   - nudges at 19:00 at about 50% / 75% / 90% of the window if not Started, then 1 Nov due-day, then daily overdue
+4. At 19:00 on 2 Oct the group's "Tonight's jobs" message includes: *"🚗 @Alex Car insurance renews in 30 days (1 Nov). Time to get
    quotes."* [✅ Done] [▶️ Started] [⏰ Snooze] [🔁 Reassign]. Alex taps **Started**. The message
    updates to "▶️ Started by Alex", and the planner turns the nudges down a level but keeps the milestones.
 5. Google Calendar shows "🔔 Start: Car insurance" on 2 Oct and "Car insurance renewal" on 1 Nov.
@@ -448,8 +462,9 @@ deployable. Milestones mark points where the app is usable.
 
 ---
 
-## 10. Remaining small decisions (can be made during the PRs)
+## 10. Settled details
 
-- Public hostname for the calendar feed (needs a domain on Cloudflare; any cheap `.co.uk` works).
-- Bank-holiday region: England & Wales, Scotland, or Northern Ireland.
-- Default reminder times (proposed: 08:30 and 18:30), quiet hours (proposed: 21:30–07:30), and morning digest time.
+- Public calendar hostname: **`calendar.kallum.uk`**. It needs `kallum.uk` on Cloudflare so the tunnel can create the DNS record.
+- Bank holidays: **England & Wales** (`england-and-wales` in the gov.uk feed).
+- Reminder slots: **08:00** morning digest, **19:00** evening "Tonight's jobs" (the main slot).
+  Quiet hours 21:30–07:30. All of these can be changed in Settings.
