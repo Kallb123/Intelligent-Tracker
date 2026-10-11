@@ -16,6 +16,8 @@ const router = useRouter();
 
 const nav = [
   { to: { name: 'home' }, label: 'Today', icon: 'pi pi-home' },
+  { to: { name: 'upcoming' }, label: 'Coming up', icon: 'pi pi-calendar' },
+  { to: { name: 'tasks' }, label: 'Tasks', icon: 'pi pi-list' },
   { to: { name: 'people' }, label: 'People', icon: 'pi pi-users' },
   { to: { name: 'account' }, label: 'Account', icon: 'pi pi-user' },
 ] as const;

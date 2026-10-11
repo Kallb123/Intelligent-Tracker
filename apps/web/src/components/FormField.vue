@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** Label, control (slot) and validation message, wired together for screen readers. */
-defineProps<{ id: string; label: string; error?: string | undefined; hint?: string }>();
+defineProps<{ id: string; label: string; error?: string | undefined; hint?: string | undefined }>();
 </script>
 
 <template>

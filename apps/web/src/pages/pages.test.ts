@@ -462,6 +462,8 @@ describe('app shell', () => {
         [ME]: json(session()),
         'POST /api/auth/logout': json({ ok: true }),
         'GET /api/setup': json({ needsSetup: false }),
+        'GET /api/occurrences': json({ occurrences: [] }),
+        'GET /api/members': json({ members: [] }),
       },
       '/',
     );
@@ -469,11 +471,13 @@ describe('app shell', () => {
     expect(wrapper.find('.brand-name').text()).toBe('The Smiths');
     expect(wrapper.findAll('.nav-top a').map((a) => a.text())).toEqual([
       'Today',
+      'Coming up',
+      'Tasks',
       'People',
       'Account',
     ]);
     expect(wrapper.find('h1').text()).toBe('Today');
-    expect(wrapper.text()).toContain('Hi Alex');
+    expect(wrapper.text()).toContain('Nothing is due today');
 
     const { useSessionStore } = await import('../stores/session.js');
     await useSessionStore().logout();

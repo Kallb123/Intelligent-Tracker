@@ -164,7 +164,8 @@ h2 {
   text-decoration: none;
 }
 
-.nav a.router-link-exact-active {
+.nav a.router-link-exact-active,
+.nav a.router-link-active:not([href='/']) {
   color: var(--p-primary-color);
   font-weight: 600;
 }
@@ -172,6 +173,7 @@ h2 {
 .nav-top {
   display: flex;
   gap: 1.25rem;
+  flex-wrap: wrap;
 }
 
 .nav-bottom {
@@ -217,7 +219,10 @@ h2 {
     align-items: center;
     justify-content: center;
     gap: 0.15rem;
-    font-size: 0.8rem;
+    min-width: 0;
+    /* Five tabs share the width: keep the labels short and let them shrink a little. */
+    font-size: 0.72rem;
+    white-space: nowrap;
   }
 
   .content {
@@ -301,4 +306,188 @@ h2 {
 .member-tags {
   display: flex;
   gap: 0.35rem;
+}
+
+.page-subtitle {
+  margin: 0.25rem 0 0;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+.overdue-text {
+  color: var(--p-red-500);
+}
+
+/* Occurrence lists (Today, Coming up) */
+
+.occurrence-group {
+  margin-bottom: 1.5rem;
+}
+
+.occurrence-list,
+.task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.occurrence,
+.task-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--app-panel);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 0.75rem;
+}
+
+.occurrence-overdue {
+  border-left: 0.25rem solid var(--p-red-500);
+}
+
+.occurrence-main,
+.task-row-main {
+  flex: 1 1 14rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  overflow-wrap: anywhere;
+}
+
+.occurrence-title,
+.task-title {
+  font-weight: 600;
+  color: var(--p-text-color);
+  text-decoration: none;
+}
+
+.occurrence-title:hover,
+.task-title:hover {
+  text-decoration: underline;
+}
+
+.occurrence-detail {
+  font-size: 0.9rem;
+}
+
+.occurrence-tags,
+.task-row-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.occurrence-tags:empty {
+  display: none;
+}
+
+.occurrence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.range-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* All tasks */
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0 1rem;
+  align-items: end;
+}
+
+.filters .field,
+.filters-archived {
+  margin-bottom: 0.5rem;
+}
+
+/* Task editor */
+
+.select-field {
+  width: 100%;
+}
+
+fieldset.field {
+  min-width: 0;
+  margin-inline: 0;
+  padding: 0;
+  border: 0;
+}
+
+fieldset.field legend {
+  padding: 0;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.weekday-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0 1rem;
+}
+
+.weekday-options .checkbox-row {
+  margin-bottom: 0.5rem;
+}
+
+.milestone-row {
+  display: grid;
+  grid-template-columns: 1fr 9rem auto;
+  gap: 0 0.75rem;
+  align-items: end;
+}
+
+.preview {
+  margin-top: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--app-bg);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 0.5rem;
+}
+
+.preview h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.preview p {
+  margin: 0;
+}
+
+.preview-dates {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.editor-actions {
+  margin-bottom: 1.25rem;
+}
+
+.danger-zone .button-row {
+  justify-content: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 40rem) {
+  .milestone-row {
+    grid-template-columns: 1fr;
+  }
+
+  .milestone-row > button {
+    justify-self: start;
+  }
 }
