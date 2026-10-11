@@ -2,6 +2,7 @@ import vue from '@vitejs/plugin-vue';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
+import { appVersionDefine } from './app-version.js';
 
 const apiTarget = process.env['VITE_API_PROXY_TARGET'] ?? 'http://localhost:3000';
 const proxy = { '/api': apiTarget, '/ical': apiTarget };
@@ -34,6 +35,7 @@ function rruleDefaultExport(): Plugin {
 
 export default defineConfig({
   plugins: [rruleDefaultExport(), vue()],
+  define: appVersionDefine,
   server: { host: true, port: 5173, proxy },
   preview: { host: true, port: 4173, proxy },
 });

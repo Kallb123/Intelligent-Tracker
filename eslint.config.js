@@ -32,7 +32,7 @@ export default tseslint.config(
   {
     files: ['apps/web/**/*.{ts,vue}'],
     languageOptions: {
-      globals: { ...globals.browser },
+      globals: { ...globals.browser, __APP_VERSION__: 'readonly' },
     },
   },
   eslintConfigPrettier,

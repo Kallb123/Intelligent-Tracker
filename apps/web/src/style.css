@@ -120,6 +120,14 @@ h2 {
   border-radius: 0.75rem;
 }
 
+/* Version footer: under the auth card, and under the content in the app shell. */
+
+.app-footer {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+}
+
 /* App shell */
 
 .layout {
@@ -226,7 +234,11 @@ h2 {
   }
 
   .content {
-    padding-bottom: calc(var(--nav-height) + 1.5rem + env(safe-area-inset-bottom));
+    padding-bottom: 1.5rem;
+  }
+
+  .layout .app-footer {
+    padding-bottom: calc(var(--nav-height) + 1rem + env(safe-area-inset-bottom));
   }
 }
 
