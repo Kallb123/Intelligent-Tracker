@@ -317,7 +317,37 @@ h2 {
 
 .member-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
+}
+
+.away-form {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.away-form label {
+  font-weight: 600;
+}
+
+.member-rotations {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.member-rotations ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .page-subtitle {
@@ -437,6 +467,42 @@ fieldset.field {
   margin-inline: 0;
   padding: 0;
   border: 0;
+}
+
+.rotation-order {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rotation-order li {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.rotation-order button[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.rotation-name {
+  flex: 1;
 }
 
 fieldset.field legend {

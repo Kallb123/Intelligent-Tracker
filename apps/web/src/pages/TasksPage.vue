@@ -8,10 +8,13 @@ import Tag from 'primevue/tag';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError, getApi } from '../api/index.js';
+import PersonFilter from '../components/PersonFilter.vue';
 import SelectField from '../components/SelectField.vue';
+import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
 import { describeSchedule } from '../tasks/describe.js';
+import { describeAssignees, nextUpName } from '../tasks/rotation.js';
 
 /** All tasks: every task definition, with search and person / category / tag filters. */
 const session = useSessionStore();
@@ -45,7 +48,7 @@ watch(showArchived, () => void load());
 
 // Filters: '' means "any".
 const search = ref('');
-const person = ref('');
+const { person } = usePersonFilter();
 const category = ref('');
 const tag = ref('');
 
@@ -55,10 +58,6 @@ const categories = computed(() =>
 );
 const allTags = computed(() => distinct(tasks.value.flatMap((t) => t.tags)));
 
-const personOptions = computed(() => [
-  { value: '', label: 'Everyone' },
-  ...membersStore.members.map((m) => ({ value: m.id, label: m.name })),
-]);
 const categoryOptions = computed(() => [
   { value: '', label: 'All categories' },
   ...categories.value.map((c) => ({ value: c, label: c })),
@@ -85,10 +84,8 @@ const filtering = computed(
   () => !!(search.value.trim() || person.value || category.value || tag.value),
 );
 
-const assignees = (t: TaskDto) =>
-  t.assigneeIds.length === 0
-    ? 'anyone'
-    : t.assigneeIds.map((id) => membersStore.nameOf(id)).join(', ');
+const assignees = (t: TaskDto) => describeAssignees(t, membersStore.nameOf);
+const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
 </script>
 
 <template>
@@ -109,10 +106,7 @@ const assignees = (t: TaskDto) =>
           fluid
         />
       </div>
-      <div class="field">
-        <label for="filter-person">Person</label>
-        <SelectField id="filter-person" v-model="person" :options="personOptions" />
-      </div>
+      <PersonFilter id="filter-person" v-model="person" />
       <div class="field">
         <label for="filter-category">Category</label>
         <SelectField id="filter-category" v-model="category" :options="categoryOptions" />
@@ -152,6 +146,7 @@ const assignees = (t: TaskDto) =>
             }}</router-link>
             <span class="muted">{{ describeSchedule(t, session.timeZone) }}</span>
             <span class="muted">For {{ assignees(t) }}</span>
+            <span v-if="nextUp(t)" class="muted">Next: {{ nextUp(t) }}</span>
           </div>
           <div class="task-row-tags">
             <Tag v-if="t.archived" value="Archived" severity="warn" />

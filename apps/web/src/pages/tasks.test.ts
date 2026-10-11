@@ -154,6 +154,72 @@ describe('Today', () => {
     expect(server.callsTo('GET /api/occurrences').map((c) => c.search)).toEqual(['view=today']);
   });
 
+  it('filters by person, and keeps the choice in the address', async () => {
+    const { wrapper, server, router } = await open(
+      {
+        'GET /api/occurrences': (call) =>
+          json({
+            occurrences: call.search.includes(`memberId=${SAM}`) ? [theirs] : [mine, theirs],
+          }),
+      },
+      '/',
+    );
+    expect(texts(wrapper, '#filter-person option')).toEqual(['Everyone', 'Alex', 'Sam']);
+
+    await wrapper.get('#filter-person').setValue(SAM);
+    await flushPromises();
+
+    expect(server.callsTo('GET /api/occurrences').map((c) => c.search)).toEqual([
+      'view=today',
+      `view=today&memberId=${SAM}`,
+    ]);
+    expect(texts(wrapper, '.occurrence-title')).toEqual(['Water the plants']);
+    expect(router.currentRoute.value.query).toEqual({ person: SAM });
+
+    await wrapper.get('#filter-person').setValue('');
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({});
+    expect(texts(wrapper, '.occurrence-title')).toEqual(['Put the bins out', 'Water the plants']);
+  });
+
+  it('starts filtered when the address names a person, and says when they have nothing', async () => {
+    const { wrapper, server } = await open(
+      { 'GET /api/occurrences': json({ occurrences: [] }) },
+      `/?person=${SAM}`,
+    );
+
+    // The page waits for the household before asking, so there is no unfiltered first request.
+    expect(server.callsTo('GET /api/occurrences').map((c) => c.search)).toEqual([
+      `view=today&memberId=${SAM}`,
+    ]);
+    expect((wrapper.get('#filter-person').element as HTMLSelectElement).value).toBe(SAM);
+    expect(wrapper.text()).toContain('Nothing is due today for Sam.');
+  });
+
+  it('ignores an unknown person in the address without asking for them', async () => {
+    const { server, router } = await open(
+      { 'GET /api/occurrences': json({ occurrences: [] }) },
+      '/upcoming?person=nobody&days=30',
+    );
+
+    expect(server.callsTo('GET /api/occurrences').map((c) => c.search)).toEqual([
+      'view=upcoming&days=30',
+    ]);
+    expect(router.currentRoute.value.query).toEqual({ days: '30' });
+  });
+
+  it('shows everyone again when navigating to the plain page', async () => {
+    const { wrapper, router } = await open(
+      { 'GET /api/occurrences': json({ occurrences: [] }) },
+      `/?person=${SAM}`,
+    );
+
+    await router.push('/');
+    await flushPromises();
+
+    expect((wrapper.get('#filter-person').element as HTMLSelectElement).value).toBe('');
+  });
+
   it('names the row buttons after the task', async () => {
     const { wrapper } = await open({ 'GET /api/occurrences': json({ occurrences: [mine] }) }, '/');
 
@@ -343,6 +409,28 @@ describe('Coming up', () => {
     expect(wrapper.text()).toContain('Nothing is due in the next 90 days');
   });
 
+  it('filters by person and keeps the days', async () => {
+    const { wrapper, server, router } = await open(
+      { 'GET /api/occurrences': json({ occurrences: [] }) },
+      '/upcoming',
+    );
+
+    await wrapper.get('#filter-person').setValue(SAM);
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text() === '90 days')
+      ?.trigger('click');
+    await flushPromises();
+
+    expect(server.callsTo('GET /api/occurrences').map((c) => c.search)).toEqual([
+      'view=upcoming&days=30',
+      `view=upcoming&days=30&memberId=${SAM}`,
+      `view=upcoming&days=90&memberId=${SAM}`,
+    ]);
+    expect(router.currentRoute.value.query).toEqual({ person: SAM });
+    expect(wrapper.text()).toContain('Nothing is due for Sam in the next 90 days');
+  });
+
   it('completes and snoozes from the list', async () => {
     let list = [tomorrow, later];
     const { wrapper, server } = await open(
@@ -413,6 +501,38 @@ describe('All tasks', () => {
     expect(rows[2]).toContain('Once, 1 Nov 2026');
     expect(rows[2]).toContain('For anyone');
     expect(wrapper.find('.task-title').attributes('href')).toBe(`/tasks/${tasks[0]?.id}`);
+  });
+
+  it('shows whose turn it is on rotation tasks', async () => {
+    const rotating = task({
+      title: 'Clean the bathroom',
+      assignmentMode: 'rotation',
+      assigneeIds: [ME, SAM],
+      nextAssigneeId: SAM,
+    });
+    const { wrapper } = await open(
+      { 'GET /api/tasks': json({ tasks: [...tasks, rotating] }) },
+      '/tasks',
+    );
+
+    const rows = texts(wrapper, '.task-row');
+    expect(rows[3]).toContain('For Alex, Sam');
+    expect(rows[3]).toContain('Next: Sam');
+    expect(rows.slice(0, 3).join()).not.toContain('Next:');
+  });
+
+  it('starts with the person from the address and writes changes back', async () => {
+    const { wrapper, router } = await open(
+      { 'GET /api/tasks': json({ tasks }) },
+      `/tasks?person=${SAM}`,
+    );
+    expect(titles(wrapper)).toEqual(['Descale kettle']);
+
+    await wrapper.get('#filter-person').setValue('');
+    await flushPromises();
+
+    expect(router.currentRoute.value.query).toEqual({});
+    expect(titles(wrapper)).toHaveLength(3);
   });
 
   it('searches title, notes, category and tags', async () => {
@@ -740,6 +860,70 @@ describe('Task editor', () => {
     });
   });
 
+  it('reorders the rotation with move up and move down buttons', async () => {
+    const { wrapper, server } = await open(
+      { 'POST /api/tasks': json({ task: task() }, 201) },
+      '/tasks/new',
+    );
+    await fillTitle(wrapper, 'Clean the bathroom');
+    await wrapper.get('#task-mode').setValue('rotation');
+    expect(wrapper.find('.rotation-order').exists()).toBe(false);
+
+    await wrapper.get(`#rotation-${ME}`).setValue(true);
+    await wrapper.get(`#rotation-${SAM}`).setValue(true);
+    const order = () => texts(wrapper, '.rotation-order li');
+    expect(order()).toEqual(['1. Alex', '2. Sam']);
+    expect(wrapper.text()).toContain('Order: Alex, then Sam.');
+    // The end buttons stay focusable (aria-disabled, not disabled) and do nothing.
+    expect(button(wrapper, 'Move Alex up').attributes('aria-disabled')).toBe('true');
+    expect(button(wrapper, 'Move Alex up').attributes('disabled')).toBeUndefined();
+    expect(button(wrapper, 'Move Sam down').attributes('aria-disabled')).toBe('true');
+    expect(button(wrapper, 'Move Sam up').attributes('aria-disabled')).toBe('false');
+    await button(wrapper, 'Move Alex up').trigger('click');
+    expect(order()).toEqual(['1. Alex', '2. Sam']);
+    expect(wrapper.get('[aria-live="polite"]').text()).toBe('');
+
+    await button(wrapper, 'Move Sam up').trigger('click');
+
+    expect(order()).toEqual(['1. Sam', '2. Alex']);
+    expect(wrapper.text()).toContain('Order: Sam, then Alex.');
+    expect(wrapper.get('[aria-live="polite"]').text()).toBe('Sam moved to position 1');
+    // Focus stays on the button that was used, now at the top and so aria-disabled.
+    expect(document.activeElement).toBe(button(wrapper, 'Move Sam up').element);
+
+    await button(wrapper, 'Move Sam down').trigger('click');
+    expect(order()).toEqual(['1. Alex', '2. Sam']);
+    await button(wrapper, 'Move Alex down').trigger('click');
+    await save(wrapper);
+
+    expect(lastBody(server, 'POST /api/tasks')).toMatchObject({
+      assignmentMode: 'rotation',
+      assigneeIds: [SAM, ME],
+    });
+  });
+
+  it('marks members who are away in the pickers', async () => {
+    const { wrapper } = await open(
+      {
+        'GET /api/members': json({ members: [alex, { ...sam, awayUntil: '2026-10-14' }] }),
+      },
+      '/tasks/new',
+    );
+
+    expect(texts(wrapper, '#task-assignee option')).toEqual([
+      'Nobody in particular',
+      'Alex',
+      'Sam (away until Wed 14 Oct)',
+    ]);
+
+    await wrapper.get('#task-mode').setValue('rotation');
+    await wrapper.get(`#rotation-${SAM}`).setValue(true);
+
+    expect(wrapper.get(`label[for="rotation-${SAM}"]`).text()).toBe('Sam (away until Wed 14 Oct)');
+    expect(wrapper.get('.rotation-order li').text()).toContain('Sam (away until Wed 14 Oct)');
+    expect(wrapper.find('button[aria-label="Move Sam up"]').exists()).toBe(true);
+  });
+
   it('checks the form before calling the api', async () => {
     const { wrapper, server } = await open({}, '/tasks/new');
 
@@ -821,6 +1005,34 @@ describe('Task editor', () => {
         'Thu 15 Oct 2026',
         'Mon 26 Oct 2026',
       ]);
+    });
+
+    it('shows whose turn it is on a rotation task', async () => {
+      const { wrapper } = await open_(
+        task({ assignmentMode: 'rotation', assigneeIds: [ME, SAM], nextAssigneeId: SAM }),
+      );
+
+      expect(wrapper.text()).toContain('Order: Alex, then Sam.');
+      expect(wrapper.text()).toContain('Next up: Sam');
+    });
+
+    it('drops next up when that person is taken out of the rotation', async () => {
+      const { wrapper } = await open_(
+        task({ assignmentMode: 'rotation', assigneeIds: [ME, SAM], nextAssigneeId: SAM }),
+      );
+      expect(wrapper.text()).toContain('Next up: Sam');
+
+      await wrapper.get(`#rotation-${SAM}`).setValue(false);
+
+      expect(wrapper.text()).not.toContain('Next up');
+    });
+
+    it('has no next up for a task that does not take turns', async () => {
+      const { wrapper } = await open_(task({ nextAssigneeId: ME }));
+      expect(wrapper.text()).not.toContain('Next up');
+
+      await wrapper.get('#task-mode').setValue('rotation');
+      expect(wrapper.text()).not.toContain('Next up');
     });
 
     it('falls back to a custom rule for patterns the builder cannot show', async () => {
