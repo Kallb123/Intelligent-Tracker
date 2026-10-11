@@ -9,3 +9,6 @@ apps/api/openapi.json
 apps/web/src/api/schema.d.ts
 playwright-report
 test-results
+.claude/skills
+.claude/third_party/caveman/LICENSE
+.claude/third_party/caveman/NOTICE
