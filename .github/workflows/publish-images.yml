@@ -1,11 +1,10 @@
-name: Docker images
+name: Publish images
 
-# Builds the backend (api / worker / bot) and web images.
-# - Pull requests: build only, nothing is pushed.
-# - main: after CI passes on a push, push to GHCR tagged with the app version from the root
-#   package.json and `latest`, so an image is never published from a commit that failed its checks.
+# Builds the backend (api / worker / bot) and web images and pushes them to GHCR, tagged with the
+# app version from the root package.json and `latest`. Runs after CI passes on a push to main, so
+# an image is never published from a commit that failed its checks. Pull requests don't run this:
+# CI's docker job already builds both images from the same Dockerfile targets.
 on:
-  pull_request:
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -15,14 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-images-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: publish-images
+  cancel-in-progress: false
 
 jobs:
-  images:
-    if: >-
-      github.event_name == 'pull_request' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+  publish:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -33,8 +30,7 @@ jobs:
       matrix:
         target: [backend, web]
     env:
-      PUBLISH: ${{ github.event_name != 'pull_request' }}
-      REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
+      REVISION: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,7 +49,6 @@ jobs:
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/intelligent-tracker-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v3
-        if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -67,7 +62,6 @@ jobs:
       # fails the run rather than risk overwriting a published tag.
       - name: Skip if this version is already published
         id: published
-        if: env.PUBLISH == 'true'
         env:
           IMAGE: ${{ steps.version.outputs.image }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -84,7 +78,7 @@ jobs:
           fi
 
       - uses: docker/metadata-action@v5
-        if: steps.published.outputs.skip != 'true'
+        if: steps.published.outputs.skip == 'false'
         id: meta
         with:
           images: ${{ steps.version.outputs.image }}
@@ -97,11 +91,11 @@ jobs:
             org.opencontainers.image.revision=${{ env.REVISION }}
 
       - uses: docker/build-push-action@v6
-        if: steps.published.outputs.skip != 'true'
+        if: steps.published.outputs.skip == 'false'
         with:
           context: .
           target: ${{ matrix.target }}
-          push: ${{ env.PUBLISH == 'true' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.target }}

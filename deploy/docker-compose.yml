@@ -1,6 +1,6 @@
 name: intelligent-tracker
 
-# Production: images come from GHCR (published by .github/workflows/docker-images.yml).
+# Production: images come from GHCR (published by .github/workflows/publish-images.yml).
 # TRACKER_VERSION pins a release (e.g. 0.1.0); default `latest`. To build from source instead,
 # add deploy/docker-compose.build.yml (see that file).
 x-backend: &backend

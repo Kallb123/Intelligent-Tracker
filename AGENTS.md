@@ -6,9 +6,9 @@ layout and commands, and [docs/PLAN.md](docs/PLAN.md) for the architecture and t
 ## Versioning: bump the version in your PR
 
 The app has one version: the `version` field in the root `package.json` (semver,
-`MAJOR.MINOR.PATCH`). When CI passes on `main`, the Docker images workflow pushes the images to
-GHCR tagged with that version and `latest`. A version that is already published is never
-overwritten, so if you forget to bump it your change does not ship.
+`MAJOR.MINOR.PATCH`). When CI passes on `main`, `.github/workflows/publish-images.yml` pushes the
+Docker images to GHCR tagged with that version and `latest`. A version that is already published
+is never overwritten, so if you forget to bump it your change does not ship.
 
 **Bump it by hand** in the same PR whenever the change affects what ships in the images: anything
 under `apps/` or `packages/` (except tests), the `Dockerfile`, `deploy/Caddyfile`, or dependencies

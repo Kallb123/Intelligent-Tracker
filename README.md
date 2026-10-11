@@ -74,9 +74,9 @@ admin then invites everyone else from the People page.
 CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test`, `test:coverage` and `build` on
 pushes to `main` and on every pull request. A `db` job checks the schema against the migrations,
 applies them to a Postgres 16 service container and runs the database and auth API integration tests, and a
-`docker` job builds the images, starts the stack and smoke-tests it (including that the api
-migrated and seeded the database). An `e2e` job starts the same stack with a faster worker tick
-and runs the Playwright tests against it (see below).
+`docker` job builds the images once from the PR's code, starts the stack with a faster worker
+tick, smoke-tests it (including that the api migrated and seeded the database) and runs the
+Playwright tests against it (see below).
 
 ## End-to-end tests
 
@@ -206,9 +206,9 @@ mounted, so rebuild (`--build`) after changing dependencies or config files.
 
 ### Published images
 
-`.github/workflows/docker-images.yml` builds the two images on every pull request (without
-pushing them) and, when CI passes on a push to `main`, pushes them to the GitHub Container
-Registry:
+When CI passes on a push to `main`, `.github/workflows/publish-images.yml` builds the two images
+and pushes them to the GitHub Container Registry (pull requests don't need it: CI's `docker` job
+already builds both images):
 
 - `ghcr.io/kallb123/intelligent-tracker-backend` (api, worker and bot)
 - `ghcr.io/kallb123/intelligent-tracker-web` (Caddy and the SPA)
