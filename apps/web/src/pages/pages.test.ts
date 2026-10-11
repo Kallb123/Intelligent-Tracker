@@ -1,5 +1,7 @@
+import type { MemberDto } from '@tracker/shared';
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useMembersStore } from '../stores/members.js';
 import { apiError, fakeServer, json, mountApp, session, type Handler } from '../test-util.js';
 
 const ME = 'GET /api/auth/me';
@@ -289,6 +291,7 @@ describe('MembersPage', () => {
       email: 'alex@example.com',
       role: 'admin',
       pending: false,
+      awayUntil: null,
     },
     {
       id: '33333333-3333-4333-8333-333333333333',
@@ -297,6 +300,7 @@ describe('MembersPage', () => {
       email: null,
       role: 'member',
       pending: true,
+      awayUntil: null,
     },
     {
       id: '44444444-4444-4444-8444-444444444444',
@@ -305,13 +309,26 @@ describe('MembersPage', () => {
       email: null,
       role: 'member',
       pending: false,
+      awayUntil: null,
     },
   ];
+  const JO = members[2]?.id ?? '';
+  const noTasks = { 'GET /api/tasks': json({ tasks: [] }) };
+
+  // Sunday 11 October 2026, 11:00 in London (BST).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-11T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('lists members, flags pending invites, and lets admins invite', async () => {
     const server = fakeServer({
       [ME]: json(session()),
       'GET /api/members': json({ members }),
+      ...noTasks,
       'POST /api/invites': json(
         {
           member: members[1],
@@ -359,6 +376,7 @@ describe('MembersPage', () => {
       {
         [ME]: json(session()),
         'GET /api/members': json({ members }),
+        ...noTasks,
         'POST /api/invites': apiError(409, 'username_taken', 'That username is already taken'),
       },
       '/people',
@@ -377,6 +395,7 @@ describe('MembersPage', () => {
     const server = fakeServer({
       [ME]: json(session()),
       'GET /api/members': json({ members }),
+      ...noTasks,
       'POST /api/members/44444444-4444-4444-8444-444444444444/password-reset': json({
         purpose: 'reset',
         link: {
@@ -400,13 +419,221 @@ describe('MembersPage', () => {
 
   it('hides admin actions from ordinary members', async () => {
     const { wrapper } = await open(
-      { [ME]: json(session({ role: 'member' })), 'GET /api/members': json({ members }) },
+      {
+        [ME]: json(session({ role: 'member' })),
+        'GET /api/members': json({ members }),
+        ...noTasks,
+      },
       '/people',
     );
 
     expect(wrapper.text()).not.toContain('Invite member');
     expect(wrapper.text()).not.toContain('Reset password');
     expect(wrapper.findAll('.member')).toHaveLength(3);
+  });
+
+  const away = (id: string, awayUntil: string | null) => ({
+    ...members.find((m) => m.id === id),
+    awayUntil,
+  });
+  const rowOf = (wrapper: VueWrapper, name: string) =>
+    wrapper.findAll('.member').find((r) => r.find('strong').text() === name);
+  const rotation = (id: string, title: string, assigneeIds: string[], nextAssigneeId: string) => ({
+    id,
+    title,
+    assignmentMode: 'rotation',
+    assigneeIds,
+    nextAssigneeId,
+    archived: false,
+  });
+
+  it('shows who is away and which rotations each person is in', async () => {
+    const SAM = members[1]?.id ?? '';
+    const bins = '55555555-5555-4555-8555-555555555555';
+    const { wrapper } = await open(
+      {
+        [ME]: json(session()),
+        'GET /api/members': json({
+          members: [members[0], members[1], away(JO, '2026-10-14')],
+        }),
+        'GET /api/tasks': json({
+          tasks: [
+            rotation(bins, 'Put the bins out', [JO, SAM], SAM),
+            {
+              ...rotation('66666666-6666-4666-8666-666666666666', 'Old', [JO], JO),
+              archived: true,
+            },
+            {
+              ...rotation('77777777-7777-4777-8777-777777777777', 'Fixed', [JO], JO),
+              assignmentMode: 'fixed',
+            },
+          ],
+        }),
+      },
+      '/people',
+    );
+
+    expect(rowOf(wrapper, 'Jo')?.text()).toContain('Away until Wed 14 Oct');
+    expect(rowOf(wrapper, 'Alex')?.text()).not.toContain('Away until Wed');
+    const rotations = rowOf(wrapper, 'Jo')?.find('.member-rotations');
+    expect(rotations?.text()).toContain('Put the bins out (next: Sam)');
+    expect(rotations?.text()).not.toContain('Old');
+    expect(rotations?.text()).not.toContain('Fixed');
+    expect(rotations?.find('a').attributes('href')).toBe(`/tasks/${bins}`);
+    expect(rowOf(wrapper, 'Alex')?.find('.member-rotations').exists()).toBe(false);
+  });
+
+  it('does not show an away date that has passed', async () => {
+    const { wrapper } = await open(
+      {
+        [ME]: json(session()),
+        'GET /api/members': json({ members: [away(JO, '2026-10-10')] }),
+        ...noTasks,
+      },
+      '/people',
+    );
+
+    expect(wrapper.find('.member-tags').text()).not.toContain('Away');
+    expect((wrapper.get(`#away-${JO}`).element as HTMLInputElement).value).toBe('');
+  });
+
+  it('lets an admin set and clear anyone away date without reloading the list', async () => {
+    const server = fakeServer({
+      [ME]: json(session()),
+      'GET /api/members': json({ members }),
+      ...noTasks,
+      [`PATCH /api/members/${JO}/away`]: (call) =>
+        json({ member: away(JO, (call.body as { awayUntil: string | null }).awayUntil) }),
+    });
+    const { wrapper } = await mountApp(server, '/people');
+    mounted = wrapper;
+
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-20');
+    await rowOf(wrapper, 'Jo')?.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(server.callsTo(`PATCH /api/members/${JO}/away`)[0]?.body).toEqual({
+      awayUntil: '2026-10-20',
+    });
+    expect(server.callsTo(`PATCH /api/members/${JO}/away`)[0]?.headers.get('x-csrf-token')).toBe(
+      'csrf-abc',
+    );
+    expect(rowOf(wrapper, 'Jo')?.text()).toContain('Away until Tue 20 Oct');
+    expect(server.callsTo('GET /api/members')).toHaveLength(1);
+
+    await wrapper.get('button[aria-label="Clear away date for Jo"]').trigger('click');
+    await flushPromises();
+
+    expect(server.callsTo(`PATCH /api/members/${JO}/away`)[1]?.body).toEqual({ awayUntil: null });
+    expect(rowOf(wrapper, 'Jo')?.text()).not.toContain('Away until Tue');
+    expect((wrapper.get(`#away-${JO}`).element as HTMLInputElement).value).toBe('');
+  });
+
+  it('lets a member set and clear their own, but not anyone else’s', async () => {
+    const mine = session().member.id;
+    const server = fakeServer({
+      [ME]: json(session({ role: 'member' })),
+      'GET /api/members': json({ members: [away(mine, '2026-10-13'), members[2]] }),
+      ...noTasks,
+      [`PATCH /api/members/${mine}/away`]: json({ member: away(mine, null) }),
+    });
+    const { wrapper } = await mountApp(server, '/people');
+    mounted = wrapper;
+
+    expect(wrapper.find(`#away-${JO}`).exists()).toBe(false);
+    expect((wrapper.get(`#away-${mine}`).element as HTMLInputElement).value).toBe('2026-10-13');
+
+    await wrapper.get('button[aria-label="I\'m back"]').trigger('click');
+    await flushPromises();
+
+    expect(server.callsTo(`PATCH /api/members/${mine}/away`)[0]?.body).toEqual({
+      awayUntil: null,
+    });
+    expect(rowOf(wrapper, 'Alex')?.get('.member-tags').text()).not.toContain('Away');
+  });
+
+  it('shows a warning when the rotations cannot be loaded', async () => {
+    const { wrapper } = await open(
+      {
+        [ME]: json(session()),
+        'GET /api/members': json({ members }),
+        'GET /api/tasks': apiError(500, 'internal', 'Tasks are down'),
+      },
+      '/people',
+    );
+
+    expect(wrapper.text()).toContain('Could not load the rotations: Tasks are down');
+    expect(wrapper.findAll('.member')).toHaveLength(3);
+    expect(wrapper.find('.member-rotations').exists()).toBe(false);
+  });
+
+  it('cannot save an empty date, and ties an error to its date box', async () => {
+    const { wrapper } = await open(
+      { [ME]: json(session()), 'GET /api/members': json({ members }), ...noTasks },
+      '/people',
+    );
+    const save = () => wrapper.get('button[aria-label="Save away date for Jo"]');
+
+    expect(save().attributes('disabled')).toBeDefined();
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-01');
+    expect(save().attributes('disabled')).toBeUndefined();
+    await wrapper.get(`#away-${JO}`).setValue('');
+    expect(save().attributes('disabled')).toBeDefined();
+
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-01');
+    await rowOf(wrapper, 'Jo')?.get('form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get(`#away-${JO}`).attributes('aria-describedby')).toBe(`away-${JO}-error`);
+    expect(wrapper.get(`#away-${JO}-error`).text()).toBe('Choose today or a later date.');
+  });
+
+  it('drops a typed date when the stored one changes underneath it', async () => {
+    const { wrapper, pinia } = await open(
+      { [ME]: json(session()), 'GET /api/members': json({ members }), ...noTasks },
+      '/people',
+    );
+    const input = () => wrapper.get(`#away-${JO}`).element as HTMLInputElement;
+
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-20');
+    expect(input().value).toBe('2026-10-20');
+
+    // Someone else set a date, which a reload brings in.
+    const store = useMembersStore(pinia);
+    store.replace({ ...members[2], awayUntil: '2026-10-25' } as MemberDto);
+    await flushPromises();
+    expect(input().value).toBe('2026-10-25');
+
+    // A change to someone else leaves a draft alone.
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-30');
+    store.replace({ ...members[0], name: 'Alexandra' } as MemberDto);
+    await flushPromises();
+    expect(input().value).toBe('2026-10-30');
+  });
+
+  it('refuses a date in the past and shows api errors', async () => {
+    const server = fakeServer({
+      [ME]: json(session()),
+      'GET /api/members': json({ members }),
+      ...noTasks,
+      [`PATCH /api/members/${JO}/away`]: apiError(403, 'forbidden', 'Not allowed'),
+    });
+    const { wrapper } = await mountApp(server, '/people');
+    mounted = wrapper;
+    const submitJo = async () => {
+      await rowOf(wrapper, 'Jo')?.get('form').trigger('submit');
+      await flushPromises();
+    };
+
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-01');
+    await submitJo();
+    expect(rowOf(wrapper, 'Jo')?.get('[role="alert"]').text()).toBe(
+      'Choose today or a later date.',
+    );
+    expect(server.callsTo(`PATCH /api/members/${JO}/away`)).toHaveLength(0);
+
+    await wrapper.get(`#away-${JO}`).setValue('2026-10-12');
+    await submitJo();
+    expect(rowOf(wrapper, 'Jo')?.get('[role="alert"]').text()).toBe('Not allowed');
   });
 });
 

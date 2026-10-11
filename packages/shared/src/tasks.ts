@@ -30,7 +30,7 @@ export const OPEN_OCCURRENCE_STATUSES = ['upcoming', 'active', 'started'] as con
 export const timeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM (24-hour)');
 
 /** A real calendar date as `YYYY-MM-DD`. */
-const calendarDateSchema = z.iso.date();
+export const calendarDateSchema = z.iso.date();
 
 /** An ISO 8601 date-time with a `Z` or numeric UTC offset, such as `2026-07-01T09:30:00+01:00`. */
 const instantSchema = z.iso.datetime({ offset: true });
@@ -225,6 +225,11 @@ export const taskSchema = z.object({
   assignmentMode: assignmentModeSchema,
   /** Members in rotation order. */
   assigneeIds: z.array(z.uuid()),
+  /**
+   * Who has the task's earliest open (upcoming, active or started) occurrence, the due-first
+   * one, undated last. `null` when it has no open occurrence or that one is unassigned.
+   */
+  nextAssigneeId: z.uuid().nullable(),
   /** Ordered by position. */
   milestones: z.array(milestoneSchema),
   archived: z.boolean(),

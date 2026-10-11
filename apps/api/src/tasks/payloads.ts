@@ -1,5 +1,6 @@
 import { localToday } from '@tracker/core';
 import {
+  dueOrder,
   household,
   occurrence,
   task,
@@ -9,7 +10,7 @@ import {
   type Occurrence,
   type Task,
 } from '@tracker/db';
-import type { OccurrenceDto, TaskDto } from '@tracker/shared';
+import { OPEN_OCCURRENCE_STATUSES, type OccurrenceDto, type TaskDto } from '@tracker/shared';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { notFound } from '../errors.js';
 
@@ -34,6 +35,7 @@ export function toTaskDto(
   t: Task,
   assigneeIds: string[],
   milestones: TaskDto['milestones'],
+  nextAssigneeId: string | null,
 ): TaskDto {
   return {
     id: t.id,
@@ -55,6 +57,7 @@ export function toTaskDto(
     reminderProfile: t.reminderProfile,
     assignmentMode: t.assignmentMode,
     assigneeIds,
+    nextAssigneeId,
     milestones,
     archived: t.archivedAt !== null,
     archivedAt: t.archivedAt?.toISOString() ?? null,
@@ -64,11 +67,40 @@ export function toTaskDto(
   };
 }
 
-/** Task DTOs for `rows` (in that order), loading their assignees and milestones in two queries. */
+/**
+ * For each of the tasks with an open occurrence, who has the earliest one: the same due order a
+ * rotation is planned in (`dueOrder`, in the household's time zone), undated last.
+ */
+async function nextAssigneeIds(
+  db: DbOrTransaction,
+  taskIds: string[],
+): Promise<Map<string, string | null>> {
+  const rows = await db
+    .selectDistinctOn([occurrence.taskId], {
+      taskId: occurrence.taskId,
+      assigneeId: occurrence.assigneeId,
+    })
+    .from(occurrence)
+    .innerJoin(task, eq(task.id, occurrence.taskId))
+    .innerJoin(household, eq(household.id, task.householdId))
+    .where(
+      and(
+        inArray(occurrence.taskId, taskIds),
+        inArray(occurrence.status, [...OPEN_OCCURRENCE_STATUSES]),
+      ),
+    )
+    .orderBy(occurrence.taskId, dueOrder(household.timezone), asc(occurrence.id));
+  return new Map(rows.map((row) => [row.taskId, row.assigneeId]));
+}
+
+/**
+ * Task DTOs for `rows` (in that order), loading their assignees, milestones and next assignees
+ * in three queries.
+ */
 export async function loadTaskDtos(db: DbOrTransaction, rows: Task[]): Promise<TaskDto[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((t) => t.id);
-  const [assignees, milestones] = await Promise.all([
+  const [assignees, milestones, next] = await Promise.all([
     db
       .select()
       .from(taskAssignee)
@@ -79,6 +111,7 @@ export async function loadTaskDtos(db: DbOrTransaction, rows: Task[]): Promise<T
       .from(taskMilestone)
       .where(inArray(taskMilestone.taskId, ids))
       .orderBy(asc(taskMilestone.position)),
+    nextAssigneeIds(db, ids),
   ]);
   return rows.map((t) =>
     toTaskDto(
@@ -87,6 +120,7 @@ export async function loadTaskDtos(db: DbOrTransaction, rows: Task[]): Promise<T
       milestones
         .filter((m) => m.taskId === t.id)
         .map((m) => ({ id: m.id, title: m.title, offsetDaysBeforeDue: m.offsetDaysBeforeDue })),
+      next.get(t.id) ?? null,
     ),
   );
 }

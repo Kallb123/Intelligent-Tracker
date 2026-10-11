@@ -33,9 +33,14 @@ export const useMembersStore = defineStore('members', () => {
     return loading;
   }
 
+  /** Swaps in a member the api returned after a change, instead of refetching the whole list. */
+  function replace(member: MemberDto): void {
+    members.value = members.value.map((m) => (m.id === member.id ? member : m));
+  }
+
   function nameOf(id: string | null | undefined): string {
     return (id ? byId.value.get(id)?.name : undefined) ?? 'Anyone';
   }
 
-  return { members, loaded, error, byId, load, nameOf };
+  return { members, loaded, error, byId, load, replace, nameOf };
 });

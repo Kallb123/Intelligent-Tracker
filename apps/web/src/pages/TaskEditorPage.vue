@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { localToday, RecurrenceError } from '@tracker/core';
-import { taskBodySchema } from '@tracker/shared';
+import { taskBodySchema, type MemberDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Textarea from 'primevue/textarea';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError, getApi } from '../api/index.js';
 import FormField from '../components/FormField.vue';
@@ -16,6 +16,7 @@ import SelectField from '../components/SelectField.vue';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
 import { defaultRecurrence } from '../tasks/recurrence-form.js';
+import { memberLabel, moveItem } from '../tasks/rotation.js';
 import {
   formatDue,
   formFromTask,
@@ -44,6 +45,8 @@ const isNew = computed(() => props.id === undefined);
 
 const form = ref<TaskForm | null>(null);
 const archived = ref(false);
+/** Whose turn it is on the stored task, when it takes turns. */
+const nextUpId = ref<string | null>(null);
 const loading = ref(true);
 const loadError = ref('');
 const errors = ref<FieldErrors>({});
@@ -55,6 +58,7 @@ function startNew(): void {
   const today = localToday(new Date(), timeZone.value);
   form.value = newTaskForm(today, session.member?.id ?? '');
   archived.value = false;
+  nextUpId.value = null;
 }
 
 async function load(): Promise<void> {
@@ -73,6 +77,7 @@ async function load(): Promise<void> {
     if (!data) return;
     form.value = formFromTask(data.task, timeZone.value);
     archived.value = data.task.archived;
+    nextUpId.value = data.task.assignmentMode === 'rotation' ? data.task.nextAssigneeId : null;
   } catch (err) {
     form.value = null;
     loadError.value = describeError(err);
@@ -102,10 +107,32 @@ const modeOptions = [
   { value: 'any', label: 'Anyone' },
   { value: 'rotation', label: 'Take turns' },
 ] as const;
+/** "Next up" only while that person is still in the rotation being edited. */
+const nextUp = computed(() =>
+  form.value?.assignmentMode === 'rotation' &&
+  nextUpId.value &&
+  form.value.rotation.includes(nextUpId.value)
+    ? membersStore.nameOf(nextUpId.value)
+    : '',
+);
+const today = computed(() => localToday(new Date(), timeZone.value));
+/** A member's name, with when they are back if they are away right now. */
+const labelFor = (m: MemberDto) => memberLabel(m, today.value);
 const memberOptions = computed(() => [
   { value: '', label: 'Nobody in particular' },
-  ...membersStore.members.map((m) => ({ value: m.id, label: m.name })),
+  ...membersStore.members.map((m) => ({ value: m.id, label: labelFor(m) })),
 ]);
+/** The rotation in turn order, for the move up / down list. */
+const rotationMembers = computed(() =>
+  (form.value?.rotation ?? []).map((id) => {
+    const member = membersStore.byId.get(id);
+    return {
+      id,
+      name: membersStore.nameOf(id),
+      label: member ? labelFor(member) : membersStore.nameOf(id),
+    };
+  }),
+);
 const rotationNames = computed(() =>
   (form.value?.rotation ?? []).map((id) => membersStore.nameOf(id)).join(', then '),
 );
@@ -115,6 +142,26 @@ const now = new Date();
 const preview = computed(() =>
   form.value ? previewSchedule(form.value, timeZone.value, now) : { dues: [] },
 );
+
+/** Said by the live region after a move, since the list itself is not announced. */
+const moved = ref('');
+
+/**
+ * Moves someone in the rotation. The end buttons are `aria-disabled` rather than `disabled`, so
+ * keyboard focus is never lost when a button reaches the end of the list; pressing one does
+ * nothing. Focus is put back on the same button, which a reorder can otherwise drop.
+ */
+async function moveRotation(index: number, offset: -1 | 1): Promise<void> {
+  const f = form.value;
+  const id = f?.rotation[index];
+  if (!f || id === undefined) return;
+  const next = moveItem(f.rotation, index, offset);
+  if (next[index] === id) return;
+  f.rotation = next;
+  moved.value = `${membersStore.nameOf(id)} moved to position ${next.indexOf(id) + 1}`;
+  await nextTick();
+  document.getElementById(`rotation-${offset < 0 ? 'up' : 'down'}-${id}`)?.focus();
+}
 
 function addMilestone(): void {
   form.value?.milestones.push({ title: '', days: null });
@@ -380,17 +427,46 @@ async function remove(): Promise<void> {
           <SelectField id="task-assignee" v-model="form.fixedAssignee" :options="memberOptions" />
         </FormField>
         <fieldset v-if="form.assignmentMode === 'rotation'" class="field">
-          <legend>Take turns, in this order</legend>
+          <legend>Take turns</legend>
           <div v-for="m in membersStore.members" :key="m.id" class="checkbox-row">
             <Checkbox v-model="form.rotation" :input-id="`rotation-${m.id}`" :value="m.id" />
-            <label :for="`rotation-${m.id}`">{{ m.name }}</label>
+            <label :for="`rotation-${m.id}`">{{ labelFor(m) }}</label>
           </div>
+          <ol v-if="rotationMembers.length > 0" class="rotation-order" aria-label="Turn order">
+            <li v-for="(m, i) in rotationMembers" :key="m.id">
+              <span class="rotation-name">{{ i + 1 }}. {{ m.label }}</span>
+              <Button
+                :id="`rotation-up-${m.id}`"
+                type="button"
+                icon="pi pi-arrow-up"
+                severity="secondary"
+                text
+                size="small"
+                :aria-disabled="i === 0"
+                :aria-label="`Move ${m.name} up`"
+                @click="moveRotation(i, -1)"
+              />
+              <Button
+                :id="`rotation-down-${m.id}`"
+                type="button"
+                icon="pi pi-arrow-down"
+                severity="secondary"
+                text
+                size="small"
+                :aria-disabled="i === rotationMembers.length - 1"
+                :aria-label="`Move ${m.name} down`"
+                @click="moveRotation(i, 1)"
+              />
+            </li>
+          </ol>
+          <p class="sr-only" role="status" aria-live="polite">{{ moved }}</p>
           <small class="muted">
             {{
               rotationNames ? `Order: ${rotationNames}.` : 'Tick the people who share this task.'
             }}
-            Untick and tick again to change the order.
+            Away people are skipped while they are away.
           </small>
+          <small v-if="nextUp" class="muted">Next up: {{ nextUp }}</small>
           <small v-if="errors['assigneeIds']" class="field-error" role="alert">{{
             errors['assigneeIds']
           }}</small>

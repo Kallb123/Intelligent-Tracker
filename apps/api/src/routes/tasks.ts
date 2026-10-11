@@ -8,6 +8,7 @@ import {
   taskAssignee,
   taskMilestone,
 } from '@tracker/db';
+import { remapCursor } from '@tracker/core';
 import {
   TASK_SCHEDULE_FIELDS,
   taskBodySchema,
@@ -45,7 +46,8 @@ type Tx = Parameters<Parameters<ApiContext['db']['transaction']>[0]>[0];
  *   POST   /api/tasks             create a task and its first occurrences
  *   GET    /api/tasks/:id         one task
  *   PATCH  /api/tasks/:id         change fields; assignees and milestones are replaced as a
- *                                 whole; a schedule change re-materialises the open occurrences
+ *                                 whole; a schedule change re-materialises the open occurrences;
+ *                                 changing the assignees or mode re-plans a rotation
  *   DELETE /api/tasks/:id         delete the task and everything hanging off it
  */
 export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void {
@@ -67,6 +69,16 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
         'Every assignee must be a member of the household',
       );
     }
+  }
+
+  /**
+   * The rotation cursor after the assignees or mode change: it keeps pointing at the member
+   * whose turn it was, and starts from the first when the task has only just become a rotation
+   * (and is 0 for a task that is not one, where it has no meaning).
+   */
+  function nextCursor(before: TaskFieldValues, after: TaskFieldValues, cursor: number): number {
+    if (before.assignmentMode !== 'rotation' || after.assignmentMode !== 'rotation') return 0;
+    return remapCursor(before.assigneeIds, cursor, after.assigneeIds);
   }
 
   /** Replaces the task's assignee and milestone rows with the given lists. */
@@ -228,10 +240,14 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
         ctx.db.transaction(async (tx) => {
           // Locking the row makes concurrent edits of one task take turns.
           const [row] = await tx
-            .select({ id: task.id, archivedAt: task.archivedAt })
+            .select({
+              id: task.id,
+              archivedAt: task.archivedAt,
+              rotationCursor: task.rotationCursor,
+            })
             .from(task)
             .where(and(eq(task.id, request.params.id), eq(task.householdId, me.householdId)))
-            .for('update');
+            .for('no key update');
           if (!row) throw notFound('No such task');
 
           const stored = fieldsOfDto(await loadTaskDto(tx, me.householdId, row.id));
@@ -266,6 +282,9 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
             .set({
               ...taskColumns(fields),
               ...(archiveChanged ? { archivedAt: isArchived ? now : null } : {}),
+              ...(changed.includes('assigneeIds') || changed.includes('assignmentMode')
+                ? { rotationCursor: nextCursor(stored, fields, row.rotationCursor) }
+                : {}),
             })
             .where(eq(task.id, row.id));
           await replaceLists(tx, row.id, {
@@ -279,7 +298,7 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
           }
           if (!isArchived) {
             if (changed.includes('assigneeIds') || changed.includes('assignmentMode')) {
-              await reassignOpenOccurrences(tx, row.id);
+              await reassignOpenOccurrences(tx, row.id, { now });
             }
             if (rescheduled || archiveChanged) await materialiseTask(tx, row.id, { now });
           }

@@ -15,6 +15,7 @@ export function toMemberDto(m: Member): MemberDto {
     email: m.email,
     role: m.role,
     pending: m.passwordHash === null,
+    awayUntil: m.awayUntil,
   };
 }
 

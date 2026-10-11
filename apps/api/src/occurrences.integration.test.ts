@@ -1,4 +1,4 @@
-import { activity, occurrence, task, type DbHandle } from '@tracker/db';
+import { activity, occurrence, replanRotation, task, type DbHandle } from '@tracker/db';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -618,6 +618,222 @@ describe.skipIf(!adminUrl)('occurrences (integration)', () => {
       await admin.post(`/api/occurrences/${occ['id']}/start`);
       const res = await admin.post(`/api/occurrences/${occ['id']}/complete`);
       expect(res.json<Json>().occurrence.status).toBe('done');
+    });
+  });
+
+  describe('rotation', () => {
+    async function setUp() {
+      const sam = await addMember(app, admin);
+      const me = (await admin.get('/api/auth/me')).json<Json>().member;
+      const created = await createTask({
+        title: 'Hoover',
+        scheduleKind: 'fixed',
+        rrule: 'FREQ=WEEKLY;BYDAY=MO',
+        dueDate: '2026-03-02',
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+      const names = { [me.id]: 'me', [sam.id]: 'sam' };
+      return { sam, me, taskId: created['id'] as string, names };
+    }
+
+    const rowsOf = (taskId: string) =>
+      handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.taskId, taskId))
+        .orderBy(asc(occurrence.dueDate));
+    const who = async (taskId: string, names: Record<string, string>, count = 5) =>
+      (await rowsOf(taskId))
+        .filter((r) => r.status === 'upcoming' || r.status === 'active')
+        .slice(0, count)
+        .map((r) => (r.assigneeId ? names[r.assigneeId] : null));
+    const cursorOf = async (taskId: string) =>
+      (await handle.db.select().from(task).where(eq(task.id, taskId)))[0]?.rotationCursor;
+
+    it('advances the rotation when an occurrence is completed or skipped', async () => {
+      const { taskId, names } = await setUp();
+      expect(await who(taskId, names, 4)).toEqual(['me', 'sam', 'me', 'sam']);
+      const [first, second] = await rowsOf(taskId);
+
+      expect((await admin.post(`/api/occurrences/${first?.id}/complete`)).statusCode).toBe(200);
+      expect(await cursorOf(taskId)).toBe(1);
+      expect((await admin.post(`/api/occurrences/${second?.id}/skip`)).statusCode).toBe(200);
+      expect(await cursorOf(taskId)).toBe(0);
+
+      expect(await who(taskId, names, 4)).toEqual(['me', 'sam', 'me', 'sam']);
+    });
+
+    it('uses up the assignee`s turn even when someone else does the job', async () => {
+      const { sam, taskId, names } = await setUp();
+      const [first] = await rowsOf(taskId);
+
+      const res = await sam.client.post(`/api/occurrences/${first?.id}/complete`);
+
+      expect(res.json<Json>().occurrence).toMatchObject({ assigneeId: first?.assigneeId });
+      expect((await rowsOf(taskId))[0]).toMatchObject({ status: 'done', completedBy: sam.id });
+      expect(await cursorOf(taskId)).toBe(1);
+      expect(await who(taskId, names, 3)).toEqual(['sam', 'me', 'sam']);
+    });
+
+    it('uses the turn up when an occurrence is started, but only once', async () => {
+      const { taskId, names } = await setUp();
+      const [first] = await rowsOf(taskId);
+
+      await admin.post(`/api/occurrences/${first?.id}/start`);
+      expect(await cursorOf(taskId)).toBe(1);
+      await admin.post(`/api/occurrences/${first?.id}/start`);
+      expect(await cursorOf(taskId)).toBe(1);
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+      expect(await cursorOf(taskId)).toBe(1);
+
+      // A second occurrence that is completed after being started does not advance twice.
+      const second = (await rowsOf(taskId))[1];
+      await admin.post(`/api/occurrences/${second?.id}/start`);
+      await admin.post(`/api/occurrences/${second?.id}/complete`);
+      expect(await cursorOf(taskId)).toBe(0);
+      expect(await who(taskId, names, 2)).toEqual(['me', 'sam']);
+    });
+
+    it('does not advance when the action is refused', async () => {
+      const { taskId } = await setUp();
+      const [first] = await rowsOf(taskId);
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+
+      expect((await admin.post(`/api/occurrences/${first?.id}/complete`)).statusCode).toBe(409);
+      expect((await admin.post(`/api/occurrences/${first?.id}/skip`)).statusCode).toBe(409);
+
+      expect(await cursorOf(taskId)).toBe(1);
+    });
+
+    it('does not move the rotation for a snooze', async () => {
+      const { taskId } = await setUp();
+      const [first] = await rowsOf(taskId);
+      await admin.post(`/api/occurrences/${first?.id}/snooze`, { days: 2 });
+      expect(await cursorOf(taskId)).toBe(0);
+    });
+
+    it('hands the next after_completion occurrence to the next person', async () => {
+      const sam = await addMember(app, admin);
+      const me = (await admin.get('/api/auth/me')).json<Json>().member;
+      const created = await createTask({
+        title: 'Water the plants',
+        scheduleKind: 'after_completion',
+        intervalAfterCompletionDays: 7,
+        dueDate: '2026-03-01',
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+      const first = await firstOccurrence(created['id']);
+      expect(first['assigneeId']).toBe(me.id);
+
+      const res = await admin.post(`/api/occurrences/${first['id']}/complete`);
+      expect(res.json<Json>().next).toMatchObject({ assigneeId: sam.id });
+
+      const next = res.json<Json>().next;
+      // The follow-up is due a week after the completion, so complete the second one later.
+      t.clock.advance(DAY);
+      const again = await admin.post(`/api/occurrences/${next['id']}/complete`);
+      expect(again.json<Json>().next).toMatchObject({ assigneeId: me.id });
+    });
+
+    it('makes an action and a task edit take turns on the task lock, whichever gets it first', async () => {
+      const { sam, me, taskId, names } = await setUp();
+      const [first] = await rowsOf(taskId);
+      const waiting = async () =>
+        Number(
+          (
+            await handle.sql`select count(*) as n from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'`
+          )[0]?.['n'],
+        );
+
+      // Hold the task lock in a side transaction, as another writer mid-change would.
+      let release: () => void = () => {};
+      let held: () => void = () => {};
+      const holding = new Promise<void>((resolve) => (held = resolve));
+      const holder = handle.sql.begin(async (tx) => {
+        await tx`select id from task where id = ${taskId} for no key update`;
+        held();
+        await new Promise<void>((resolve) => (release = resolve));
+      });
+      await holding;
+      let results: { statusCode: number }[] | undefined;
+      try {
+        const both = Promise.all([
+          admin.post(`/api/occurrences/${first?.id}/complete`),
+          admin.patch(`/api/tasks/${taskId}`, { assigneeIds: [sam.id, me.id] }),
+        ]);
+        // Both requests are now blocked on the lock.
+        for (let i = 0; i < 100 && (await waiting()) < 2; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(await waiting()).toBe(2);
+        release();
+        results = await both;
+      } finally {
+        release();
+        await holder;
+      }
+
+      expect(results?.map((res) => res.statusCode)).toEqual([200, 200]);
+      // Either order ends the same: the admin`s turn is used up, and Sam is first in the list
+      // and next, so the open occurrences go Sam, admin, Sam, ...
+      expect(await cursorOf(taskId)).toBe(0);
+      expect((await rowsOf(taskId))[0]).toMatchObject({ status: 'done' });
+      expect(await who(taskId, names, 4)).toEqual(['sam', 'me', 'sam', 'me']);
+    });
+
+    it('stays consistent when actions, task edits and away changes run together', async () => {
+      // A smoke test: whether it can catch a lock-order bug depends on timing. The invariant is
+      // that however the requests interleave, the open occurrences are a fixed point of the plan.
+      const { sam, me, taskId } = await setUp();
+      for (let round = 0; round < 3; round++) {
+        const open = (await rowsOf(taskId)).filter(
+          (r) => r.status === 'upcoming' || r.status === 'active',
+        );
+        const results = await Promise.all([
+          admin.post(`/api/occurrences/${open[0]?.id}/complete`),
+          admin.post(`/api/occurrences/${open[1]?.id}/start`),
+          admin.patch(`/api/tasks/${taskId}`, {
+            assigneeIds: round % 2 === 0 ? [sam.id, me.id] : [me.id, sam.id],
+          }),
+          sam.client.patch(`/api/members/${sam.id}/away`, {
+            awayUntil: round % 2 === 0 ? '2026-03-10' : null,
+          }),
+        ]);
+        expect(
+          results.map((res) => res.statusCode),
+          results.map((res) => res.body).join('\n'),
+        ).toEqual([200, 200, 200, 200]);
+      }
+      expect(await replanRotation(handle.db, taskId, { now: t.clock.now() })).toEqual({
+        updated: 0,
+      });
+      const open = (await rowsOf(taskId)).filter(
+        (r) => r.status === 'upcoming' || r.status === 'active',
+      );
+      expect(open.every((r) => r.assigneeId !== null)).toBe(true);
+    });
+
+    it('leaves fixed and any tasks alone', async () => {
+      const sam = await addMember(app, admin);
+      const created = await createTask({
+        title: 'Bins',
+        scheduleKind: 'fixed',
+        rrule: 'FREQ=WEEKLY;BYDAY=MO',
+        dueDate: '2026-03-02',
+        assigneeIds: [sam.id],
+      });
+      const [first] = await handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.taskId, created['id']))
+        .orderBy(asc(occurrence.dueDate));
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+      expect(
+        (await handle.db.select().from(task).where(eq(task.id, created['id'])))[0]?.rotationCursor,
+      ).toBe(0);
     });
   });
 

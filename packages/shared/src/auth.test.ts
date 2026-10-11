@@ -3,6 +3,7 @@ import {
   createInviteBodySchema,
   loginBodySchema,
   passwordSchema,
+  setAwayBodySchema,
   setupBodySchema,
   usernameSchema,
 } from './auth.js';
@@ -34,6 +35,14 @@ describe('auth schemas', () => {
   it('defaults invited members to the member role and trims names', () => {
     const parsed = createInviteBodySchema.parse({ name: ' Sam ', username: 'sam' });
     expect(parsed).toEqual({ name: 'Sam', username: 'sam', role: 'member' });
+  });
+
+  it('takes a real calendar date or null as the away date', () => {
+    expect(setAwayBodySchema.safeParse({ awayUntil: '2026-07-10' }).success).toBe(true);
+    expect(setAwayBodySchema.safeParse({ awayUntil: null }).success).toBe(true);
+    for (const bad of ['2026-02-30', '10/07/2026', '2026-07-10T00:00:00Z', undefined]) {
+      expect(setAwayBodySchema.safeParse({ awayUntil: bad }).success, String(bad)).toBe(false);
+    }
   });
 
   it('validates the setup body', () => {

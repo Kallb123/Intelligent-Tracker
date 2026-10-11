@@ -6,6 +6,10 @@ export interface OccurrenceListQuery {
   view: 'today' | 'upcoming';
   /** How far ahead `upcoming` looks. */
   days?: number;
+  /** Only what is assigned to this member; '' or left out for everyone's. */
+  memberId?: string;
+  /** True while the query is not final yet (the person filter is unchecked): nothing is fetched. */
+  wait?: boolean;
 }
 
 /**
@@ -14,7 +18,8 @@ export interface OccurrenceListQuery {
  * leaves; completing an "after it's done" task brings its next one in). Reloads also happen when
  * the failure was a conflict, such as completing something a housemate just completed.
  *
- * `query` is read on every load, so a reactive source (the 30/90-day toggle) reloads the list.
+ * `query` is read on every load, so a reactive source (the 30/90-day toggle, the person filter)
+ * reloads the list.
  */
 export function useOccurrenceList(query: () => OccurrenceListQuery) {
   const occurrences = ref<OccurrenceDto[]>([]);
@@ -27,10 +32,17 @@ export function useOccurrenceList(query: () => OccurrenceListQuery) {
 
   async function load(): Promise<void> {
     const request = ++latest;
-    const { view, days } = query();
+    const { view, days, memberId, wait } = query();
+    if (wait) return;
     try {
       const { data } = await getApi().GET('/api/occurrences', {
-        params: { query: { view, ...(days !== undefined && { days }) } },
+        params: {
+          query: {
+            view,
+            ...(days !== undefined && { days }),
+            ...(memberId && { memberId }),
+          },
+        },
       });
       // A slower, older response must not overwrite a newer one (toggling 30/90 quickly).
       if (request !== latest) return;

@@ -9,6 +9,7 @@ import {
   reassignOpenOccurrences,
 } from './materialise.js';
 import { runMigrations } from './migrate.js';
+import { consumeRotationTurn, replanRotation, replanRotationsForMember } from './rotation.js';
 import {
   household,
   member,
@@ -633,6 +634,8 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
   });
 
   describe('reassignOpenOccurrences', () => {
+    const now = at('2026-07-06T09:00:00Z');
+
     it('moves upcoming and active occurrences to the first assignee, not started ones', async () => {
       const h = await newHousehold();
       const sam = await newMember(h.id, 'sam');
@@ -652,7 +655,7 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
       await insertOccurrence(t.id, { dueDate: '2026-07-27', status: 'done', assigneeId: sam.id });
       await handle.db.insert(taskAssignee).values({ taskId: t.id, memberId: alex.id, position: 0 });
 
-      expect(await reassignOpenOccurrences(handle.db, t.id)).toEqual({ updated: 2 });
+      expect(await reassignOpenOccurrences(handle.db, t.id, { now })).toEqual({ updated: 2 });
       expect((await occurrencesOf(t.id)).map((r) => r.assigneeId)).toEqual([
         alex.id,
         alex.id,
@@ -661,7 +664,7 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
       ]);
 
       await handle.db.update(task).set({ assignmentMode: 'any' }).where(eq(task.id, t.id));
-      await reassignOpenOccurrences(handle.db, t.id);
+      await reassignOpenOccurrences(handle.db, t.id, { now });
       const open = await handle.db
         .select({ assigneeId: occurrence.assigneeId })
         .from(occurrence)
@@ -671,8 +674,324 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
 
     it('returns zero for an unknown task', async () => {
       expect(
-        await reassignOpenOccurrences(handle.db, '00000000-0000-4000-8000-000000000000'),
+        await reassignOpenOccurrences(handle.db, '00000000-0000-4000-8000-000000000000', { now }),
       ).toEqual({ updated: 0 });
+    });
+  });
+  describe('rotation', () => {
+    const now = at('2026-07-06T09:00:00Z');
+
+    /** A weekly (Monday) rotation task over the given members, in order. */
+    async function rotationTask(householdId: string, members: { id: string }[], cursor = 0) {
+      const t = await newTask(householdId, { assignmentMode: 'rotation', rotationCursor: cursor });
+      if (members.length > 0) {
+        await handle.db
+          .insert(taskAssignee)
+          .values(members.map((m, position) => ({ taskId: t.id, memberId: m.id, position })));
+      }
+      return t;
+    }
+
+    const assigneesOf = async (taskId: string, ...names: Record<string, string>[]) => {
+      const byId = Object.assign({}, ...names) as Record<string, string>;
+      return (await occurrencesOf(taskId)).map((r) => (r.assigneeId && byId[r.assigneeId]) || null);
+    };
+
+    async function setUp() {
+      const h = await newHousehold();
+      const [a, b, c] = [
+        await newMember(h.id, 'a'),
+        await newMember(h.id, 'b'),
+        await newMember(h.id, 'c'),
+      ] as const;
+      const names = { [a.id]: 'A', [b.id]: 'B', [c.id]: 'C' };
+      return { h, a, b, c, names };
+    }
+
+    const cursorOf = async (taskId: string) =>
+      (
+        await handle.db
+          .select({ cursor: task.rotationCursor })
+          .from(task)
+          .where(eq(task.id, taskId))
+      )[0]?.cursor;
+
+    it('hands a weekly task`s occurrences to its assignees in turn', async () => {
+      const { h, a, b, c, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b, c]);
+
+      await materialiseTask(handle.db, t.id, { now });
+
+      const got = await assigneesOf(t.id, names);
+      expect(got.slice(0, 7)).toEqual(['A', 'B', 'C', 'A', 'B', 'C', 'A']);
+      expect(got).toHaveLength(13);
+    });
+
+    it('starts from the task`s cursor', async () => {
+      const { h, a, b, c, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b, c], 1);
+      await materialiseTask(handle.db, t.id, { now });
+      expect((await assigneesOf(t.id, names)).slice(0, 4)).toEqual(['B', 'C', 'A', 'B']);
+    });
+
+    it('does nothing when run again with the same inputs', async () => {
+      const { h, a, b, c } = await setUp();
+      const t = await rotationTask(h.id, [a, b, c]);
+      await materialiseTask(handle.db, t.id, { now });
+      const before = await occurrencesOf(t.id);
+
+      expect(await replanRotation(handle.db, t.id, { now })).toEqual({ updated: 0 });
+      expect(await reassignOpenOccurrences(handle.db, t.id, { now })).toEqual({ updated: 0 });
+      expect(await materialiseTask(handle.db, t.id, { now })).toEqual({
+        inserted: 0,
+        occurrenceIds: [],
+      });
+      expect(await occurrencesOf(t.id)).toEqual(before);
+    });
+
+    it('continues the rotation when later occurrences are materialised', async () => {
+      const { h, a, b, c, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b, c]);
+      await materialiseTask(handle.db, t.id, { now });
+      await materialiseTask(handle.db, t.id, { now: at('2026-07-13T09:00:00Z') });
+
+      const got = await assigneesOf(t.id, names);
+      expect(got).toHaveLength(14);
+      expect(got.slice(0, 5)).toEqual(['A', 'B', 'C', 'A', 'B']);
+    });
+
+    it('skips a member on the dates they are away, and puts them back when they return', async () => {
+      const { h, a, b, c, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b, c]);
+      await materialiseTask(handle.db, t.id, { now });
+
+      // B is away through Tuesday 14 July, so the 13th goes to C and the turn moves on to A.
+      await handle.db.update(member).set({ awayUntil: '2026-07-14' }).where(eq(member.id, b.id));
+      expect(await replanRotationsForMember(handle.db, b.id, { now })).toEqual({ updated: 12 });
+      expect((await assigneesOf(t.id, names)).slice(0, 6)).toEqual(['A', 'C', 'A', 'B', 'C', 'A']);
+
+      await handle.db.update(member).set({ awayUntil: null }).where(eq(member.id, b.id));
+      await replanRotationsForMember(handle.db, b.id, { now });
+      expect((await assigneesOf(t.id, names)).slice(0, 4)).toEqual(['A', 'B', 'C', 'A']);
+    });
+
+    it('treats the away date as the last day away', async () => {
+      const { h, a, b, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b], 1);
+      await materialiseTask(handle.db, t.id, { now });
+      // B is next for Monday 6th but away through that very day; back for the 13th.
+      await handle.db.update(member).set({ awayUntil: '2026-07-06' }).where(eq(member.id, b.id));
+      await replanRotationsForMember(handle.db, b.id, { now });
+      expect((await assigneesOf(t.id, names)).slice(0, 4)).toEqual(['A', 'B', 'A', 'B']);
+    });
+
+    it('only re-plans rotation tasks the member is in', async () => {
+      const { h, a, b, c } = await setUp();
+      const mine = await rotationTask(h.id, [a, b]);
+      const others = await rotationTask(h.id, [b, c]);
+      const fixed = await newTask(h.id, { assignmentMode: 'fixed' });
+      await handle.db
+        .insert(taskAssignee)
+        .values({ taskId: fixed.id, memberId: a.id, position: 0 });
+      for (const t of [mine, others, fixed]) await materialiseTask(handle.db, t.id, { now });
+      const untouched = [await occurrencesOf(others.id), await occurrencesOf(fixed.id)];
+
+      await handle.db.update(member).set({ awayUntil: '2026-07-31' }).where(eq(member.id, a.id));
+      const { updated } = await replanRotationsForMember(handle.db, a.id, { now });
+
+      expect(updated).toBeGreaterThan(0);
+      expect([await occurrencesOf(others.id), await occurrencesOf(fixed.id)]).toEqual(untouched);
+      // Away through July: B has the first five Mondays of `mine`.
+      expect((await occurrencesOf(mine.id)).slice(0, 4).map((r) => r.assigneeId)).toEqual([
+        b.id,
+        b.id,
+        b.id,
+        b.id,
+      ]);
+    });
+
+    it('leaves archived tasks alone when a member`s away date changes', async () => {
+      const { h, a, b } = await setUp();
+      const t = await rotationTask(h.id, [a, b]);
+      await materialiseTask(handle.db, t.id, { now });
+      await handle.db.update(task).set({ archivedAt: now }).where(eq(task.id, t.id));
+      const before = await occurrencesOf(t.id);
+
+      await handle.db.update(member).set({ awayUntil: '2026-12-31' }).where(eq(member.id, a.id));
+
+      expect(await replanRotationsForMember(handle.db, a.id, { now })).toEqual({ updated: 0 });
+      expect(await occurrencesOf(t.id)).toEqual(before);
+    });
+
+    it('lets the member whose turn it is take an occurrence when everyone is away', async () => {
+      const { h, a, b, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b]);
+      await handle.db.update(member).set({ awayUntil: '2026-08-31' }).where(eq(member.id, a.id));
+      await handle.db.update(member).set({ awayUntil: '2026-08-31' }).where(eq(member.id, b.id));
+      await materialiseTask(handle.db, t.id, { now });
+      expect((await assigneesOf(t.id, names)).slice(0, 5)).toEqual(['A', 'B', 'A', 'B', 'A']);
+    });
+
+    it('leaves occurrences unassigned when the rotation has no members', async () => {
+      const h = await newHousehold();
+      const t = await rotationTask(h.id, []);
+      await materialiseTask(handle.db, t.id, { now });
+      expect(new Set((await occurrencesOf(t.id)).map((r) => r.assigneeId))).toEqual(
+        new Set([null]),
+      );
+    });
+
+    it('orders timed, all-day and undated occurrences by due and plans in household time', async () => {
+      const { h, a, b, c, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b, c]);
+      // 23:30 UTC on the 10th is 00:30 on the 11th in London (BST).
+      await insertOccurrence(t.id, { dueAt: at('2026-07-10T23:30:00Z'), status: 'upcoming' });
+      await insertOccurrence(t.id, { dueDate: '2026-07-10', status: 'upcoming' });
+      await insertOccurrence(t.id, { status: 'active' });
+      await handle.db.update(member).set({ awayUntil: '2026-07-10' }).where(eq(member.id, b.id));
+
+      await replanRotation(handle.db, t.id, { now });
+
+      const rows = await occurrencesOf(t.id);
+      const by = (pick: (r: (typeof rows)[number]) => boolean) =>
+        rows.filter(pick).map((r) => names[r.assigneeId as string]);
+      // All-day 10th: A. Timed (the 11th locally): B is back. Undated (today, 6th): C.
+      expect(by((r) => r.dueDate === '2026-07-10')).toEqual(['A']);
+      expect(by((r) => r.dueAt !== null)).toEqual(['B']);
+      expect(by((r) => r.dueDate === null && r.dueAt === null)).toEqual(['C']);
+    });
+
+    it('treats an undated occurrence as due today when checking who is away', async () => {
+      const { h, a, b, names } = await setUp();
+      const t = await rotationTask(h.id, [a, b], 1);
+      await insertOccurrence(t.id, { status: 'active' });
+      await handle.db.update(member).set({ awayUntil: '2026-07-06' }).where(eq(member.id, b.id));
+      await replanRotation(handle.db, t.id, { now });
+      expect(await assigneesOf(t.id, names)).toEqual(['A']);
+    });
+
+    it('does not touch started, done or skipped occurrences', async () => {
+      const { h, a, b } = await setUp();
+      const t = await rotationTask(h.id, [a, b]);
+      for (const [i, status] of (['started', 'done', 'skipped', 'upcoming'] as const).entries()) {
+        await insertOccurrence(t.id, { dueDate: `2026-07-1${i}`, status, assigneeId: b.id });
+      }
+      expect(await reassignOpenOccurrences(handle.db, t.id, { now })).toEqual({ updated: 1 });
+      expect((await occurrencesOf(t.id)).map((r) => r.assigneeId)).toEqual([
+        b.id,
+        b.id,
+        b.id,
+        a.id,
+      ]);
+    });
+
+    it('ignores tasks that are not rotations', async () => {
+      const { h, a, b } = await setUp();
+      const t = await newTask(h.id, { assignmentMode: 'fixed', rotationCursor: 0 });
+      await handle.db.insert(taskAssignee).values({ taskId: t.id, memberId: b.id, position: 0 });
+      await materialiseTask(handle.db, t.id, { now });
+      const before = await occurrencesOf(t.id);
+
+      expect(await replanRotation(handle.db, t.id, { now })).toEqual({ updated: 0 });
+      expect(
+        await replanRotation(handle.db, '00000000-0000-4000-8000-000000000000', { now }),
+      ).toEqual({ updated: 0 });
+      const [first] = before;
+      await consumeRotationTurn(handle.db, first?.id as string, { now, previousStatus: 'active' });
+      await consumeRotationTurn(handle.db, '00000000-0000-4000-8000-000000000000', {
+        now,
+        previousStatus: 'active',
+      });
+      expect(await cursorOf(t.id)).toBe(0);
+      expect(await occurrencesOf(t.id)).toEqual(before);
+      expect(a.id).not.toBe(b.id);
+    });
+
+    describe('consumeRotationTurn', () => {
+      it('moves the cursor past the assignee of a completed occurrence and keeps the plan', async () => {
+        const { h, a, b, c, names } = await setUp();
+        const t = await rotationTask(h.id, [a, b, c]);
+        await materialiseTask(handle.db, t.id, { now });
+        const [first] = await occurrencesOf(t.id);
+        await handle.db
+          .update(occurrence)
+          .set({ status: 'done', completedBy: c.id })
+          .where(eq(occurrence.id, first?.id as string));
+
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
+
+        // A's turn is used up even though C did it; B is next, so nothing else moves.
+        expect(await cursorOf(t.id)).toBe(1);
+        expect((await assigneesOf(t.id, names)).slice(0, 4)).toEqual(['A', 'B', 'C', 'A']);
+      });
+
+      it('re-plans the rest when an occurrence is handled out of order', async () => {
+        const { h, a, b, c, names } = await setUp();
+        const t = await rotationTask(h.id, [a, b, c]);
+        await materialiseTask(handle.db, t.id, { now });
+        const third = (await occurrencesOf(t.id))[2];
+        await handle.db
+          .update(occurrence)
+          .set({ status: 'started' })
+          .where(eq(occurrence.id, third?.id as string));
+
+        await consumeRotationTurn(handle.db, third?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
+
+        // C's turn was used, so A is next for the earliest remaining occurrence: the fourth
+        // (which was A's) is now C's, and the rotation goes on from there.
+        expect(await cursorOf(t.id)).toBe(0);
+        expect((await assigneesOf(t.id, names)).slice(0, 5)).toEqual(['A', 'B', 'C', 'C', 'A']);
+        expect((await occurrencesOf(t.id))[2]?.status).toBe('started');
+      });
+
+      it('does nothing for an occurrence that was already started, done or skipped', async () => {
+        const { h, a, b, c, names } = await setUp();
+        const t = await rotationTask(h.id, [a, b, c]);
+        await materialiseTask(handle.db, t.id, { now });
+        const before = await occurrencesOf(t.id);
+        const [first] = before;
+
+        // Completing or skipping a started occurrence: its turn was used up when it started.
+        for (const previousStatus of ['started', 'done', 'skipped'] as const) {
+          await consumeRotationTurn(handle.db, first?.id as string, { now, previousStatus });
+        }
+
+        expect(await cursorOf(t.id)).toBe(0);
+        expect(await occurrencesOf(t.id)).toEqual(before);
+        expect((await assigneesOf(t.id, names)).slice(0, 3)).toEqual(['A', 'B', 'C']);
+
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'upcoming',
+        });
+        expect(await cursorOf(t.id)).toBe(1);
+      });
+
+      it('moves on by one when the assignee is nobody or has left the rotation', async () => {
+        const { h, a, b } = await setUp();
+        const t = await rotationTask(h.id, [a], 0);
+        await handle.db.insert(taskAssignee).values({ taskId: t.id, memberId: b.id, position: 1 });
+        await insertOccurrence(t.id, { dueDate: '2026-07-06', status: 'done', assigneeId: null });
+        await insertOccurrence(t.id, { dueDate: '2026-07-13', status: 'done', assigneeId: null });
+        const [first] = await occurrencesOf(t.id);
+
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
+        expect(await cursorOf(t.id)).toBe(1);
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
+        expect(await cursorOf(t.id)).toBe(0);
+      });
     });
   });
 });

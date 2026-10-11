@@ -1,5 +1,6 @@
 import {
   activity,
+  consumeRotationTurn,
   materialiseTask,
   occurrence,
   task,
@@ -45,7 +46,15 @@ interface Transition {
   /** Treated as success without doing anything when the occurrence is already in this status. */
   idempotentIn?: OccurrenceStatus;
   /** Runs in the same transaction after the change; returns ids of occurrences it created. */
-  after?: (tx: DbOrTransaction, taskId: string) => Promise<string[]>;
+  after?: (tx: DbOrTransaction, changed: ChangedOccurrence) => Promise<string[]>;
+}
+
+/** An occurrence that a `Transition` has just changed. */
+interface ChangedOccurrence {
+  id: string;
+  taskId: string;
+  /** Its status before the change. */
+  previousStatus: OccurrenceStatus;
 }
 
 /**
@@ -59,6 +68,8 @@ interface Transition {
  *   POST /api/occurrences/:id/snooze     hide until a time, or for a number of days
  *   POST /api/occurrences/:id/start      mark as started
  * Open means upcoming, active or started. Changing a closed (done/skipped) occurrence is 409.
+ * Starting, completing or skipping an occurrence that was not yet started uses up its assignee's
+ * turn in the task's rotation (see `consumeRotationTurn`).
  */
 export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -88,6 +99,27 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
 
     return ctx.db.transaction(async (tx) => {
       const owned = tx.select({ id: task.id }).from(task).where(eq(task.householdId, householdId));
+      // Lock order is task, then occurrence, like every other writer, so the actions cannot
+      // deadlock with task edits, away changes or the worker. The lock on the occurrence also
+      // makes the status read below and the change after it one step, so exactly one request
+      // sees the occurrence not yet started and uses up the turn.
+      const [ref] = await tx
+        .select({ taskId: occurrence.taskId })
+        .from(occurrence)
+        .where(and(eq(occurrence.id, occurrenceId), inArray(occurrence.taskId, owned)));
+      if (!ref) throw notFound('No such occurrence');
+      await tx
+        .select({ id: task.id })
+        .from(task)
+        .where(eq(task.id, ref.taskId))
+        .for('no key update');
+      const [before] = await tx
+        .select({ status: occurrence.status })
+        .from(occurrence)
+        .where(eq(occurrence.id, occurrenceId))
+        .for('no key update');
+      // Gone while waiting for the lock (the task was deleted or rescheduled).
+      if (!before) throw notFound('No such occurrence');
       const changed = await tx
         .update(occurrence)
         .set(transition.changes)
@@ -123,10 +155,19 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
         kind: transition.activityKind,
         data: { title: current.task.title, ...transition.activityData },
       });
-      const createdIds = (await transition.after?.(tx, changedRow.taskId)) ?? [];
+      const createdIds =
+        (await transition.after?.(tx, {
+          id: occurrenceId,
+          taskId: changedRow.taskId,
+          previousStatus: before.status,
+        })) ?? [];
       return { dto: toOccurrenceDto(current, clock), createdIds, clock };
     });
   }
+
+  /** Uses up the assignee's rotation turn (a no-op if the occurrence had already been started). */
+  const consumeTurn = (tx: DbOrTransaction, changed: ChangedOccurrence, now: Date) =>
+    consumeRotationTurn(tx, changed.id, { now, previousStatus: changed.previousStatus });
 
   /** Complete or skip: closes the occurrence and lets the schedule produce the next one. */
   function registerClose(
@@ -158,7 +199,10 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
             from: OPEN_OCCURRENCE_STATUSES,
             changes: { status, completedAt: now, completedBy: me.id, snoozedUntil: null },
             activityKind: `occurrence.${status === 'done' ? 'completed' : 'skipped'}`,
-            after: async (tx, taskId) => (await materialiseTask(tx, taskId, { now })).occurrenceIds,
+            after: async (tx, changed) => {
+              await consumeTurn(tx, changed, now);
+              return (await materialiseTask(tx, changed.taskId, { now })).occurrenceIds;
+            },
           },
           now,
         );
@@ -243,6 +287,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
     },
     async (request) => {
       const me = authOf(request).member;
+      const now = ctx.config.clock();
       const { dto } = await transitionOccurrence(
         me.householdId,
         me.id,
@@ -252,8 +297,12 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
           changes: { status: 'started', snoozedUntil: null },
           activityKind: 'occurrence.started',
           idempotentIn: 'started',
+          after: async (tx, changed) => {
+            await consumeTurn(tx, changed, now);
+            return [];
+          },
         },
-        ctx.config.clock(),
+        now,
       );
       return { occurrence: dto };
     },

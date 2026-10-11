@@ -5,7 +5,9 @@ import Button from 'primevue/button';
 import Message from 'primevue/message';
 import { computed, onMounted, ref } from 'vue';
 import OccurrenceItem from '../components/OccurrenceItem.vue';
+import PersonFilter from '../components/PersonFilter.vue';
 import { useOccurrenceList } from '../composables/useOccurrenceList.js';
+import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { formatDayHeading, formatTime } from '../format.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
@@ -20,7 +22,13 @@ const membersStore = useMembersStore();
 
 const RANGES = [30, 90] as const;
 const days = ref<(typeof RANGES)[number]>(30);
-const list = useOccurrenceList(() => ({ view: 'upcoming', days: days.value }));
+const { person, ready } = usePersonFilter();
+const list = useOccurrenceList(() => ({
+  view: 'upcoming',
+  days: days.value,
+  memberId: person.value,
+  wait: !ready.value,
+}));
 onMounted(() => void membersStore.load());
 
 const today = computed(() => localToday(new Date(), session.timeZone));
@@ -51,6 +59,10 @@ const extra = (o: OccurrenceDto) => describePrepStart(o, today.value, session.ti
       </div>
     </header>
 
+    <form class="panel filters" role="search" aria-label="Filter coming up" @submit.prevent>
+      <PersonFilter id="filter-person" v-model="person" />
+    </form>
+
     <Message v-if="list.actionError.value" severity="error" role="alert">{{
       list.actionError.value
     }}</Message>
@@ -62,7 +74,10 @@ const extra = (o: OccurrenceDto) => describePrepStart(o, today.value, session.ti
 
     <section v-else-if="groups.length === 0" class="panel empty-state">
       <h2>Nothing coming up</h2>
-      <p>Nothing is due in the next {{ days }} days.</p>
+      <p>
+        Nothing is due{{ person ? ` for ${membersStore.nameOf(person)}` : '' }} in the next
+        {{ days }} days.
+      </p>
     </section>
 
     <template v-else>

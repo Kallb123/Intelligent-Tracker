@@ -6,7 +6,9 @@ import Message from 'primevue/message';
 import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import OccurrenceItem from '../components/OccurrenceItem.vue';
+import PersonFilter from '../components/PersonFilter.vue';
 import { useOccurrenceList } from '../composables/useOccurrenceList.js';
+import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { formatDayHeading } from '../format.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
@@ -20,7 +22,12 @@ const session = useSessionStore();
 const membersStore = useMembersStore();
 const router = useRouter();
 
-const list = useOccurrenceList(() => ({ view: 'today' }));
+const { person, ready } = usePersonFilter();
+const list = useOccurrenceList(() => ({
+  view: 'today',
+  memberId: person.value,
+  wait: !ready.value,
+}));
 onMounted(() => void membersStore.load());
 
 const today = computed(() => localToday(new Date(), session.timeZone));
@@ -49,6 +56,10 @@ const extra = (o: OccurrenceDto) => describePrepStart(o, today.value, session.ti
       <Button label="New task" icon="pi pi-plus" @click="router.push({ name: 'task-new' })" />
     </header>
 
+    <form class="panel filters" role="search" aria-label="Filter today" @submit.prevent>
+      <PersonFilter id="filter-person" v-model="person" />
+    </form>
+
     <Message v-if="list.actionError.value" severity="error" role="alert">{{
       list.actionError.value
     }}</Message>
@@ -60,7 +71,8 @@ const extra = (o: OccurrenceDto) => describePrepStart(o, today.value, session.ti
 
     <section v-else-if="list.occurrences.value.length === 0" class="panel empty-state">
       <h2>All clear</h2>
-      <p>
+      <p v-if="person">Nothing is due today for {{ membersStore.nameOf(person) }}.</p>
+      <p v-else>
         Nothing is due today. Have a look at what is
         <router-link :to="{ name: 'upcoming' }">coming up</router-link>, or
         <router-link :to="{ name: 'task-new' }">add a task</router-link>.
