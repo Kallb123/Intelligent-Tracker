@@ -218,7 +218,8 @@ Each is tagged with the app version and `latest`. The app version is the `versio
 root `package.json` (semver); it is the one version for the whole app, and the `version` fields in
 the workspace packages are not used. Version tags are never overwritten: if the version is already
 published, the workflow skips the push, so bump the version in any PR that changes what ships in
-the images. A failed publish can be retried by re-running the workflow run.
+the images. A failed publish can be retried by re-running it within a day, while the `images`
+artifact is kept; after that, re-run CI on `main` (or push a new commit) to produce a fresh one.
 
 `deploy/docker-compose.yml` (the production compose file) uses these images. Set
 `TRACKER_VERSION` in `.env` to pin a version (default `latest`), then:

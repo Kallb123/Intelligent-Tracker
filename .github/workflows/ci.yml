@@ -181,6 +181,7 @@ jobs:
           path: images
           if-no-files-found: error
           retention-days: 1
+          overwrite: true # a re-run of this job replaces the images
 
       - name: Show logs on failure
         if: failure()

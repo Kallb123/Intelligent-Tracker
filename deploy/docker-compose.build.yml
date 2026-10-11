@@ -17,7 +17,9 @@ x-backend-build: &backend-build
   build:
     context: .
     target: backend
-    labels: *labels
+    labels:
+      <<: *labels
+      org.opencontainers.image.title: intelligent-tracker-backend
   image: intelligent-tracker-backend
 
 services:
@@ -29,5 +31,7 @@ services:
     build:
       context: .
       target: web
-      labels: *labels
+      labels:
+        <<: *labels
+        org.opencontainers.image.title: intelligent-tracker-web
     image: intelligent-tracker-web
