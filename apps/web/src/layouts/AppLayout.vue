@@ -5,6 +5,7 @@ import type { MenuItem } from 'primevue/menuitem';
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError } from '../api/index.js';
+import AppFooter from '../components/AppFooter.vue';
 import { useSessionStore } from '../stores/session.js';
 
 /**
@@ -75,6 +76,8 @@ const items: MenuItem[] = [
     <main class="content">
       <router-view />
     </main>
+
+    <AppFooter />
 
     <nav class="nav nav-bottom" aria-label="Main (mobile)">
       <router-link v-for="item in nav" :key="item.label" :to="item.to">

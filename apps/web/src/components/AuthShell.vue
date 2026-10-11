@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppFooter from './AppFooter.vue';
+
 /** The centred card around the pages a visitor sees before they have a session. */
 defineProps<{ title: string; subtitle?: string }>();
 </script>
@@ -14,5 +16,6 @@ defineProps<{ title: string; subtitle?: string }>();
       <p v-if="subtitle" class="muted">{{ subtitle }}</p>
       <slot />
     </section>
+    <AppFooter />
   </main>
 </template>
