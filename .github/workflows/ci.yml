@@ -91,13 +91,44 @@ jobs:
       - name: Database integration tests (schema, API, worker)
         run: pnpm exec vitest run --project @tracker/db --project @tracker/api --project @tracker/worker
 
+  # Builds the images once (from the PR's code, not the published ones), smoke-tests the stack,
+  # then runs the end-to-end tests against it.
   docker:
+    name: docker + e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      # The worker ticks every 2s instead of every minute (deploy/docker-compose.e2e.yml).
+      COMPOSE_FILE: compose.yaml:deploy/docker-compose.build.yml:deploy/docker-compose.e2e.yml
+      E2E_BASE_URL: http://localhost:8080
+      # Image labels (deploy/docker-compose.build.yml); the version is added by a step below.
+      TRACKER_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # No pre-release suffix: every published version also becomes `latest`.
+      - name: Read the app version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=package.json::\"version\" must be MAJOR.MINOR.PATCH, got '$version'"
+            exit 1
+          fi
+          echo "TRACKER_BUILD_VERSION=$version" >> "$GITHUB_ENV"
+
+      # A fresh database every run: the first-run spec needs no household to exist yet, and the
+      # smoke test below creates none.
       - name: Build and start the stack
+        id: stack
         run: docker compose up -d --build --wait --wait-timeout 180
 
       - name: Smoke test
@@ -115,41 +146,13 @@ jobs:
           test "$migrations" -gt 0
           test "$holidays" -gt 0
 
-      - name: Show logs on failure
-        if: failure()
-        run: docker compose ps -a && docker compose logs --no-color
-
-      - name: Tear down
-        if: always()
-        run: docker compose down -v
-
-  e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      # The worker ticks every 2s instead of every minute (deploy/docker-compose.e2e.yml).
-      COMPOSE_FILE: compose.yaml:deploy/docker-compose.e2e.yml
-      E2E_BASE_URL: http://localhost:8080
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # A fresh database every run: the first-run spec needs no household to exist yet.
-      - name: Build and start the stack
-        run: docker compose up -d --build --wait --wait-timeout 180
-
+      # The e2e steps run whenever the stack is up, even if a smoke check above failed.
       - name: Install Playwright Chromium
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         run: pnpm --filter @tracker/e2e exec playwright install --with-deps chromium
 
       - name: End-to-end tests
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         run: pnpm test:e2e
 
       - name: Upload Playwright traces
@@ -160,6 +163,25 @@ jobs:
           path: e2e/test-results
           if-no-files-found: ignore
           retention-days: 7
+
+      # On main, hand the tested images to the publish workflow (publish-images.yml) so it pushes
+      # exactly what passed here instead of rebuilding.
+      - name: Save images for publishing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p images
+          docker save intelligent-tracker-backend -o images/backend.tar
+          docker save intelligent-tracker-web -o images/web.tar
+
+      - name: Upload images for publishing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: images
+          path: images
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true # a re-run of this job replaces the images
 
       - name: Show logs on failure
         if: failure()

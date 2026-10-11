@@ -1,0 +1,37 @@
+# Build override: builds the images from the checked-out source instead of pulling them from
+# GHCR, under local names so they never shadow the published tags. Used by CI and for trying out
+# local changes. Use from the repo root; paths are relative to the repo root, not to deploy/:
+#   docker compose -f compose.yaml -f deploy/docker-compose.build.yml up -d --build --wait
+# (or `pnpm docker:up`).
+#
+# CI sets TRACKER_BUILD_VERSION (the app version) and TRACKER_REVISION (the commit). The images it
+# builds on main are the ones .github/workflows/publish-images.yml pushes, and it reads the version
+# from these labels. Locally both are left empty.
+
+x-labels: &labels
+  org.opencontainers.image.source: https://github.com/Kallb123/Intelligent-Tracker
+  org.opencontainers.image.version: ${TRACKER_BUILD_VERSION:-}
+  org.opencontainers.image.revision: ${TRACKER_REVISION:-}
+
+x-backend-build: &backend-build
+  build:
+    context: .
+    target: backend
+    labels:
+      <<: *labels
+      org.opencontainers.image.title: intelligent-tracker-backend
+  image: intelligent-tracker-backend
+
+services:
+  api: *backend-build
+  worker: *backend-build
+  bot: *backend-build
+
+  web:
+    build:
+      context: .
+      target: web
+      labels:
+        <<: *labels
+        org.opencontainers.image.title: intelligent-tracker-web
+    image: intelligent-tracker-web

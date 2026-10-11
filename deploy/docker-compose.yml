@@ -1,10 +1,10 @@
 name: intelligent-tracker
 
+# Production: images come from GHCR (published by .github/workflows/publish-images.yml).
+# TRACKER_VERSION pins a release (e.g. 0.1.0); default `latest`. To build from source instead,
+# add deploy/docker-compose.build.yml (see that file).
 x-backend: &backend
-  build:
-    context: ..
-    target: backend
-  image: intelligent-tracker-backend
+  image: ghcr.io/kallb123/intelligent-tracker-backend:${TRACKER_VERSION:-latest}
   restart: unless-stopped
   env_file:
     - path: ../.env
@@ -88,10 +88,7 @@ services:
     healthcheck: *heartbeat-healthcheck
 
   web:
-    build:
-      context: ..
-      target: web
-    image: intelligent-tracker-web
+    image: ghcr.io/kallb123/intelligent-tracker-web:${TRACKER_VERSION:-latest}
     restart: unless-stopped
     ports:
       - '${WEB_PORT:-8080}:80'

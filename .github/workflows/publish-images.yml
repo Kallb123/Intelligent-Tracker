@@ -1,0 +1,84 @@
+name: Publish images
+
+# Pushes the backend (api / worker / bot) and web images to GHCR, tagged with the app version and
+# `latest`. Runs after CI passes on a push to main and pushes the exact images CI built and tested
+# (handed over as the `images` artifact by its docker job), so nothing is rebuilt and an image is
+# never published from a commit that failed its checks.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read # download the artifact from the CI run
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [backend, web]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: images
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # CI labels the image with the app version (deploy/docker-compose.build.yml) after checking
+      # it is MAJOR.MINOR.PATCH.
+      - name: Load the image
+        id: image
+        run: |
+          docker load -i "${{ matrix.target }}.tar"
+          name=intelligent-tracker-${{ matrix.target }}
+          version=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$name")
+          if [[ -z "$version" ]]; then
+            echo "::error::$name has no org.opencontainers.image.version label."
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$name" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Version tags are immutable: a commit that doesn't bump the version (docs, CI, tests) is not
+      # republished, so `latest` always matches the newest version tag. Only "not found" (a new tag)
+      # or "denied" (the package doesn't exist yet) count as unpublished; any other registry error
+      # fails the run rather than risk overwriting a published tag.
+      - name: Push unless this version is already published
+        env:
+          LOCAL: ${{ steps.image.outputs.name }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          VERSION: ${{ steps.image.outputs.version }}
+        run: |
+          if out=$(docker buildx imagetools inspect "$IMAGE:$VERSION" 2>&1); then
+            echo "::warning::$IMAGE:$VERSION is already published; bump \"version\" in package.json to publish a new image."
+            exit 0
+          elif ! grep -qiE 'not found|manifest unknown|name unknown|denied' <<< "$out"; then
+            echo "$out"
+            echo "::error::Could not check whether $IMAGE:$VERSION is already published."
+            exit 1
+          fi
+          # The version tag goes last: it is what marks this version as published, so a run that
+          # dies after pushing only `latest` is retried in full.
+          for tag in latest "$VERSION"; do
+            docker tag "$LOCAL" "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done

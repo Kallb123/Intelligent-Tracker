@@ -1,6 +1,6 @@
 {
   "name": "intelligent-tracker",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.28.0",
@@ -21,7 +21,7 @@
     "db:migrate": "pnpm --filter @tracker/db migrate",
     "db:seed": "pnpm --filter @tracker/db seed",
     "typecheck": "pnpm -r typecheck",
-    "docker:up": "docker compose up --build",
+    "docker:up": "docker compose -f compose.yaml -f deploy/docker-compose.build.yml up --build",
     "docker:dev": "docker compose -f compose.yaml -f deploy/docker-compose.dev.yml up --build",
     "docker:down": "docker compose down",
     "openapi": "pnpm --filter @tracker/api openapi"
