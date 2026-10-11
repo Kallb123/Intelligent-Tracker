@@ -6,3 +6,4 @@ coverage
 docs/PLAN.md
 packages/db/migrations
 apps/api/openapi.json
+apps/web/src/api/schema.d.ts

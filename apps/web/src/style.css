@@ -1,24 +1,304 @@
+/* Layout and spacing only: colours come from PrimeVue's theme variables (--p-*), which also
+   switch for dark mode, so nothing here hard-codes a colour. */
+
 :root {
   color-scheme: light dark;
-  font-family: system-ui, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  --app-bg: var(--p-surface-50);
+  --app-panel: var(--p-surface-0);
+  --nav-height: 3.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-bg: var(--p-surface-950);
+    --app-panel: var(--p-surface-900);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  padding: 2rem 1rem;
-  display: grid;
-  place-items: center;
+  background: var(--app-bg);
+  color: var(--p-text-color);
 }
 
-#app {
+a {
+  color: var(--p-primary-color);
+}
+
+h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+}
+
+.muted {
+  color: var(--p-text-muted-color);
+}
+
+/* Forms */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.field label,
+.checkbox-row label {
+  font-weight: 600;
+}
+
+.field-error {
+  color: var(--p-red-500);
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.checkbox-row label {
+  font-weight: normal;
+}
+
+.button-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.p-message {
+  margin-bottom: 1rem;
+}
+
+/* Public pages (setup, login, invite) */
+
+.auth-shell {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--p-primary-color);
+}
+
+.auth-card {
   width: 100%;
-  max-width: 32rem;
+  max-width: 26rem;
+  padding: 1.5rem;
+  background: var(--app-panel);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 0.75rem;
 }
 
-.ok {
-  color: green;
+/* App shell */
+
+.layout {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
 }
 
-.error {
-  color: crimson;
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: var(--app-panel);
+  border-bottom: 1px solid var(--p-content-border-color);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user {
+  margin-left: auto;
+}
+
+.nav a {
+  color: var(--p-text-muted-color);
+  text-decoration: none;
+}
+
+.nav a.router-link-exact-active {
+  color: var(--p-primary-color);
+  font-weight: 600;
+}
+
+.nav-top {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.nav-bottom {
+  display: none;
+}
+
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem;
+}
+
+.banner-error {
+  padding: 0.5rem 1rem;
+  background: var(--p-red-500);
+  color: #fff;
+}
+
+/* Phones: the nav moves to a bottom tab bar. */
+@media (max-width: 40rem) {
+  .nav-top {
+    display: none;
+  }
+
+  .nav-bottom {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 10;
+    display: flex;
+    justify-content: space-around;
+    height: var(--nav-height);
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--app-panel);
+    border-top: 1px solid var(--p-content-border-color);
+  }
+
+  .nav-bottom a {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    font-size: 0.8rem;
+  }
+
+  .content {
+    padding-bottom: calc(var(--nav-height) + 1.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Pages */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.panel,
+.link-box {
+  margin-bottom: 1.25rem;
+  padding: 1.25rem;
+  background: var(--app-panel);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 0.75rem;
+}
+
+.link-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+.details dt {
+  color: var(--p-text-muted-color);
+}
+
+.details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.member-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.member {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--app-panel);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 0.75rem;
+}
+
+.member-main {
+  flex: 1 1 12rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.member-tags {
+  display: flex;
+  gap: 0.35rem;
 }

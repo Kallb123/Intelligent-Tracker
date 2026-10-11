@@ -1,13 +1,39 @@
+import { definePreset } from '@primeuix/themes';
+import Aura from '@primeuix/themes/aura';
+import { createPinia } from 'pinia';
+import PrimeVue from 'primevue/config';
+import { createApp } from 'vue';
+import 'primeicons/primeicons.css';
+import App from './App.vue';
+import { setApi } from './api/index.js';
+import { createAppRouter } from './router.js';
+import { createSessionApi } from './stores/session.js';
 import './style.css';
-import { describeHealth, fetchHealth } from './health.js';
 
-const app = document.querySelector<HTMLElement>('#app');
-if (app) {
-  app.innerHTML = '<h1>Intelligent Tracker</h1><p id="health" class="pending">Checking API…</p>';
-  const status = app.querySelector<HTMLElement>('#health');
-  const result = await fetchHealth();
-  if (status) {
-    status.textContent = describeHealth(result);
-    status.className = result.ok ? 'ok' : 'error';
-  }
-}
+/** Aura with a teal primary, matching the PWA theme colour. */
+const Theme = definePreset(Aura, {
+  semantic: {
+    primary: {
+      50: '{teal.50}',
+      100: '{teal.100}',
+      200: '{teal.200}',
+      300: '{teal.300}',
+      400: '{teal.400}',
+      500: '{teal.500}',
+      600: '{teal.600}',
+      700: '{teal.700}',
+      800: '{teal.800}',
+      900: '{teal.900}',
+      950: '{teal.950}',
+    },
+  },
+});
+
+const app = createApp(App);
+const pinia = createPinia();
+app.use(pinia);
+// The client reads the CSRF token from the session store, so Pinia must be active first.
+setApi(createSessionApi());
+app.use(createAppRouter());
+app.use(PrimeVue, { theme: { preset: Theme } });
+app.mount('#app');
