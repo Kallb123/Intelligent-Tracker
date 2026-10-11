@@ -48,6 +48,10 @@ Every review checks this. The diff is not the whole picture: search the repo bef
 - Component hard to reuse (hard-coded data, view-specific props, logic tangled with layout) when a second caller is plausible → `🔵 nit`, unless a second caller already exists in the diff → `🟡 risk`.
 - No speculative abstraction. One caller, no duplicate found → no finding. Don't ask for a generic layer "for later".
 
+## Version bump
+
+Diff changes shipped code (`apps/` or `packages/` outside tests, `Dockerfile`, `deploy/Caddyfile`, dependencies, `pnpm-lock.yaml`) but root `package.json` `version` unchanged vs base → `package.json:3: 🟡 risk: shipped code changed, version not bumped. Bump per AGENTS.md.` Bump present but wrong size per AGENTS.md (feature as patch) → `🔵 nit`.
+
 ## Boundaries
 
 - Review only what's in front of you. No "while we're here". Exception: existing code the diff duplicates (see above).

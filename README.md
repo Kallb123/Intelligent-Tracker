@@ -86,7 +86,7 @@ first spec walks the first-run setup wizard, which only works while no household
 
 ```sh
 # 1. Start the stack on an empty database, with the worker ticking every 2 seconds
-docker compose -f compose.yaml -f deploy/docker-compose.e2e.yml up -d --build --wait
+docker compose -f compose.yaml -f deploy/docker-compose.build.yml -f deploy/docker-compose.e2e.yml up -d --build --wait
 
 # 2. One-off: install the browser (CI does this with --with-deps)
 pnpm --filter @tracker/e2e exec playwright install chromium
@@ -95,7 +95,7 @@ pnpm --filter @tracker/e2e exec playwright install chromium
 pnpm test:e2e
 
 # 4. Reset the database (also needed before running them a second time)
-docker compose -f compose.yaml -f deploy/docker-compose.e2e.yml down -v
+docker compose -f compose.yaml -f deploy/docker-compose.build.yml -f deploy/docker-compose.e2e.yml down -v
 ```
 
 Without Docker, `scripts/e2e-local.sh up` starts a throwaway Postgres 16 (binaries from
@@ -179,8 +179,12 @@ a test fails while the committed file is out of date.
 All commands run from the repo root. No `.env` is needed to try it out; to customise, copy
 `.env.example` to `.env` (ports, Postgres credentials, secrets, timezone).
 
+`deploy/docker-compose.yml` (what a plain `docker compose` uses) is the production setup and runs
+the [published images](#published-images). To build and run the checked-out code instead, add
+`deploy/docker-compose.build.yml`, which builds the images under local names:
+
 ```sh
-docker compose up -d --build --wait   # or: pnpm docker:up
+docker compose -f compose.yaml -f deploy/docker-compose.build.yml up -d --build --wait   # or: pnpm docker:up
 ```
 
 Then open <http://localhost:8080> (`WEB_PORT` changes the port). Caddy serves the SPA, which
@@ -199,3 +203,30 @@ docker compose -f compose.yaml -f deploy/docker-compose.dev.yml up --build   # o
 The web UI is at <http://localhost:5173>, the API at <http://localhost:3000> and Postgres at
 `localhost:5432` (all bound to loopback except the web port). Only `src` directories are
 mounted, so rebuild (`--build`) after changing dependencies or config files.
+
+### Published images
+
+`.github/workflows/docker-images.yml` builds the two images on every pull request (without
+pushing them) and, when CI passes on a push to `main`, pushes them to the GitHub Container
+Registry:
+
+- `ghcr.io/kallb123/intelligent-tracker-backend` (api, worker and bot)
+- `ghcr.io/kallb123/intelligent-tracker-web` (Caddy and the SPA)
+
+Each is tagged with the app version and `latest`. The app version is the `version` field in the
+root `package.json` (semver); it is the one version for the whole app, and the `version` fields in
+the workspace packages are not used. Version tags are never overwritten: if the version is already
+published, the workflow skips the push, so bump the version in any PR that changes what ships in
+the images. A failed publish can be retried by re-running the workflow run.
+
+`deploy/docker-compose.yml` (the production compose file) uses these images. Set
+`TRACKER_VERSION` in `.env` to pin a version (default `latest`), then:
+
+```sh
+docker compose pull
+docker compose up -d --wait
+```
+
+GHCR packages start out private: either make them public in the package settings on GitHub, or
+run `docker login ghcr.io` on the server with a token that has `read:packages`. The production
+file has no `build` section, so a failed pull is an error rather than a silent build from source.

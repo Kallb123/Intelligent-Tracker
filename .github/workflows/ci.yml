@@ -94,6 +94,9 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Build the PR's own code rather than pulling the published images.
+      COMPOSE_FILE: compose.yaml:deploy/docker-compose.build.yml
     steps:
       - uses: actions/checkout@v4
 
@@ -127,8 +130,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      # The worker ticks every 2s instead of every minute (deploy/docker-compose.e2e.yml).
-      COMPOSE_FILE: compose.yaml:deploy/docker-compose.e2e.yml
+      # Built from the PR's code; the worker ticks every 2s instead of every minute
+      # (deploy/docker-compose.e2e.yml).
+      COMPOSE_FILE: compose.yaml:deploy/docker-compose.build.yml:deploy/docker-compose.e2e.yml
       E2E_BASE_URL: http://localhost:8080
     steps:
       - uses: actions/checkout@v4

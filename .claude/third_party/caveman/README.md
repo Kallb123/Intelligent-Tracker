@@ -15,6 +15,8 @@ Changes to `cavecrew-reviewer.md`:
 
 - Added a "Reuse & duplication" section: the reviewer searches the repo for existing code that new
   code duplicates and points shared code at this repo's packages.
+- Added a "Version bump" section: the reviewer flags shipped changes that don't bump the app
+  version (see `AGENTS.md`).
 - Loosened the "Boundaries" section to allow extract-and-reuse fixes for duplication.
 - Restricted its tools to `Read`, `Grep`, `Glob` and `Bash` (read-only use) so it can search the
   repo but not edit files.

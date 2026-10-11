@@ -1,0 +1,22 @@
+# Build override: builds the images from the checked-out source instead of pulling them from
+# GHCR, under local names so they never shadow the published tags. Used by CI and for trying out
+# local changes. Use from the repo root; paths are relative to the repo root, not to deploy/:
+#   docker compose -f compose.yaml -f deploy/docker-compose.build.yml up -d --build --wait
+# (or `pnpm docker:up`).
+
+x-backend-build: &backend-build
+  build:
+    context: .
+    target: backend
+  image: intelligent-tracker-backend
+
+services:
+  api: *backend-build
+  worker: *backend-build
+  bot: *backend-build
+
+  web:
+    build:
+      context: .
+      target: web
+    image: intelligent-tracker-web

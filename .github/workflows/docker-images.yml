@@ -1,0 +1,108 @@
+name: Docker images
+
+# Builds the backend (api / worker / bot) and web images.
+# - Pull requests: build only, nothing is pushed.
+# - main: after CI passes on a push, push to GHCR tagged with the app version from the root
+#   package.json and `latest`, so an image is never published from a commit that failed its checks.
+on:
+  pull_request:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-images-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  images:
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [backend, web]
+    env:
+      PUBLISH: ${{ github.event_name != 'pull_request' }}
+      REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REVISION }}
+
+      - name: Read the app version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          # No pre-release suffix: every published version also becomes `latest`.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=package.json::\"version\" must be MAJOR.MINOR.PATCH, got '$version'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/intelligent-tracker-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Version tags are immutable: a commit that doesn't bump the version (docs, CI, tests) is not
+      # republished, so `latest` always matches the newest version tag. Only "not found" (a new tag)
+      # or "denied" (the package doesn't exist yet) count as unpublished; any other registry error
+      # fails the run rather than risk overwriting a published tag.
+      - name: Skip if this version is already published
+        id: published
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if out=$(docker buildx imagetools inspect "$IMAGE:$VERSION" 2>&1); then
+            echo "::warning::$IMAGE:$VERSION is already published; bump \"version\" in package.json to publish a new image."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'not found|manifest unknown|name unknown|denied' <<< "$out"; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$out"
+            echo "::error::Could not check whether $IMAGE:$VERSION is already published."
+            exit 1
+          fi
+
+      - uses: docker/metadata-action@v5
+        if: steps.published.outputs.skip != 'true'
+        id: meta
+        with:
+          images: ${{ steps.version.outputs.image }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=intelligent-tracker-${{ matrix.target }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ env.REVISION }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.published.outputs.skip != 'true'
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

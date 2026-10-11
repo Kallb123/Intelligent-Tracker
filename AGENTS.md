@@ -3,6 +3,27 @@
 Instructions for AI coding agents working in this repository. See [README.md](README.md) for the
 layout and commands, and [docs/PLAN.md](docs/PLAN.md) for the architecture and the PR-by-PR plan.
 
+## Versioning: bump the version in your PR
+
+The app has one version: the `version` field in the root `package.json` (semver,
+`MAJOR.MINOR.PATCH`). When CI passes on `main`, the Docker images workflow pushes the images to
+GHCR tagged with that version and `latest`. A version that is already published is never
+overwritten, so if you forget to bump it your change does not ship.
+
+**Bump it by hand** in the same PR whenever the change affects what ships in the images: anything
+under `apps/` or `packages/` (except tests), the `Dockerfile`, `deploy/Caddyfile`, or dependencies
+(`package.json` dependencies, `pnpm-lock.yaml`). There is no bump script; edit the one line.
+
+- While the version is `0.x`: bump **MINOR** (`0.1.3` → `0.2.0`) for new features or breaking
+  changes, and **PATCH** (`0.1.3` → `0.1.4`) for fixes and internal changes.
+- From `1.0.0`: **MAJOR** for breaking changes (API, database or config that needs manual
+  steps), **MINOR** for new features, **PATCH** for fixes.
+- Bump once per PR, from the version on `main`. If `main` moves past your version before you
+  merge, bump again from the new `main` version.
+- No bump for changes that don't ship: docs, tests, CI, `AGENTS.md`, `.claude/`.
+- Don't touch the `version` fields in `apps/*`, `packages/*` or `e2e/`; they are not used.
+- Mention the new version in the PR description.
+
 ## Code review: use the Caveman reviewer
 
 Every change you make must be reviewed by the Caveman reviewer before you commit or open a PR.
