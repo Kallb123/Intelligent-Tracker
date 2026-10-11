@@ -14,7 +14,8 @@
   "dependencies": {
     "@tracker/core": "workspace:*",
     "@tracker/db": "workspace:*",
-    "@tracker/shared": "workspace:*"
+    "@tracker/shared": "workspace:*",
+    "drizzle-orm": "^0.45.4"
   },
   "devDependencies": {
     "tsx": "^4.23.15"

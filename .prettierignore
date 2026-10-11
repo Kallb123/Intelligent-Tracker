@@ -5,3 +5,4 @@ coverage
 *.tsbuildinfo
 docs/PLAN.md
 packages/db/migrations
+apps/api/openapi.json

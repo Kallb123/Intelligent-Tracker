@@ -32,13 +32,28 @@ export function registerSetupRoutes(app: FastifyInstance, ctx: ApiContext): void
   };
   const alreadySetUp = () => conflict('already_set_up', 'This household has already been set up');
 
-  r.get('/api/setup', { schema: { response: { 200: setupStatusSchema } } }, async () => ({
-    needsSetup: !(await hasHousehold()),
-  }));
+  r.get(
+    '/api/setup',
+    {
+      schema: {
+        tags: ['Setup'],
+        summary: 'Is first-run setup needed?',
+        response: { 200: setupStatusSchema },
+      },
+    },
+    async () => ({ needsSetup: !(await hasHousehold()) }),
+  );
 
   r.post(
     '/api/setup',
-    { schema: { body: setupBodySchema, response: { 201: sessionInfoSchema } } },
+    {
+      schema: {
+        tags: ['Setup'],
+        summary: 'Create the household and its first admin',
+        body: setupBodySchema,
+        response: { 201: sessionInfoSchema },
+      },
+    },
     async (request, reply): Promise<SessionInfo> => {
       const body = request.body;
       // Cheap early exit, so a finished instance never spends a password hash on this.

@@ -22,7 +22,8 @@
     "typecheck": "pnpm -r typecheck",
     "docker:up": "docker compose up --build",
     "docker:dev": "docker compose -f compose.yaml -f deploy/docker-compose.dev.yml up --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "openapi": "pnpm --filter @tracker/api openapi"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

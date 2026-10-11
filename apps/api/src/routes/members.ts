@@ -43,7 +43,14 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
 
   r.get(
     '/api/members',
-    { onRequest: app.requireAuth, schema: { response: { 200: membersResponseSchema } } },
+    {
+      onRequest: app.requireAuth,
+      schema: {
+        tags: ['Members'],
+        summary: 'List household members',
+        response: { 200: membersResponseSchema },
+      },
+    },
     async (request) => {
       const rows = await ctx.db
         .select()
@@ -58,7 +65,12 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
     '/api/invites',
     {
       onRequest: app.requireAdmin,
-      schema: { body: createInviteBodySchema, response: { 201: createInviteResponseSchema } },
+      schema: {
+        tags: ['Members'],
+        summary: 'Invite a member (admin)',
+        body: createInviteBodySchema,
+        response: { 201: createInviteResponseSchema },
+      },
     },
     async (request, reply) => {
       const admin = authOf(request).member;
@@ -105,6 +117,8 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
     {
       onRequest: app.requireAdmin,
       schema: {
+        tags: ['Members'],
+        summary: 'Start a password reset for a member (admin)',
         params: z.object({ id: z.uuid() }),
         response: { 200: passwordResetResponseSchema },
       },

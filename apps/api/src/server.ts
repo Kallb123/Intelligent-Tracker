@@ -8,10 +8,13 @@ import { FailureLimiter } from './auth/rate-limiter.js';
 import { DEFAULT_AUTH_CONFIG, type AuthConfig } from './config.js';
 import type { ApiContext } from './context.js';
 import { registerErrorHandler } from './errors.js';
+import { registerOpenApi } from './openapi.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerLinkRoutes } from './routes/links.js';
 import { registerMemberRoutes } from './routes/members.js';
+import { registerOccurrenceRoutes } from './routes/occurrences.js';
 import { registerSetupRoutes } from './routes/setup.js';
+import { registerTaskRoutes } from './routes/tasks.js';
 import { registerSecurity } from './security.js';
 
 export interface BuildServerOptions {
@@ -35,22 +38,28 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.setSerializerCompiler(serializerCompiler);
   registerErrorHandler(app);
   registerSecurity(app, config);
+  registerOpenApi(app);
 
-  app.get('/api/health', async () => ({
-    status: 'ok',
-    service: 'api',
-    time: new Date().toISOString(),
-  }));
+  // The routes are added once the OpenAPI plugin is loaded, so that it sees all of them.
+  app.after(() => {
+    app.get('/api/health', { schema: { tags: ['System'], summary: 'Health check' } }, async () => ({
+      status: 'ok',
+      service: 'api',
+      time: new Date().toISOString(),
+    }));
 
-  if (options.db) {
-    const ctx = createContext(options.db, config);
-    void app.register(cookie);
-    registerGuards(app, ctx);
-    registerSetupRoutes(app, ctx);
-    registerAuthRoutes(app, ctx);
-    registerMemberRoutes(app, ctx);
-    registerLinkRoutes(app, ctx);
-  }
+    if (options.db) {
+      const ctx = createContext(options.db, config);
+      void app.register(cookie);
+      registerGuards(app, ctx);
+      registerSetupRoutes(app, ctx);
+      registerAuthRoutes(app, ctx);
+      registerMemberRoutes(app, ctx);
+      registerLinkRoutes(app, ctx);
+      registerTaskRoutes(app, ctx);
+      registerOccurrenceRoutes(app, ctx);
+    }
+  });
 
   return app;
 }

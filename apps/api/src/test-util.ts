@@ -1,7 +1,7 @@
-import { createDb, runMigrations, type DbHandle } from '@tracker/db';
+import { createDb, household, member, runMigrations, type DbHandle } from '@tracker/db';
 import { createTestDatabase, type TestDatabase } from '@tracker/db/test-db';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import type { PasswordParams } from './auth/passwords.js';
+import { hashPassword, type PasswordParams } from './auth/passwords.js';
 import type { AuthConfig } from './config.js';
 import { buildServer } from './server.js';
 
@@ -18,6 +18,10 @@ export class TestClock {
   readonly now = (): Date => new Date(this.ms);
   advance(ms: number): void {
     this.ms += ms;
+  }
+  /** Jumps to an ISO instant. */
+  set(iso: string): void {
+    this.ms = Date.parse(iso);
   }
 }
 
@@ -71,7 +75,7 @@ export class TestClient {
   constructor(private readonly app: FastifyInstance) {}
 
   async request(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     url: string,
     options: RequestOptions = {},
   ): Promise<LightMyRequestResponse> {
@@ -107,6 +111,12 @@ export class TestClient {
   post(url: string, body?: unknown, options: RequestOptions = {}) {
     return this.request('POST', url, { ...options, ...(body !== undefined ? { body } : {}) });
   }
+  patch(url: string, body?: unknown, options: RequestOptions = {}) {
+    return this.request('PATCH', url, { ...options, ...(body !== undefined ? { body } : {}) });
+  }
+  delete(url: string, options?: RequestOptions) {
+    return this.request('DELETE', url, options);
+  }
 }
 
 export const ADMIN = {
@@ -116,3 +126,58 @@ export const ADMIN = {
   email: 'kallum@example.com',
   password: 'correct horse battery',
 };
+
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/** Runs first-run setup and returns the logged-in admin. */
+export async function setUpAdmin(app: FastifyInstance, overrides: Json = {}): Promise<TestClient> {
+  const admin = new TestClient(app);
+  const res = await admin.post('/api/setup', { ...ADMIN, ...overrides }, { csrf: false });
+  if (res.statusCode !== 201) throw new Error(`setup failed: ${res.body}`);
+  return admin;
+}
+
+/** Invites a member, has them accept, and returns their logged-in client and member id. */
+export async function addMember(
+  app: FastifyInstance,
+  admin: TestClient,
+  body: Json = {},
+): Promise<{ client: TestClient; id: string }> {
+  const invited = await admin.post('/api/invites', {
+    name: 'Sam',
+    username: 'sam',
+    email: 'sam@example.com',
+    ...body,
+  });
+  if (invited.statusCode !== 201) throw new Error(`invite failed: ${invited.body}`);
+  const client = new TestClient(app);
+  const accepted = await client.post(
+    `/api/invites/${invited.json<Json>().invite.token}/accept`,
+    { password: 'sams long password' },
+    { csrf: false },
+  );
+  if (accepted.statusCode !== 200) throw new Error(`accept failed: ${accepted.body}`);
+  return { client, id: invited.json<Json>().member.id };
+}
+
+/** A member of a second, unrelated household, logged in. */
+export async function addOutsider(app: FastifyInstance, handle: DbHandle) {
+  const [h] = await handle.db.insert(household).values({ name: 'Elsewhere' }).returning();
+  const [m] = await handle.db
+    .insert(member)
+    .values({
+      householdId: h?.id as string,
+      name: 'Stranger',
+      username: 'stranger',
+      passwordHash: await hashPassword('strangers long password', FAST_PASSWORD_PARAMS),
+    })
+    .returning();
+  const client = new TestClient(app);
+  const res = await client.post(
+    '/api/auth/login',
+    { identifier: 'stranger', password: 'strangers long password' },
+    { csrf: false },
+  );
+  if (res.statusCode !== 200) throw new Error(`login failed: ${res.body}`);
+  return { client, householdId: h?.id as string, memberId: m?.id as string };
+}

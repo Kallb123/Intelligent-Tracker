@@ -1,4 +1,14 @@
-export { createDb, type Database, type DbHandle } from './client.js';
+export { createDb, type Database, type DbHandle, type DbOrTransaction } from './client.js';
+export {
+  activateDue,
+  clearFutureOpenOccurrences,
+  materialiseAll,
+  materialiseTask,
+  reassignOpenOccurrences,
+  type MaterialiseAllResult,
+  type MaterialiseFailure,
+  type MaterialiseTaskResult,
+} from './materialise.js';
 export {
   MIGRATION_LOCK_KEY,
   resolveMigrationsFolder,

@@ -6,19 +6,19 @@ getting quotes". It talks to you over Telegram and publishes a calendar feed tha
 
 Runs locally with Docker Compose, with a Vue web UI.
 
-> Status: scaffolding in progress. Planning is done (decisions agreed: TypeScript, per-member
+> Status: Milestone 0.1 in progress. Planning is done (decisions agreed: TypeScript, per-member
 > login, Cloudflare Tunnel for the calendar feed, one house Telegram group, rule-based smarts,
-> UK defaults), PR 1 (monorepo + CI) is in place, PR 2 (Docker Compose skeleton) adds a
-> runnable stack with a "hello" SPA and PR 3 adds the database schema and migrations; the other
-> workspace packages are still placeholders. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
+> UK defaults). In place so far: the monorepo and CI, the Docker Compose stack, the database
+> schema, the recurrence engine, per-member auth, and the tasks & occurrences API with a worker
+> that materialises occurrences. The web UI is still a "hello" page. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
 > design and the PR-by-PR implementation plan.
 
 ## Repository layout
 
 ```
 apps/
-  api/        Fastify HTTP API (just GET /api/health so far)
-  worker/     scheduler tick and reminder delivery (idles with a heartbeat)
+  api/        Fastify HTTP API: auth, tasks, occurrences, OpenAPI document
+  worker/     scheduler tick: materialises occurrences (reminder delivery comes later)
   bot/        Telegram bot (idles with a heartbeat)
   web/        Vite SPA (a "hello" page for now; Vue 3 arrives later)
 packages/
@@ -113,6 +113,29 @@ expire (invites after 7 days, resets after 1 day) and work once.
 Settings (see `.env.example`): `PUBLIC_BASE_URL` (used to build invite links), `COOKIE_SECURE`
 (defaults to on when `PUBLIC_BASE_URL` is https) and `TRUST_PROXY` (set in the Docker compose file,
 since the api sits behind Caddy).
+
+## Tasks and occurrences
+
+A **task** is the definition (title, schedule, lead time, assignees, milestones); its
+**occurrences** are the concrete dated instances people complete. Every member sees and edits
+everything in their household. All routes need a session (and the CSRF header on mutations):
+
+- `GET/POST /api/tasks`, `GET/PATCH/DELETE /api/tasks/:id`: CRUD. `PATCH` with `archived: true`
+  archives; changing the schedule replaces the future open occurrences.
+- `GET /api/occurrences?view=today|upcoming|overdue&memberId=&taskId=&days=`: open, unsnoozed
+  occurrences. "Today" is the household's local day; `today` includes overdue ones (listed first),
+  ones whose lead time has started, and undated ones.
+- `POST /api/occurrences/:id/complete|skip|snooze|start`. Completing or skipping an
+  `after_completion` task creates (and returns as `next`) its next occurrence.
+
+Occurrences are materialised when a task is saved and on every worker tick (each minute,
+`TICK_INTERVAL_MS`): fixed schedules are kept `max(90, lead time + 30)` days ahead, and
+`upcoming` ones become `active` when their start arrives. Ticks are idempotent (inserts dedupe on
+task + due) and serialised across workers by a Postgres advisory lock.
+
+The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps/api/openapi.json`
+(the web app's typed client is generated from it). After changing a route, run `pnpm openapi`;
+a test fails while the committed file is out of date.
 
 ## Running with Docker
 

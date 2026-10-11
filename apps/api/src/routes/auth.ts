@@ -30,7 +30,14 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: ApiContext): void 
 
   r.post(
     '/api/auth/login',
-    { schema: { body: loginBodySchema, response: { 200: sessionInfoSchema } } },
+    {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Log in',
+        body: loginBodySchema,
+        response: { 200: sessionInfoSchema },
+      },
+    },
     async (request, reply): Promise<SessionInfo> => {
       const { identifier, password, remember } = request.body;
       const idKey = identifier.toLowerCase();
@@ -74,7 +81,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: ApiContext): void 
 
   r.post(
     '/api/auth/logout',
-    { onRequest: app.requireAuth, schema: { response: { 200: okSchema } } },
+    {
+      onRequest: app.requireAuth,
+      schema: { tags: ['Auth'], summary: 'Log out', response: { 200: okSchema } },
+    },
     async (request, reply) => {
       await ctx.db.delete(session).where(eq(session.id, authOf(request).sessionId));
       clearSessionCookie(ctx, reply);
@@ -84,7 +94,14 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: ApiContext): void 
 
   r.get(
     '/api/auth/me',
-    { onRequest: app.requireAuth, schema: { response: { 200: sessionInfoSchema } } },
+    {
+      onRequest: app.requireAuth,
+      schema: {
+        tags: ['Auth'],
+        summary: 'Get the current session',
+        response: { 200: sessionInfoSchema },
+      },
+    },
     async (request) => {
       const { member: me, csrfToken } = authOf(request);
       return sessionInfo(ctx, me, csrfToken);
@@ -95,7 +112,12 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: ApiContext): void 
     '/api/auth/password',
     {
       onRequest: app.requireAuth,
-      schema: { body: changePasswordBodySchema, response: { 200: okSchema } },
+      schema: {
+        tags: ['Auth'],
+        summary: 'Change your password',
+        body: changePasswordBodySchema,
+        response: { 200: okSchema },
+      },
     },
     async (request) => {
       const { member: me, sessionId } = authOf(request);
