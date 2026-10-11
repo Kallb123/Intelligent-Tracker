@@ -1,0 +1,10 @@
+# End-to-end override: the same stack, but the worker ticks every 2 seconds instead of every
+# minute, so occurrences the tests depend on (activation of upcoming ones) show up promptly.
+# Use from the repo root, on a FRESH database (the first-run test needs no household):
+#   docker compose -f compose.yaml -f deploy/docker-compose.e2e.yml up -d --build --wait
+#   pnpm test:e2e
+#   docker compose -f compose.yaml -f deploy/docker-compose.e2e.yml down -v
+services:
+  worker:
+    environment:
+      TICK_INTERVAL_MS: '2000'

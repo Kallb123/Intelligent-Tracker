@@ -62,6 +62,31 @@ export const routes = [
         meta: { title: 'Today' },
       },
       {
+        path: 'upcoming',
+        name: 'upcoming',
+        component: () => import('./pages/UpcomingPage.vue'),
+        meta: { title: 'Coming up' },
+      },
+      {
+        path: 'tasks',
+        name: 'tasks',
+        component: () => import('./pages/TasksPage.vue'),
+        meta: { title: 'All tasks' },
+      },
+      {
+        path: 'tasks/new',
+        name: 'task-new',
+        component: () => import('./pages/TaskEditorPage.vue'),
+        meta: { title: 'New task' },
+      },
+      {
+        path: 'tasks/:id',
+        name: 'task-edit',
+        component: () => import('./pages/TaskEditorPage.vue'),
+        props: true,
+        meta: { title: 'Edit task' },
+      },
+      {
         path: 'people',
         name: 'people',
         component: () => import('./pages/MembersPage.vue'),

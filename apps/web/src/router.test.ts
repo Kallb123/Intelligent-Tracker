@@ -59,6 +59,24 @@ describe('router guards', () => {
     ).toBe('/');
   });
 
+  it('has the task pages behind login, with the editor on /tasks/new and /tasks/:id', async () => {
+    const pages: [string, string][] = [
+      ['/upcoming', 'upcoming'],
+      ['/tasks', 'tasks'],
+      ['/tasks/new', 'task-new'],
+    ];
+    for (const [path, name] of pages) {
+      expect((await visit(loggedIn, path)).currentRoute.value.name, path).toBe(name);
+      expect((await visit(loggedOut, path)).currentRoute.value.name, path).toBe('login');
+    }
+
+    const edit = (await visit(loggedIn, '/tasks/abc-123')).currentRoute.value;
+    expect([edit.name, edit.params['id']]).toEqual(['task-edit', 'abc-123']);
+    expect((await visit(loggedOut, '/tasks/abc-123')).currentRoute.value.query).toEqual({
+      redirect: '/tasks/abc-123',
+    });
+  });
+
   it('shows unknown pages inside the app, behind login', async () => {
     expect((await visit(loggedIn, '/nope/nothing')).currentRoute.value.name).toBe('not-found');
     expect((await visit(loggedOut, '/nope')).currentRoute.value.name).toBe('login');

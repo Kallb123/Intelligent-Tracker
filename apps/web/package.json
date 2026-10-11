@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@primeuix/themes": "^2.0.3",
+    "@tracker/core": "workspace:*",
     "@tracker/shared": "workspace:*",
     "openapi-fetch": "^0.17.0",
     "pinia": "^4.0.3",

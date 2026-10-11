@@ -12,3 +12,5 @@ docs
 *.md
 .vscode
 .idea
+**/playwright-report
+**/test-results

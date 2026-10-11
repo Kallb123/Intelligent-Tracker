@@ -14,3 +14,4 @@ export type SetupInput = RequestBody<'/api/setup', 'post'>;
 export type SetPasswordInput = RequestBody<'/api/invites/{token}/accept', 'post'>;
 export type CreateInviteInput = RequestBody<'/api/invites', 'post'>;
 export type ChangePasswordInput = RequestBody<'/api/auth/password', 'post'>;
+export type TaskInput = RequestBody<'/api/tasks', 'post'>;

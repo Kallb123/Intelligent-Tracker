@@ -12,6 +12,8 @@ import { createSessionApi } from './stores/session.js';
 export interface Call {
   method: string;
   path: string;
+  /** The query string without the `?`, such as `view=upcoming&days=90`. */
+  search: string;
   headers: Headers;
   body: unknown;
 }
@@ -33,11 +35,12 @@ export function fakeServer(handlers: Record<string, Handler> = {}) {
   const unhandled: string[] = [];
 
   const fetchFn = (async (input: Request) => {
-    const { pathname } = new URL(input.url);
+    const { pathname, search } = new URL(input.url);
     const text = await input.clone().text();
     const call: Call = {
       method: input.method,
       path: pathname,
+      search: search.slice(1),
       headers: input.headers,
       body: text ? JSON.parse(text) : undefined,
     };
