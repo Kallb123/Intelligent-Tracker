@@ -9,6 +9,7 @@ import {
 } from '@tracker/core';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
+import { dueInstant } from './due.js';
 import { assigneeIdsOf, replanRotation } from './rotation.js';
 import { household, occurrence, task } from './schema/index.js';
 import type { NewOccurrence, Task } from './schema/index.js';
@@ -148,7 +149,7 @@ export async function materialiseTask(
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId))
     // Task first, then its occurrences, as in every other writer (see rotation.ts).
-    .for('update', { of: task });
+    .for('no key update', { of: task });
   if (!row || row.task.archivedAt !== null) return { inserted: 0, occurrenceIds: [] };
   const { task: t, timezone } = row;
 
@@ -214,31 +215,53 @@ export async function materialiseAll(
 
 /**
  * Promotes `upcoming` occurrences to `active` once their start has arrived: `startAt` if set,
- * else the due instant, else local midnight at the start of the due date in the household's
- * time zone, else (undated) immediately. Returns how many changed. Idempotent.
+ * else the due instant (an all-day due counts from local midnight in the household's time zone),
+ * else (undated) immediately. Returns how many changed. Idempotent.
+ *
+ * Like every writer it locks the tasks involved before their occurrences, in id order (see
+ * rotation.ts); the condition is checked again once they are locked.
  */
 export async function activateDue(db: DbOrTransaction, options: { now: Date }): Promise<number> {
   const now = sql`${options.now.toISOString()}::timestamptz`;
+  const ready = and(
+    eq(occurrence.taskId, task.id),
+    eq(occurrence.status, 'upcoming'),
+    or(
+      sql`${occurrence.startAt} <= ${now}`,
+      and(
+        isNull(occurrence.startAt),
+        or(
+          sql`${dueInstant(household.timezone)} <= ${now}`,
+          and(isNull(occurrence.dueAt), isNull(occurrence.dueDate)),
+        ),
+      ),
+    ),
+  );
+
+  const tasks = await db
+    .select({ id: task.id })
+    .from(occurrence)
+    .innerJoin(task, eq(task.id, occurrence.taskId))
+    .innerJoin(household, eq(household.id, task.householdId))
+    .where(ready)
+    .groupBy(task.id)
+    .orderBy(asc(task.id));
+  if (tasks.length === 0) return 0;
+  const taskIds = tasks.map((t) => t.id);
+  await db
+    .select({ id: task.id })
+    .from(task)
+    .where(inArray(task.id, taskIds))
+    .orderBy(asc(task.id))
+    .for('no key update');
+
   const rows = await db
     .update(occurrence)
     .set({ status: 'active' })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
-    .where(
-      and(
-        eq(occurrence.taskId, task.id),
-        eq(occurrence.status, 'upcoming'),
-        or(
-          sql`${occurrence.startAt} <= ${now}`,
-          and(isNull(occurrence.startAt), sql`${occurrence.dueAt} <= ${now}`),
-          and(
-            isNull(occurrence.startAt),
-            sql`(${occurrence.dueDate}::timestamp AT TIME ZONE ${household.timezone}) <= ${now}`,
-          ),
-          and(isNull(occurrence.startAt), isNull(occurrence.dueAt), isNull(occurrence.dueDate)),
-        ),
-      ),
-    )
+    // Only the tasks locked above; anything that became ready since waits for the next tick.
+    .where(and(ready, inArray(task.id, taskIds)))
     .returning({ id: occurrence.id });
   return rows.length;
 }

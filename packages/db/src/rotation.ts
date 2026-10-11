@@ -1,7 +1,7 @@
 import { advanceCursor, localToday, planRotation } from '@tracker/core';
-import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
-import type { AnyPgColumn } from 'drizzle-orm/pg-core';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
+import { dueOrder } from './due.js';
 import { household, member, occurrence, task, taskAssignee } from './schema/index.js';
 import type { Occurrence } from './schema/index.js';
 
@@ -19,21 +19,16 @@ import type { Occurrence } from './schema/index.js';
  * triggering a re-plan (materialisation inserting rows, an assignee, mode or away change, a turn
  * being used up), an undated occurrence keeps the assignee chosen on the earlier day until then.
  *
- * Locking: every writer takes the task row first (`FOR UPDATE`) and only then touches its
- * occurrences, so the api's edits, the occurrence actions and the worker cannot deadlock. Code
- * that locks several tasks does so in `task.id` order.
+ * Locking: every writer that changes a task's occurrences or its rotation takes the task row
+ * first (`FOR NO KEY UPDATE`, which excludes other such writers but not the key-share locks that
+ * inserts referencing the task take) and only then touches the occurrences: `replanRotation`
+ * and `consumeRotationTurn` (so also the away change), `materialiseTask`, `activateDue`, the
+ * api's task edits and `transitionOccurrence`, and deleting a task does so by itself. Code that
+ * locks several tasks does so in `task.id` order. `clearFutureOpenOccurrences` expects its caller
+ * to hold the lock.
  */
 
 const NOT_STARTED = ['upcoming', 'active'] as const;
-
-/**
- * The one definition of "due order" for an occurrence, for `ORDER BY`: by due instant (an
- * all-day due counts from local midnight in `timezone`, which is a household time zone name or
- * the column holding it), undated last. Ties are left to the caller (use the id).
- */
-export function dueOrder(timezone: string | AnyPgColumn): SQL {
-  return sql`coalesce(${occurrence.dueAt}, ${occurrence.dueDate}::timestamp at time zone ${timezone}) asc nulls last`;
-}
 
 /** The task's assignee ids in rotation order. */
 export async function assigneeIdsOf(db: DbOrTransaction, taskId: string): Promise<string[]> {
@@ -66,7 +61,7 @@ export async function replanRotation(
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId))
-    .for('update', { of: task });
+    .for('no key update', { of: task });
   if (t?.mode !== 'rotation') return { updated: 0 };
   const { timezone } = t;
   const today = localToday(options.now, timezone);
@@ -134,21 +129,28 @@ export async function consumeRotationTurn(
   options: { now: Date; previousStatus: Occurrence['status'] },
 ): Promise<void> {
   if (!NOT_STARTED.some((status) => status === options.previousStatus)) return;
-  const [row] = await db
-    .select({ taskId: occurrence.taskId, assigneeId: occurrence.assigneeId })
+  // The task first, as every writer does. Which task is read before the lock (it never changes);
+  // whose turn it is, only after it, since a re-plan may have reassigned the occurrence meanwhile.
+  const [found] = await db
+    .select({ taskId: occurrence.taskId })
     .from(occurrence)
     .where(eq(occurrence.id, occurrenceId));
-  if (!row) return;
+  if (!found) return;
   const [t] = await db
     .select({ mode: task.assignmentMode, cursor: task.rotationCursor })
     .from(task)
-    .where(eq(task.id, row.taskId))
-    .for('update');
+    .where(eq(task.id, found.taskId))
+    .for('no key update');
   if (t?.mode !== 'rotation') return;
+  const [row] = await db
+    .select({ assigneeId: occurrence.assigneeId })
+    .from(occurrence)
+    .where(eq(occurrence.id, occurrenceId));
+  if (!row) return;
 
-  const cursor = advanceCursor(await assigneeIdsOf(db, row.taskId), t.cursor, row.assigneeId);
-  await db.update(task).set({ rotationCursor: cursor }).where(eq(task.id, row.taskId));
-  await replanRotation(db, row.taskId, options);
+  const cursor = advanceCursor(await assigneeIdsOf(db, found.taskId), t.cursor, row.assigneeId);
+  await db.update(task).set({ rotationCursor: cursor }).where(eq(task.id, found.taskId));
+  await replanRotation(db, found.taskId, options);
 }
 
 /**

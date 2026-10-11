@@ -9,12 +9,8 @@ export {
   type MaterialiseFailure,
   type MaterialiseTaskResult,
 } from './materialise.js';
-export {
-  consumeRotationTurn,
-  dueOrder,
-  replanRotation,
-  replanRotationsForMember,
-} from './rotation.js';
+export { dueInstant, dueOrder } from './due.js';
+export { consumeRotationTurn, replanRotation, replanRotationsForMember } from './rotation.js';
 export {
   MIGRATION_LOCK_KEY,
   resolveMigrationsFolder,

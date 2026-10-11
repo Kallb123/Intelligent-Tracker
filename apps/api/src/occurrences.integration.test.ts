@@ -1,4 +1,4 @@
-import { activity, occurrence, task, type DbHandle } from '@tracker/db';
+import { activity, occurrence, replanRotation, task, type DbHandle } from '@tracker/db';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -737,10 +737,56 @@ describe.skipIf(!adminUrl)('occurrences (integration)', () => {
       expect(again.json<Json>().next).toMatchObject({ assigneeId: me.id });
     });
 
-    it('does not deadlock when actions, task edits and away changes run together', async () => {
-      // Every writer locks the task before its occurrences (and the away change locks its member
-      // without blocking row references). Timing decides whether a lock-order bug shows up, but
-      // this crossed over reliably before those orders were fixed.
+    it('makes an action and a task edit take turns on the task lock, whichever gets it first', async () => {
+      const { sam, me, taskId, names } = await setUp();
+      const [first] = await rowsOf(taskId);
+      const waiting = async () =>
+        Number(
+          (
+            await handle.sql`select count(*) as n from pg_stat_activity
+              where datname = current_database() and wait_event_type = 'Lock'`
+          )[0]?.['n'],
+        );
+
+      // Hold the task lock in a side transaction, as another writer mid-change would.
+      let release: () => void = () => {};
+      let held: () => void = () => {};
+      const holding = new Promise<void>((resolve) => (held = resolve));
+      const holder = handle.sql.begin(async (tx) => {
+        await tx`select id from task where id = ${taskId} for no key update`;
+        held();
+        await new Promise<void>((resolve) => (release = resolve));
+      });
+      await holding;
+      let results: { statusCode: number }[] | undefined;
+      try {
+        const both = Promise.all([
+          admin.post(`/api/occurrences/${first?.id}/complete`),
+          admin.patch(`/api/tasks/${taskId}`, { assigneeIds: [sam.id, me.id] }),
+        ]);
+        // Both requests are now blocked on the lock.
+        for (let i = 0; i < 100 && (await waiting()) < 2; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(await waiting()).toBe(2);
+        release();
+        results = await both;
+      } finally {
+        release();
+        await holder;
+      }
+
+      expect(results?.map((res) => res.statusCode)).toEqual([200, 200]);
+      // Either order ends the same: the admin`s turn is used up, and Sam is first in the list
+      // and next, so the open occurrences go Sam, admin, Sam, ...
+      expect(await cursorOf(taskId)).toBe(0);
+      expect((await rowsOf(taskId))[0]).toMatchObject({ status: 'done' });
+      expect(await who(taskId, names, 4)).toEqual(['sam', 'me', 'sam', 'me']);
+    });
+
+    it('stays consistent when actions, task edits and away changes run together', async () => {
+      // A smoke test: whether it can catch a lock-order bug depends on timing. The invariant is
+      // that however the requests interleave, the open occurrences are a fixed point of the plan.
       const { sam, me, taskId } = await setUp();
       for (let round = 0; round < 3; round++) {
         const open = (await rowsOf(taskId)).filter(
@@ -758,15 +804,16 @@ describe.skipIf(!adminUrl)('occurrences (integration)', () => {
         ]);
         expect(
           results.map((res) => res.statusCode),
-          results.map((r) => r.body).join('\n'),
+          results.map((res) => res.body).join('\n'),
         ).toEqual([200, 200, 200, 200]);
       }
-      const cursor = await cursorOf(taskId);
-      expect([0, 1]).toContain(cursor);
-      const stillOpen = (await rowsOf(taskId)).filter(
+      expect(await replanRotation(handle.db, taskId, { now: t.clock.now() })).toEqual({
+        updated: 0,
+      });
+      const open = (await rowsOf(taskId)).filter(
         (r) => r.status === 'upcoming' || r.status === 'active',
       );
-      expect(stillOpen.every((r) => r.assigneeId !== null)).toBe(true);
+      expect(open.every((r) => r.assigneeId !== null)).toBe(true);
     });
 
     it('leaves fixed and any tasks alone', async () => {

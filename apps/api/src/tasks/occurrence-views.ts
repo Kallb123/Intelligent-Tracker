@@ -1,5 +1,5 @@
 import { addLocalDays, localToday, startOfLocalDay } from '@tracker/core';
-import { occurrence } from '@tracker/db';
+import { dueInstant, occurrence } from '@tracker/db';
 import type { OccurrenceView } from '@tracker/shared';
 import { and, gt, gte, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 
@@ -62,10 +62,9 @@ export function viewCondition(view: OccurrenceView, options: ViewOptions): SQL |
  */
 export function viewOrder(options: ViewOptions): SQL[] {
   const { now, timezone } = options;
-  const dueInstant = sql`coalesce(${occurrence.dueAt}, (${occurrence.dueDate}::timestamp AT TIME ZONE ${timezone}))`;
   return [
     sql`case when ${pastDue(now, localToday(now, timezone))} then 0 else 1 end`,
-    sql`${dueInstant} asc nulls last`,
+    sql`${dueInstant(timezone)} asc nulls last`,
     sql`${occurrence.id} asc`,
   ];
 }

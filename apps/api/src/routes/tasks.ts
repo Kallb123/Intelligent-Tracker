@@ -247,7 +247,7 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
             })
             .from(task)
             .where(and(eq(task.id, request.params.id), eq(task.householdId, me.householdId)))
-            .for('update');
+            .for('no key update');
           if (!row) throw notFound('No such task');
 
           const stored = fieldsOfDto(await loadTaskDto(tx, me.householdId, row.id));

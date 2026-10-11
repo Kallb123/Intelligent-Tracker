@@ -108,12 +108,16 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
         .from(occurrence)
         .where(and(eq(occurrence.id, occurrenceId), inArray(occurrence.taskId, owned)));
       if (!ref) throw notFound('No such occurrence');
-      await tx.select({ id: task.id }).from(task).where(eq(task.id, ref.taskId)).for('update');
+      await tx
+        .select({ id: task.id })
+        .from(task)
+        .where(eq(task.id, ref.taskId))
+        .for('no key update');
       const [before] = await tx
         .select({ status: occurrence.status })
         .from(occurrence)
         .where(eq(occurrence.id, occurrenceId))
-        .for('update');
+        .for('no key update');
       // Gone while waiting for the lock (the task was deleted or rescheduled).
       if (!before) throw notFound('No such occurrence');
       const changed = await tx
