@@ -101,6 +101,8 @@ jobs:
       # The worker ticks every 2s instead of every minute (deploy/docker-compose.e2e.yml).
       COMPOSE_FILE: compose.yaml:deploy/docker-compose.build.yml:deploy/docker-compose.e2e.yml
       E2E_BASE_URL: http://localhost:8080
+      # Image labels (deploy/docker-compose.build.yml); the version is added by a step below.
+      TRACKER_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +114,16 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # No pre-release suffix: every published version also becomes `latest`.
+      - name: Read the app version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=package.json::\"version\" must be MAJOR.MINOR.PATCH, got '$version'"
+            exit 1
+          fi
+          echo "TRACKER_BUILD_VERSION=$version" >> "$GITHUB_ENV"
 
       # A fresh database every run: the first-run spec needs no household to exist yet, and the
       # smoke test below creates none.
@@ -151,6 +163,24 @@ jobs:
           path: e2e/test-results
           if-no-files-found: ignore
           retention-days: 7
+
+      # On main, hand the tested images to the publish workflow (publish-images.yml) so it pushes
+      # exactly what passed here instead of rebuilding.
+      - name: Save images for publishing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p images
+          docker save intelligent-tracker-backend -o images/backend.tar
+          docker save intelligent-tracker-web -o images/web.tar
+
+      - name: Upload images for publishing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: images
+          path: images
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Show logs on failure
         if: failure()

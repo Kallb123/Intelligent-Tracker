@@ -206,9 +206,10 @@ mounted, so rebuild (`--build`) after changing dependencies or config files.
 
 ### Published images
 
-When CI passes on a push to `main`, `.github/workflows/publish-images.yml` builds the two images
-and pushes them to the GitHub Container Registry (pull requests don't need it: CI's `docker` job
-already builds both images):
+CI's `docker` job builds the two images once and runs the smoke and end-to-end tests against them.
+On a push to `main` it also saves them as a short-lived `images` artifact, and when CI passes,
+`.github/workflows/publish-images.yml` pushes those exact images (no rebuild) to the GitHub
+Container Registry:
 
 - `ghcr.io/kallb123/intelligent-tracker-backend` (api, worker and bot)
 - `ghcr.io/kallb123/intelligent-tracker-web` (Caddy and the SPA)
