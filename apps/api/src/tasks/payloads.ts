@@ -1,5 +1,6 @@
 import { localToday } from '@tracker/core';
 import {
+  dueOrder,
   household,
   occurrence,
   task,
@@ -10,7 +11,7 @@ import {
   type Task,
 } from '@tracker/db';
 import { OPEN_OCCURRENCE_STATUSES, type OccurrenceDto, type TaskDto } from '@tracker/shared';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { notFound } from '../errors.js';
 
 /** The household settings the task routes depend on. */
@@ -67,9 +68,8 @@ export function toTaskDto(
 }
 
 /**
- * For each of the tasks with an open occurrence, who has the earliest one (due first, undated
- * last). A timed due sorts by its instant and an all-day one by its date at midnight UTC, which
- * only matters for a task that switched between the two while old occurrences were still open.
+ * For each of the tasks with an open occurrence, who has the earliest one: the same due order a
+ * rotation is planned in (`dueOrder`, in the household's time zone), undated last.
  */
 async function nextAssigneeIds(
   db: DbOrTransaction,
@@ -81,17 +81,15 @@ async function nextAssigneeIds(
       assigneeId: occurrence.assigneeId,
     })
     .from(occurrence)
+    .innerJoin(task, eq(task.id, occurrence.taskId))
+    .innerJoin(household, eq(household.id, task.householdId))
     .where(
       and(
         inArray(occurrence.taskId, taskIds),
         inArray(occurrence.status, [...OPEN_OCCURRENCE_STATUSES]),
       ),
     )
-    .orderBy(
-      occurrence.taskId,
-      sql`coalesce(${occurrence.dueAt}, ${occurrence.dueDate}::timestamp at time zone 'UTC') asc nulls last`,
-      asc(occurrence.id),
-    );
+    .orderBy(occurrence.taskId, dueOrder(household.timezone), asc(occurrence.id));
   return new Map(rows.map((row) => [row.taskId, row.assigneeId]));
 }
 

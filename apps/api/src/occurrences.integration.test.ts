@@ -737,6 +737,38 @@ describe.skipIf(!adminUrl)('occurrences (integration)', () => {
       expect(again.json<Json>().next).toMatchObject({ assigneeId: me.id });
     });
 
+    it('does not deadlock when actions, task edits and away changes run together', async () => {
+      // Every writer locks the task before its occurrences (and the away change locks its member
+      // without blocking row references). Timing decides whether a lock-order bug shows up, but
+      // this crossed over reliably before those orders were fixed.
+      const { sam, me, taskId } = await setUp();
+      for (let round = 0; round < 3; round++) {
+        const open = (await rowsOf(taskId)).filter(
+          (r) => r.status === 'upcoming' || r.status === 'active',
+        );
+        const results = await Promise.all([
+          admin.post(`/api/occurrences/${open[0]?.id}/complete`),
+          admin.post(`/api/occurrences/${open[1]?.id}/start`),
+          admin.patch(`/api/tasks/${taskId}`, {
+            assigneeIds: round % 2 === 0 ? [sam.id, me.id] : [me.id, sam.id],
+          }),
+          sam.client.patch(`/api/members/${sam.id}/away`, {
+            awayUntil: round % 2 === 0 ? '2026-03-10' : null,
+          }),
+        ]);
+        expect(
+          results.map((res) => res.statusCode),
+          results.map((r) => r.body).join('\n'),
+        ).toEqual([200, 200, 200, 200]);
+      }
+      const cursor = await cursorOf(taskId);
+      expect([0, 1]).toContain(cursor);
+      const stillOpen = (await rowsOf(taskId)).filter(
+        (r) => r.status === 'upcoming' || r.status === 'active',
+      );
+      expect(stillOpen.every((r) => r.assigneeId !== null)).toBe(true);
+    });
+
     it('leaves fixed and any tasks alone', async () => {
       const sam = await addMember(app, admin);
       const created = await createTask({

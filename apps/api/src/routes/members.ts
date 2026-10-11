@@ -94,7 +94,9 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
           .select()
           .from(member)
           .where(and(eq(member.id, request.params.id), eq(member.householdId, me.householdId)))
-          .for('update');
+          // NO KEY UPDATE, so it does not block task edits inserting assignee rows that reference
+          // this member (while this holds the member and waits for a task, that would deadlock).
+          .for('no key update');
         if (!target) throw notFound('No such member');
         if (target.id !== me.id && me.role !== 'admin') {
           throw forbidden('You can only set your own away dates');

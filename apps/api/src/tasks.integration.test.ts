@@ -1,4 +1,12 @@
-import { activity, household, occurrence, task, taskAssignee, type DbHandle } from '@tracker/db';
+import {
+  activity,
+  household,
+  occurrence,
+  replanRotation,
+  task,
+  taskAssignee,
+  type DbHandle,
+} from '@tracker/db';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -673,6 +681,31 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
       await admin.post(`/api/occurrences/${first?.id}/complete`);
       const after = (await admin.get(`/api/tasks/${created['id']}`)).json<Json>().task;
       expect(after['nextAssigneeId']).toBe(sam.id);
+    });
+
+    it('orders mixed all-day and timed occurrences like the rotation plan, in household time', async () => {
+      const { sam, me } = await rotation();
+      const created = await createTask({
+        ...onceBody,
+        dueDate: '2026-07-10',
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+      // London is on BST in July: the all-day 10th starts at 23:00 UTC on the 9th, half an hour
+      // before this timed due, although at midnight UTC it would sort after it.
+      await handle.db.insert(occurrence).values({
+        taskId: created['id'],
+        dueAt: new Date('2026-07-09T23:30:00Z'),
+        status: 'upcoming',
+      });
+      await replanRotation(handle.db, created['id'], { now: t.clock.now() });
+
+      const rows = await occurrencesOf(created['id']);
+      const allDay = rows.find((r) => r.dueDate !== null);
+      const timed = rows.find((r) => r.dueAt !== null);
+      expect([allDay?.assigneeId, timed?.assigneeId]).toEqual([me.id, sam.id]);
+      const fetched = (await admin.get(`/api/tasks/${created['id']}`)).json<Json>().task;
+      expect(fetched['nextAssigneeId']).toBe(allDay?.assigneeId);
     });
 
     it('has no next assignee once a task has no open occurrences', async () => {

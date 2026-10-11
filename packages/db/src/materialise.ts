@@ -146,7 +146,9 @@ export async function materialiseTask(
     .select({ task, timezone: household.timezone })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
-    .where(eq(task.id, taskId));
+    .where(eq(task.id, taskId))
+    // Task first, then its occurrences, as in every other writer (see rotation.ts).
+    .for('update', { of: task });
   if (!row || row.task.archivedAt !== null) return { inserted: 0, occurrenceIds: [] };
   const { task: t, timezone } = row;
 
@@ -184,7 +186,7 @@ export async function materialiseTask(
 }
 
 /**
- * Runs `materialiseTask` for every non-archived task in every household. A task whose schedule
+ * Runs `materialiseTask` for every non-archived task in every household, in `task.id` order. A task whose schedule
  * is broken (`RecurrenceError`) does not stop the rest: it is reported in `failures` for the
  * caller to log. Any other error (such as the database going away) is thrown.
  */
@@ -196,7 +198,8 @@ export async function materialiseAll(
     .select({ id: task.id })
     .from(task)
     .where(isNull(task.archivedAt))
-    .orderBy(asc(task.createdAt), asc(task.id));
+    // A fixed order, so tasks are locked in the same order by every writer that locks several.
+    .orderBy(asc(task.id));
   const result: MaterialiseAllResult = { tasks: tasks.length, inserted: 0, failures: [] };
   for (const { id } of tasks) {
     try {

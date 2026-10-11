@@ -1,7 +1,9 @@
-import { advanceCursor, localToday, planRotation, startOfLocalDay } from '@tracker/core';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { advanceCursor, localToday, planRotation } from '@tracker/core';
+import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { DbOrTransaction } from './client.js';
 import { household, member, occurrence, task, taskAssignee } from './schema/index.js';
+import type { Occurrence } from './schema/index.js';
 
 /*
  * Rotation in the database. `task.rotation_cursor` is the index (into the task's assignees, in
@@ -11,9 +13,27 @@ import { household, member, occurrence, task, taskAssignee } from './schema/inde
  * itself moves only when a turn is used up (`consumeRotationTurn`) or the assignee list changes
  * (the api remaps it with core's `remapCursor`). Started, done and skipped occurrences are never
  * touched. Planning needs the household's time zone to know which local day each due falls on.
+ *
+ * Limitation: an undated occurrence counts as due on the household's "today" when checking who is
+ * away, but that is only evaluated when a plan runs. If the day changes without anything
+ * triggering a re-plan (materialisation inserting rows, an assignee, mode or away change, a turn
+ * being used up), an undated occurrence keeps the assignee chosen on the earlier day until then.
+ *
+ * Locking: every writer takes the task row first (`FOR UPDATE`) and only then touches its
+ * occurrences, so the api's edits, the occurrence actions and the worker cannot deadlock. Code
+ * that locks several tasks does so in `task.id` order.
  */
 
 const NOT_STARTED = ['upcoming', 'active'] as const;
+
+/**
+ * The one definition of "due order" for an occurrence, for `ORDER BY`: by due instant (an
+ * all-day due counts from local midnight in `timezone`, which is a household time zone name or
+ * the column holding it), undated last. Ties are left to the caller (use the id).
+ */
+export function dueOrder(timezone: string | AnyPgColumn): SQL {
+  return sql`coalesce(${occurrence.dueAt}, ${occurrence.dueDate}::timestamp at time zone ${timezone}) asc nulls last`;
+}
 
 /** The task's assignee ids in rotation order. */
 export async function assigneeIdsOf(db: DbOrTransaction, taskId: string): Promise<string[]> {
@@ -67,19 +87,12 @@ export async function replanRotation(
       assigneeId: occurrence.assigneeId,
     })
     .from(occurrence)
-    .where(and(eq(occurrence.taskId, taskId), inArray(occurrence.status, NOT_STARTED)));
-
-  // Due order: by instant (an all-day due starts at local midnight), undated last, then by id.
-  const slots = open
-    .map((row) => {
-      const at = row.dueAt ?? (row.dueDate ? startOfLocalDay(row.dueDate, timezone) : null);
-      return {
-        ...row,
-        sortKey: at?.getTime() ?? Infinity,
-        date: row.dueDate ?? (row.dueAt ? localToday(row.dueAt, timezone) : today),
-      };
-    })
-    .sort((a, b) => a.sortKey - b.sortKey || a.id.localeCompare(b.id));
+    .where(and(eq(occurrence.taskId, taskId), inArray(occurrence.status, NOT_STARTED)))
+    .orderBy(dueOrder(timezone), asc(occurrence.id));
+  const slots = open.map((row) => ({
+    ...row,
+    date: row.dueDate ?? (row.dueAt ? localToday(row.dueAt, timezone) : today),
+  }));
 
   const plan = planRotation({
     assigneeIds,
@@ -98,23 +111,29 @@ export async function replanRotation(
     updated += 1;
   });
   for (const [assigneeId, ids] of changes) {
-    await db.update(occurrence).set({ assigneeId }).where(inArray(occurrence.id, ids));
+    await db
+      .update(occurrence)
+      .set({ assigneeId })
+      .where(and(inArray(occurrence.id, ids), inArray(occurrence.status, NOT_STARTED)));
   }
   return { updated };
 }
 
 /**
- * Uses up the turn of the occurrence's assignee, for when it goes from `upcoming` or `active`
- * to started, done or skipped: the cursor moves to the member after them, and the task's
- * remaining open occurrences are re-planned. Call it in the same transaction as the status
- * change, and only when the occurrence was not already started. Does nothing for an occurrence
- * of a task that is not a rotation. Completion by someone else still uses up the assignee's turn.
+ * Uses up the turn of the occurrence's assignee, for when the occurrence has just gone from
+ * `previousStatus` to started, done or skipped: the cursor moves to the member after them, and
+ * the task's remaining open occurrences are re-planned. Only an occurrence that was `upcoming`
+ * or `active` has a turn to use up, so for any other `previousStatus` (such as completing one
+ * that was already started) this does nothing, as it does for a task that is not a rotation.
+ * Call it in the same transaction as the status change. Completion by someone else still uses
+ * up the assignee's turn.
  */
 export async function consumeRotationTurn(
   db: DbOrTransaction,
   occurrenceId: string,
-  options: { now: Date },
+  options: { now: Date; previousStatus: Occurrence['status'] },
 ): Promise<void> {
+  if (!NOT_STARTED.some((status) => status === options.previousStatus)) return;
   const [row] = await db
     .select({ taskId: occurrence.taskId, assigneeId: occurrence.assigneeId })
     .from(occurrence)
@@ -133,7 +152,7 @@ export async function consumeRotationTurn(
 }
 
 /**
- * Re-plans every rotation task the member is an assignee of, for when their
+ * Re-plans every rotation task (not archived) the member is an assignee of, for when their
  * `away_until` changes. Returns the number of occurrences whose assignee changed.
  */
 export async function replanRotationsForMember(
@@ -145,7 +164,13 @@ export async function replanRotationsForMember(
     .select({ id: task.id })
     .from(taskAssignee)
     .innerJoin(task, eq(task.id, taskAssignee.taskId))
-    .where(and(eq(taskAssignee.memberId, memberId), eq(task.assignmentMode, 'rotation')))
+    .where(
+      and(
+        eq(taskAssignee.memberId, memberId),
+        eq(task.assignmentMode, 'rotation'),
+        isNull(task.archivedAt),
+      ),
+    )
     // A fixed order, so two members' changes cannot lock the same tasks in opposite orders.
     .orderBy(asc(task.id));
   let updated = 0;

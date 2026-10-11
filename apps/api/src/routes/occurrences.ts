@@ -99,13 +99,23 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
 
     return ctx.db.transaction(async (tx) => {
       const owned = tx.select({ id: task.id }).from(task).where(eq(task.householdId, householdId));
-      // The lock makes this read of the status and the change below one step, so exactly one
-      // request sees the occurrence not yet started and uses up the turn.
+      // Lock order is task, then occurrence, like every other writer, so the actions cannot
+      // deadlock with task edits, away changes or the worker. The lock on the occurrence also
+      // makes the status read below and the change after it one step, so exactly one request
+      // sees the occurrence not yet started and uses up the turn.
+      const [ref] = await tx
+        .select({ taskId: occurrence.taskId })
+        .from(occurrence)
+        .where(and(eq(occurrence.id, occurrenceId), inArray(occurrence.taskId, owned)));
+      if (!ref) throw notFound('No such occurrence');
+      await tx.select({ id: task.id }).from(task).where(eq(task.id, ref.taskId)).for('update');
       const [before] = await tx
         .select({ status: occurrence.status })
         .from(occurrence)
-        .where(and(eq(occurrence.id, occurrenceId), inArray(occurrence.taskId, owned)))
+        .where(eq(occurrence.id, occurrenceId))
         .for('update');
+      // Gone while waiting for the lock (the task was deleted or rescheduled).
+      if (!before) throw notFound('No such occurrence');
       const changed = await tx
         .update(occurrence)
         .set(transition.changes)
@@ -145,16 +155,15 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
         (await transition.after?.(tx, {
           id: occurrenceId,
           taskId: changedRow.taskId,
-          previousStatus: before?.status as OccurrenceStatus,
+          previousStatus: before.status,
         })) ?? [];
       return { dto: toOccurrenceDto(current, clock), createdIds, clock };
     });
   }
 
-  /** Uses up the assignee's rotation turn, unless the occurrence had already been started. */
-  async function consumeTurn(tx: DbOrTransaction, changed: ChangedOccurrence, now: Date) {
-    if (changed.previousStatus !== 'started') await consumeRotationTurn(tx, changed.id, { now });
-  }
+  /** Uses up the assignee's rotation turn (a no-op if the occurrence had already been started). */
+  const consumeTurn = (tx: DbOrTransaction, changed: ChangedOccurrence, now: Date) =>
+    consumeRotationTurn(tx, changed.id, { now, previousStatus: changed.previousStatus });
 
   /** Complete or skip: closes the occurrence and lets the schedule produce the next one. */
   function registerClose(

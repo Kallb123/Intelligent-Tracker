@@ -9,10 +9,13 @@ import {
   createMigratedDatabase,
   createTestApp,
   setUpAdmin,
+  type TestApp,
 } from './test-util.js';
 
 // Needs a Postgres server: set TEST_DATABASE_URL (any database on it, e.g. .../postgres).
 const adminUrl = process.env['TEST_DATABASE_URL'];
+
+const DAY = 24 * 60 * 60 * 1000;
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -21,6 +24,7 @@ describe.skipIf(!adminUrl)('member away dates (integration)', () => {
   let database: Awaited<ReturnType<typeof createMigratedDatabase>>;
   let handle: DbHandle;
   let app: FastifyInstance;
+  let clock: TestApp['clock'];
   let admin: TestClient;
 
   beforeAll(async () => {
@@ -31,7 +35,7 @@ describe.skipIf(!adminUrl)('member away dates (integration)', () => {
 
   beforeEach(async () => {
     await handle.sql`truncate household cascade`;
-    app = createTestApp(handle).app;
+    ({ app, clock } = createTestApp(handle, { sessionTtlMs: 365 * DAY }));
     admin = await setUpAdmin(app);
   });
 
@@ -180,6 +184,37 @@ describe.skipIf(!adminUrl)('member away dates (integration)', () => {
 
       await sam.client.patch(`/api/members/${sam.id}/away`, { awayUntil: null });
       expect(await plan()).toEqual(['me', 'sam', 'me', 'sam', 'me', 'sam']);
+    });
+
+    it('judges the away date by the household`s local day (London, BST)', async () => {
+      clock.set('2026-07-01T12:00:00Z');
+      const sam = await addMember(app, admin);
+      const me = await meOf(admin);
+      // Due 23:30 UTC, which is 00:30 the next day in London: the dues fall on 11 and 12 July.
+      const res = await admin.post('/api/tasks', {
+        title: 'Late bins',
+        scheduleKind: 'fixed',
+        allDay: false,
+        dueAt: '2026-07-10T23:30:00Z',
+        rrule: 'FREQ=DAILY',
+        assignmentMode: 'rotation',
+        assigneeIds: [sam.id, me.id],
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const names = { [me.id]: 'me', [sam.id]: 'sam' };
+      const firstTwo = async () =>
+        (await handle.db.select().from(occurrence).orderBy(asc(occurrence.dueAt)).limit(2)).map(
+          (r) => names[r.assigneeId as string],
+        );
+      const setAway = (awayUntil: string) =>
+        sam.client.patch(`/api/members/${sam.id}/away`, { awayUntil });
+
+      // Away through the 10th: the first due is the 11th locally, so Sam is back for it.
+      await setAway('2026-07-10');
+      expect(await firstTwo()).toEqual(['sam', 'me']);
+      // Away through the 11th: that due is skipped, and the one on the 12th is not.
+      await setAway('2026-07-11');
+      expect(await firstTwo()).toEqual(['me', 'sam']);
     });
 
     it('leaves started occurrences with whoever is doing them', async () => {

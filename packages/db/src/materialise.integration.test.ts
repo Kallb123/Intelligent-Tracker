@@ -810,6 +810,19 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
       ]);
     });
 
+    it('leaves archived tasks alone when a member`s away date changes', async () => {
+      const { h, a, b } = await setUp();
+      const t = await rotationTask(h.id, [a, b]);
+      await materialiseTask(handle.db, t.id, { now });
+      await handle.db.update(task).set({ archivedAt: now }).where(eq(task.id, t.id));
+      const before = await occurrencesOf(t.id);
+
+      await handle.db.update(member).set({ awayUntil: '2026-12-31' }).where(eq(member.id, a.id));
+
+      expect(await replanRotationsForMember(handle.db, a.id, { now })).toEqual({ updated: 0 });
+      expect(await occurrencesOf(t.id)).toEqual(before);
+    });
+
     it('lets the member whose turn it is take an occurrence when everyone is away', async () => {
       const { h, a, b, names } = await setUp();
       const t = await rotationTask(h.id, [a, b]);
@@ -884,8 +897,11 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
         await replanRotation(handle.db, '00000000-0000-4000-8000-000000000000', { now }),
       ).toEqual({ updated: 0 });
       const [first] = before;
-      await consumeRotationTurn(handle.db, first?.id as string, { now });
-      await consumeRotationTurn(handle.db, '00000000-0000-4000-8000-000000000000', { now });
+      await consumeRotationTurn(handle.db, first?.id as string, { now, previousStatus: 'active' });
+      await consumeRotationTurn(handle.db, '00000000-0000-4000-8000-000000000000', {
+        now,
+        previousStatus: 'active',
+      });
       expect(await cursorOf(t.id)).toBe(0);
       expect(await occurrencesOf(t.id)).toEqual(before);
       expect(a.id).not.toBe(b.id);
@@ -902,7 +918,10 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
           .set({ status: 'done', completedBy: c.id })
           .where(eq(occurrence.id, first?.id as string));
 
-        await consumeRotationTurn(handle.db, first?.id as string, { now });
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
 
         // A's turn is used up even though C did it; B is next, so nothing else moves.
         expect(await cursorOf(t.id)).toBe(1);
@@ -919,13 +938,39 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
           .set({ status: 'started' })
           .where(eq(occurrence.id, third?.id as string));
 
-        await consumeRotationTurn(handle.db, third?.id as string, { now });
+        await consumeRotationTurn(handle.db, third?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
 
         // C's turn was used, so A is next for the earliest remaining occurrence: the fourth
         // (which was A's) is now C's, and the rotation goes on from there.
         expect(await cursorOf(t.id)).toBe(0);
         expect((await assigneesOf(t.id, names)).slice(0, 5)).toEqual(['A', 'B', 'C', 'C', 'A']);
         expect((await occurrencesOf(t.id))[2]?.status).toBe('started');
+      });
+
+      it('does nothing for an occurrence that was already started, done or skipped', async () => {
+        const { h, a, b, c, names } = await setUp();
+        const t = await rotationTask(h.id, [a, b, c]);
+        await materialiseTask(handle.db, t.id, { now });
+        const before = await occurrencesOf(t.id);
+        const [first] = before;
+
+        // Completing or skipping a started occurrence: its turn was used up when it started.
+        for (const previousStatus of ['started', 'done', 'skipped'] as const) {
+          await consumeRotationTurn(handle.db, first?.id as string, { now, previousStatus });
+        }
+
+        expect(await cursorOf(t.id)).toBe(0);
+        expect(await occurrencesOf(t.id)).toEqual(before);
+        expect((await assigneesOf(t.id, names)).slice(0, 3)).toEqual(['A', 'B', 'C']);
+
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'upcoming',
+        });
+        expect(await cursorOf(t.id)).toBe(1);
       });
 
       it('moves on by one when the assignee is nobody or has left the rotation', async () => {
@@ -936,9 +981,15 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
         await insertOccurrence(t.id, { dueDate: '2026-07-13', status: 'done', assigneeId: null });
         const [first] = await occurrencesOf(t.id);
 
-        await consumeRotationTurn(handle.db, first?.id as string, { now });
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
         expect(await cursorOf(t.id)).toBe(1);
-        await consumeRotationTurn(handle.db, first?.id as string, { now });
+        await consumeRotationTurn(handle.db, first?.id as string, {
+          now,
+          previousStatus: 'active',
+        });
         expect(await cursorOf(t.id)).toBe(0);
       });
     });
