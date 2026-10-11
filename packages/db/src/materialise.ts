@@ -9,7 +9,8 @@ import {
 } from '@tracker/core';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
-import { household, occurrence, task, taskAssignee } from './schema/index.js';
+import { assigneeIdsOf, replanRotation } from './rotation.js';
+import { household, occurrence, task } from './schema/index.js';
 import type { NewOccurrence, Task } from './schema/index.js';
 
 /*
@@ -49,20 +50,12 @@ const OPEN_NOT_STARTED = ['upcoming', 'active'] as const satisfies OccurrenceSta
 const OPEN = ['upcoming', 'active', 'started'] as const satisfies OccurrenceStatus[];
 
 /**
- * Who a new occurrence is assigned to: the first assignee for `fixed` and `rotation` tasks, no
- * one for `any`. (Real rotation, advancing `task.rotation_cursor` on completion, arrives in PR 9.)
+ * Who a new occurrence of a `fixed` or `any` task is assigned to: the first assignee, or no one
+ * for `any`. A `rotation` task's occurrences start unassigned and are planned right after (see
+ * `replanRotation`).
  */
 function assigneeFor(mode: Task['assignmentMode'], assigneeIds: string[]): string | null {
-  return mode === 'any' ? null : (assigneeIds[0] ?? null);
-}
-
-async function assigneeIdsOf(db: DbOrTransaction, taskId: string): Promise<string[]> {
-  const rows = await db
-    .select({ memberId: taskAssignee.memberId })
-    .from(taskAssignee)
-    .where(eq(taskAssignee.taskId, taskId))
-    .orderBy(asc(taskAssignee.position));
-  return rows.map((row) => row.memberId);
+  return mode === 'fixed' ? (assigneeIds[0] ?? null) : null;
 }
 
 /** The instant an occurrence becomes active: its `startAt`, else its due, else immediately. */
@@ -138,6 +131,8 @@ async function hasOpenOccurrence(db: DbOrTransaction, taskId: string): Promise<b
  * occurrence. Existing rows are left alone, so calling it again changes nothing. Archived or
  * missing tasks are skipped. Throws `RecurrenceError` if the task's schedule is invalid.
  *
+ * For a `rotation` task the new rows are handed to the assignees in turn (`replanRotation`).
+ *
  * New occurrences start `active` when their start (`startAt`, else the due, else immediately) has
  * arrived and `upcoming` otherwise; the worker's `activateDue` promotes the latter later.
  */
@@ -182,6 +177,9 @@ export async function materialiseTask(
     .values(rows)
     .onConflictDoNothing()
     .returning({ id: occurrence.id });
+  if (t.assignmentMode === 'rotation' && inserted.length > 0) {
+    await replanRotation(db, t.id, { now });
+  }
   return { inserted: inserted.length, occurrenceIds: inserted.map((r) => r.id) };
 }
 
@@ -278,19 +276,22 @@ export async function clearFutureOpenOccurrences(
 }
 
 /**
- * Re-applies the assignment rule (first assignee for `fixed`/`rotation`, no one for `any`) to
- * the task's `upcoming` and `active` occurrences, for when its assignees or mode change.
- * Started occurrences keep whoever is doing them. Returns the number of rows updated.
+ * Re-applies the assignment rule to the task's `upcoming` and `active` occurrences, for when its
+ * assignees or mode change: the first assignee for `fixed`, no one for `any`, and for `rotation`
+ * a fresh plan from the task's cursor (see `replanRotation`). Started occurrences keep whoever
+ * is doing them. Returns the number of rows updated.
  */
 export async function reassignOpenOccurrences(
   db: DbOrTransaction,
   taskId: string,
+  options: { now: Date },
 ): Promise<{ updated: number }> {
   const [t] = await db
     .select({ assignmentMode: task.assignmentMode })
     .from(task)
     .where(eq(task.id, taskId));
   if (!t) return { updated: 0 };
+  if (t.assignmentMode === 'rotation') return replanRotation(db, taskId, options);
   const assigneeId = assigneeFor(t.assignmentMode, await assigneeIdsOf(db, taskId));
   const rows = await db
     .update(occurrence)

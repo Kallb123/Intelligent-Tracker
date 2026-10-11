@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { calendarDateSchema } from './tasks.js';
 
 /** Request and response shapes of the auth API, shared by the api and the web app. */
 
@@ -63,7 +64,15 @@ export const memberSchema = z.object({
   role: z.enum(['admin', 'member']),
   /** True while the member has not yet set a password (an invite that has not been accepted). */
   pending: z.boolean(),
+  /**
+   * Away through this household-local date, inclusive: rotating tasks skip the member for dues
+   * up to and including it. `null` when not away.
+   */
+  awayUntil: calendarDateSchema.nullable(),
 });
+
+/** Body of `PATCH /api/members/:id/away`; `null` clears the away date. */
+export const setAwayBodySchema = z.object({ awayUntil: calendarDateSchema.nullable() });
 
 export const householdSummarySchema = z.object({
   id: z.uuid(),
@@ -107,6 +116,8 @@ export const linkInfoSchema = z.object({
   expiresAt: z.iso.datetime(),
 });
 
+export const memberResponseSchema = z.object({ member: memberSchema });
+
 export const membersResponseSchema = z.object({ members: z.array(memberSchema) });
 
 export const okSchema = z.object({ ok: z.literal(true) });
@@ -117,6 +128,7 @@ export type SetupBody = z.infer<typeof setupBodySchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
 export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type CreateInviteBody = z.infer<typeof createInviteBodySchema>;
+export type SetAwayBody = z.infer<typeof setAwayBodySchema>;
 export type SetPasswordBody = z.infer<typeof setPasswordBodySchema>;
 export type MemberDto = z.infer<typeof memberSchema>;
 export type SessionInfo = z.infer<typeof sessionInfoSchema>;

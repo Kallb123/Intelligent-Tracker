@@ -148,6 +148,7 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
         reminderProfile: 'standard',
         assignmentMode: 'fixed',
         assigneeIds: [],
+        nextAssigneeId: null,
         milestones: [],
         archived: false,
         archivedAt: null,
@@ -220,7 +221,9 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
       expect(assignees.map((a) => a.memberId)).toEqual([sam.id, me.id]);
       const rows = await occurrencesOf(created['id']);
       expect(rows.length).toBeGreaterThan(1);
-      expect(new Set(rows.map((r) => r.assigneeId))).toEqual(new Set([sam.id]));
+      // The rotation order is kept: Sam first, then the admin, and so on.
+      expect(rows.slice(0, 3).map((r) => r.assigneeId)).toEqual([sam.id, me.id, sam.id]);
+      expect(created['nextAssigneeId']).toBe(sam.id);
     });
 
     it('materialises a weekly task over the horizon', async () => {
@@ -603,6 +606,157 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
         title: 'First',
         notes: 'Second',
       });
+    });
+  });
+
+  describe('assignment modes', () => {
+    /** Names (by member id) of the assignees of a task's occurrences, due first. */
+    async function assignedTo(taskId: string, names: Record<string, string>, count = 4) {
+      const rows = await occurrencesOf(taskId);
+      return rows.slice(0, count).map((r) => (r.assigneeId ? names[r.assigneeId] : null));
+    }
+
+    async function rotation() {
+      const sam = await addMember(app, admin);
+      const me = (await admin.get('/api/auth/me')).json<Json>().member;
+      const names = { [me.id]: 'me', [sam.id]: 'sam' };
+      return { sam, me, names };
+    }
+
+    const cursorOf = async (taskId: string) =>
+      (await handle.db.select().from(task).where(eq(task.id, taskId)))[0]?.rotationCursor;
+
+    it('gives a fixed task`s occurrences to its first assignee and any task`s to nobody', async () => {
+      const { sam, me, names } = await rotation();
+      const fixed = await createTask({ ...weeklyBody, assigneeIds: [sam.id, me.id] });
+      const any = await createTask({
+        ...weeklyBody,
+        assignmentMode: 'any',
+        assigneeIds: [sam.id, me.id],
+      });
+
+      expect(await assignedTo(fixed['id'], names)).toEqual(['sam', 'sam', 'sam', 'sam']);
+      expect(await assignedTo(any['id'], names)).toEqual([null, null, null, null]);
+      expect(fixed['nextAssigneeId']).toBe(sam.id);
+      expect(any['nextAssigneeId']).toBeNull();
+    });
+
+    it('rotates the occurrences of a rotation task through its assignees', async () => {
+      const { sam, me, names } = await rotation();
+      const created = await createTask({
+        ...weeklyBody,
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+      expect(await assignedTo(created['id'], names, 5)).toEqual(['me', 'sam', 'me', 'sam', 'me']);
+      expect(await cursorOf(created['id'])).toBe(0);
+    });
+
+    it('reports the assignee of the earliest open occurrence as nextAssigneeId', async () => {
+      const { sam, me } = await rotation();
+      const created = await createTask({
+        ...weeklyBody,
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+      const unassigned = await createTask({ ...weeklyBody, title: 'Nobody' });
+      const archivedOnce = await createTask({ ...onceBody, assigneeIds: [sam.id] });
+      await admin.patch(`/api/tasks/${archivedOnce['id']}`, { archived: true });
+
+      const list = (await admin.get('/api/tasks')).json<Json>().tasks;
+      const next = (id: string) => list.find((x: Json) => x['id'] === id)['nextAssigneeId'];
+      expect(next(created['id'])).toBe(me.id);
+      expect(next(unassigned['id'])).toBeNull();
+
+      // Once the first is done the next one (Sam's) is the earliest open occurrence.
+      const [first] = await occurrencesOf(created['id']);
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+      const after = (await admin.get(`/api/tasks/${created['id']}`)).json<Json>().task;
+      expect(after['nextAssigneeId']).toBe(sam.id);
+    });
+
+    it('has no next assignee once a task has no open occurrences', async () => {
+      const { sam } = await rotation();
+      const created = await createTask({ ...onceBody, assigneeIds: [sam.id] });
+      expect(created['nextAssigneeId']).toBe(sam.id);
+      const [only] = await occurrencesOf(created['id']);
+      await admin.post(`/api/occurrences/${only?.id}/complete`);
+      const after = (await admin.get(`/api/tasks/${created['id']}`)).json<Json>().task;
+      expect(after['nextAssigneeId']).toBeNull();
+    });
+
+    it('keeps the turn with the same person when the rotation is reordered', async () => {
+      const { sam, me, names } = await rotation();
+      const created = await createTask({
+        ...weeklyBody,
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+      const url = `/api/tasks/${created['id']}`;
+      const [first] = await occurrencesOf(created['id']);
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+      expect(await cursorOf(created['id'])).toBe(1);
+
+      // Sam is next; moving Sam to the front keeps it that way.
+      const res = await admin.patch(url, { assigneeIds: [sam.id, me.id] });
+
+      expect(res.json<Json>().task['nextAssigneeId']).toBe(sam.id);
+      expect(await cursorOf(created['id'])).toBe(0);
+      expect((await assignedTo(created['id'], names, 5)).slice(1)).toEqual([
+        'sam',
+        'me',
+        'sam',
+        'me',
+      ]);
+    });
+
+    it('starts from the first assignee when the one whose turn it was is removed', async () => {
+      const { sam, me, names } = await rotation();
+      const third = await addMember(app, admin, { name: 'Jo', username: 'jo', email: 'jo@x.com' });
+      const created = await createTask({
+        ...weeklyBody,
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id, third.id],
+      });
+      const [first] = await occurrencesOf(created['id']);
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+      expect(await cursorOf(created['id'])).toBe(1);
+
+      await admin.patch(`/api/tasks/${created['id']}`, { assigneeIds: [me.id, third.id] });
+
+      expect(await cursorOf(created['id'])).toBe(0);
+      const withJo = { ...names, [third.id]: 'jo' };
+      expect((await assignedTo(created['id'], withJo, 3)).slice(1)).toEqual(['me', 'jo']);
+    });
+
+    it('starts the rotation from the first assignee when the mode changes to it', async () => {
+      const { sam, me, names } = await rotation();
+      const created = await createTask({ ...weeklyBody, assigneeIds: [sam.id, me.id] });
+      const url = `/api/tasks/${created['id']}`;
+
+      const res = await admin.patch(url, { assignmentMode: 'rotation' });
+      expect(res.statusCode).toBe(200);
+      expect(await assignedTo(created['id'], names)).toEqual(['sam', 'me', 'sam', 'me']);
+
+      await admin.patch(url, { assignmentMode: 'any' });
+      expect(await assignedTo(created['id'], names)).toEqual([null, null, null, null]);
+      expect(await cursorOf(created['id'])).toBe(0);
+
+      await admin.patch(url, { assignmentMode: 'fixed' });
+      expect(await assignedTo(created['id'], names)).toEqual(['sam', 'sam', 'sam', 'sam']);
+    });
+
+    it('re-plans after a schedule change', async () => {
+      const { sam, me, names } = await rotation();
+      const created = await createTask({
+        ...weeklyBody,
+        assignmentMode: 'rotation',
+        assigneeIds: [me.id, sam.id],
+      });
+
+      await admin.patch(`/api/tasks/${created['id']}`, { rrule: 'FREQ=WEEKLY;BYDAY=TU' });
+
+      expect(await assignedTo(created['id'], names, 4)).toEqual(['me', 'sam', 'me', 'sam']);
     });
   });
 

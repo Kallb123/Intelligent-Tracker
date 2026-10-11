@@ -106,6 +106,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             };
                             household: {
                                 /** Format: uuid */
@@ -169,6 +171,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             };
                             household: {
                                 /** Format: uuid */
@@ -261,6 +265,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             };
                             household: {
                                 /** Format: uuid */
@@ -362,6 +368,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             }[];
                         };
                     };
@@ -374,6 +382,103 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/members/{id}/away": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set when a member is away until
+         * @description Rotating tasks skip the member for dues up to and including `awayUntil` (a household-local date); `null` clears it. Members set their own, admins anyone in the household. Open occurrences of the member's rotations are re-planned straight away.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: date */
+                        awayUntil: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            member: {
+                                /** Format: uuid */
+                                id: string;
+                                name: string;
+                                username: string;
+                                email: string | null;
+                                /** @enum {string} */
+                                role: "admin" | "member";
+                                pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/api/invites": {
@@ -424,6 +529,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             };
                             invite: {
                                 token: string;
@@ -577,6 +684,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             };
                             household: {
                                 /** Format: uuid */
@@ -669,6 +778,8 @@ export interface paths {
                                 /** @enum {string} */
                                 role: "admin" | "member";
                                 pending: boolean;
+                                /** Format: date */
+                                awayUntil: string | null;
                             };
                             household: {
                                 /** Format: uuid */
@@ -744,6 +855,8 @@ export interface paths {
                                 /** @enum {string} */
                                 assignmentMode: "fixed" | "any" | "rotation";
                                 assigneeIds: string[];
+                                /** Format: uuid */
+                                nextAssigneeId: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;
@@ -869,6 +982,8 @@ export interface paths {
                                 /** @enum {string} */
                                 assignmentMode: "fixed" | "any" | "rotation";
                                 assigneeIds: string[];
+                                /** Format: uuid */
+                                nextAssigneeId: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;
@@ -984,6 +1099,8 @@ export interface paths {
                                 /** @enum {string} */
                                 assignmentMode: "fixed" | "any" | "rotation";
                                 assigneeIds: string[];
+                                /** Format: uuid */
+                                nextAssigneeId: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;
@@ -1177,6 +1294,8 @@ export interface paths {
                                 /** @enum {string} */
                                 assignmentMode: "fixed" | "any" | "rotation";
                                 assigneeIds: string[];
+                                /** Format: uuid */
+                                nextAssigneeId: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;

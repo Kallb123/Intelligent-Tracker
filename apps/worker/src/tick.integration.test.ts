@@ -1,6 +1,15 @@
-import { createDb, household, occurrence, runMigrations, task, type DbHandle } from '@tracker/db';
+import {
+  createDb,
+  household,
+  member,
+  occurrence,
+  runMigrations,
+  task,
+  taskAssignee,
+  type DbHandle,
+} from '@tracker/db';
 import { createTestDatabase, type TestDatabase } from '@tracker/db/test-db';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TICK_LOCK_KEY, runTick } from './tick.js';
 
@@ -78,6 +87,37 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
 
     expect(again).toEqual({ skipped: false, tasks: 1, inserted: 0, activated: 0, failures: [] });
     expect(await occurrences()).toEqual(before);
+  });
+
+  it('rotates new occurrences between the assignees, and a repeat tick leaves them alone', async () => {
+    const t = await newTask({ assignmentMode: 'rotation' });
+    const members = await handle.db
+      .insert(member)
+      .values(['a', 'b', 'c'].map((u) => ({ householdId: t.householdId, name: u, username: u })))
+      .returning();
+    await handle.db
+      .insert(taskAssignee)
+      .values(members.map((m, position) => ({ taskId: t.id, memberId: m.id, position })));
+    const now = at('2026-07-06T09:00:00Z');
+
+    await runTick(handle.db, { now, logger });
+    const rows = () => handle.db.select().from(occurrence).orderBy(asc(occurrence.dueDate));
+    const before = await rows();
+    // A, B, C, A, B, ...
+    expect(before.slice(0, 4).map((r) => r.assigneeId)).toEqual(
+      [0, 1, 2, 0].map((i) => members[i]?.id),
+    );
+
+    // A week on, the new horizon day continues the rotation without touching the others.
+    await runTick(handle.db, { now: at('2026-07-13T09:00:00Z'), logger });
+    const after = await rows();
+    expect(after).toHaveLength(14);
+    expect(after.slice(0, 13).map((r) => r.assigneeId)).toEqual(before.map((r) => r.assigneeId));
+    expect(after[13]?.assigneeId).toBe(members[1]?.id);
+
+    const again = await runTick(handle.db, { now: at('2026-07-13T09:00:00Z'), logger });
+    expect(again).toMatchObject({ inserted: 0 });
+    expect(await rows()).toEqual(after);
   });
 
   it('activates upcoming occurrences once their day arrives', async () => {

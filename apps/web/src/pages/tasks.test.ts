@@ -24,6 +24,7 @@ const alex: MemberDto = {
   email: null,
   role: 'admin',
   pending: false,
+  awayUntil: null,
 };
 const sam: MemberDto = { ...alex, id: SAM, name: 'Sam', username: 'sam', role: 'member' };
 
@@ -68,6 +69,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     reminderProfile: 'standard',
     assignmentMode: 'fixed',
     assigneeIds: [ME],
+    nextAssigneeId: ME,
     milestones: [],
     archived: false,
     archivedAt: null,

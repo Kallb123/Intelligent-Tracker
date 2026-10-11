@@ -195,6 +195,7 @@ describe('formFromTask', () => {
     reminderProfile: 'standard',
     assignmentMode: 'rotation',
     assigneeIds: [SAM, ME],
+    nextAssigneeId: SAM,
     milestones: [
       { id: '66666666-6666-4666-8666-666666666666', title: 'Put out', offsetDaysBeforeDue: 0 },
     ],

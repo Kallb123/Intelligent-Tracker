@@ -1,9 +1,11 @@
-import { member, session } from '@tracker/db';
+import { activity, member, replanRotationsForMember, session } from '@tracker/db';
 import {
   createInviteBodySchema,
   createInviteResponseSchema,
   membersResponseSchema,
   passwordResetResponseSchema,
+  setAwayBodySchema,
+  memberResponseSchema,
 } from '@tracker/shared';
 import { asc, and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -18,13 +20,15 @@ import {
 } from '../auth/password-tokens.js';
 import type { ApiContext } from '../context.js';
 import { uniqueViolation } from '../db-errors.js';
-import { AppError, conflict, notFound } from '../errors.js';
+import { AppError, conflict, errorResponseSchema, forbidden, notFound } from '../errors.js';
 import { one } from '../rows.js';
 
 /**
  * Household members and the admin actions on them (all need a session; the admin ones need an
  * admin, and only ever touch the admin's own household):
  *   GET  /api/members                      list members (any member)
+ *   PATCH /api/members/:id/away            set or clear when a member is away until (the member
+ *                                          themselves, or an admin); re-plans their rotations
  *   POST /api/invites                      create a member without a password and get a one-time
  *                                          invite link (admin)
  *   POST /api/members/:id/password-reset   get a one-time link to set a new password, and end the
@@ -58,6 +62,59 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
         .where(eq(member.householdId, authOf(request).member.householdId))
         .orderBy(asc(member.name));
       return { members: rows.map(toMemberDto) };
+    },
+  );
+
+  r.patch(
+    '/api/members/:id/away',
+    {
+      onRequest: app.requireAuth,
+      schema: {
+        tags: ['Members'],
+        summary: 'Set when a member is away until',
+        description:
+          'Rotating tasks skip the member for dues up to and including `awayUntil` (a ' +
+          'household-local date); `null` clears it. Members set their own, admins anyone in the ' +
+          "household. Open occurrences of the member's rotations are re-planned straight away.",
+        params: z.object({ id: z.uuid() }),
+        body: setAwayBodySchema,
+        response: {
+          200: memberResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request) => {
+      const me = authOf(request).member;
+      const now = ctx.config.clock();
+      const result = await ctx.db.transaction(async (tx) => {
+        const [target] = await tx
+          .select()
+          .from(member)
+          .where(and(eq(member.id, request.params.id), eq(member.householdId, me.householdId)))
+          .for('update');
+        if (!target) throw notFound('No such member');
+        if (target.id !== me.id && me.role !== 'admin') {
+          throw forbidden('You can only set your own away dates');
+        }
+
+        const { awayUntil } = request.body;
+        if (awayUntil === target.awayUntil) return target;
+        const updated = one(
+          await tx.update(member).set({ awayUntil }).where(eq(member.id, target.id)).returning(),
+        );
+        await replanRotationsForMember(tx, target.id, { now });
+        await tx.insert(activity).values({
+          householdId: me.householdId,
+          memberId: me.id,
+          kind: 'member.away_changed',
+          data: { memberId: target.id, awayUntil },
+        });
+        return updated;
+      });
+      return { member: toMemberDto(result) };
     },
   );
 

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 const recurrence = 'packages/core/src/recurrence/**';
+const rotation = 'packages/core/src/rotation/**';
 
 export default defineConfig({
   test: {
@@ -9,11 +10,12 @@ export default defineConfig({
     // recurrence engine is gated for now (PLAN.md, PR 4: 100% branch coverage).
     coverage: {
       provider: 'v8',
-      include: [`${recurrence}/*.ts`],
+      include: [`${recurrence}/*.ts`, `${rotation}/*.ts`],
       exclude: ['**/*.test.ts', '**/test-util.ts'],
       reporter: ['text', 'html'],
       thresholds: {
         [recurrence]: { statements: 100, branches: 100, functions: 100, lines: 100 },
+        [rotation]: { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
   },
