@@ -9,9 +9,10 @@ Runs locally with Docker Compose, with a Vue web UI.
 > Status: Milestone 0.1 in progress. Planning is done (decisions agreed: TypeScript, per-member
 > login, Cloudflare Tunnel for the calendar feed, one house Telegram group, rule-based smarts,
 > UK defaults). In place so far: the monorepo and CI, the Docker Compose stack, the database
-> schema, the recurrence engine, per-member auth, and the tasks & occurrences API with a worker
-> that materialises occurrences. The web UI is still a "hello" page. See [docs/PLAN.md](docs/PLAN.md) for the architecture, data model, reminder
-> design and the PR-by-PR implementation plan.
+> schema, the recurrence engine, per-member auth, the tasks & occurrences API with a worker
+> that materialises occurrences, and the web app shell (first-run setup, login, invites, people
+> and account pages; the task views come next). See [docs/PLAN.md](docs/PLAN.md) for the
+> architecture, data model, reminder design and the PR-by-PR implementation plan.
 
 ## Repository layout
 
@@ -20,7 +21,7 @@ apps/
   api/        Fastify HTTP API: auth, tasks, occurrences, OpenAPI document
   worker/     scheduler tick: materialises occurrences (reminder delivery comes later)
   bot/        Telegram bot (idles with a heartbeat)
-  web/        Vite SPA (a "hello" page for now; Vue 3 arrives later)
+  web/        Vue 3 SPA (Vite, Pinia, Vue Router, PrimeVue) with a typed API client
 packages/
   core/       pure domain logic: recurrence, rotation, reminder planning
   db/         Drizzle schema, SQL migrations, migration runner, seed data
@@ -61,6 +62,12 @@ which occurrences to materialise ahead of time. See `packages/core/src/recurrenc
 with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watch) and
 `pnpm --filter @tracker/web dev` (Vite on :5173, proxying `/api` and `/ical` to
 `VITE_API_PROXY_TARGET`, default `http://localhost:3000`).
+
+The web app's API client is typed from the OpenAPI document. After running `pnpm openapi` (or
+otherwise changing `apps/api/openapi.json`), run `pnpm --filter @tracker/web api:generate` to
+refresh `apps/web/src/api/schema.d.ts`; a test fails if it is out of date. On a fresh database the
+first visit to the web app starts the setup wizard, which creates the household and its admin; the
+admin then invites everyone else from the People page.
 
 CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test`, `test:coverage` and `build` on
 pushes to `main` and on every pull request. A `db` job checks the schema against the migrations,

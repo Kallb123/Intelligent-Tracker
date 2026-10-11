@@ -21,6 +21,10 @@
 		@pages not path /assets/*
 		header @pages Cache-Control "no-cache"
 
+		# Not in every system mime table, and installable-app checks look at the type.
+		@manifest path /manifest.webmanifest
+		header @manifest Content-Type application/manifest+json
+
 		try_files {path} /index.html
 		file_server
 	}
