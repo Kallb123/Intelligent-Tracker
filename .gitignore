@@ -11,3 +11,6 @@ coverage/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+playwright-report/
+test-results/

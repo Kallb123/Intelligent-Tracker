@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "pnpm --filter @tracker/e2e test",
     "db:generate": "pnpm --filter @tracker/db db:generate",
     "db:check": "pnpm --filter @tracker/db db:check",
     "db:migrate": "pnpm --filter @tracker/db migrate",

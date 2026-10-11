@@ -27,6 +27,8 @@ packages/
   db/         Drizzle schema, SQL migrations, migration runner, seed data
   shared/     schemas, types and defaults shared across apps
 deploy/       Caddyfile and Docker Compose files
+e2e/          Playwright end-to-end tests (run against a running stack)
+scripts/      build and local-run helpers
 docs/         design and implementation plan
 Dockerfile    one backend image (api/worker/bot) and the Caddy web image
 compose.yaml  root entry point that includes deploy/docker-compose.yml
@@ -73,7 +75,35 @@ CI (`.github/workflows/ci.yml`) runs `format:check`, `lint`, `typecheck`, `test`
 pushes to `main` and on every pull request. A `db` job checks the schema against the migrations,
 applies them to a Postgres 16 service container and runs the database and auth API integration tests, and a
 `docker` job builds the images, starts the stack and smoke-tests it (including that the api
-migrated and seeded the database).
+migrated and seeded the database). An `e2e` job starts the same stack with a faster worker tick
+and runs the Playwright tests against it (see below).
+
+## End-to-end tests
+
+Browser tests live in `e2e/` (`@tracker/e2e`, Playwright with Chromium) and drive a running stack
+through its real UI; they are not part of `pnpm test`. They need a **fresh database**, because the
+first spec walks the first-run setup wizard, which only works while no household exists.
+
+```sh
+# 1. Start the stack on an empty database, with the worker ticking every 2 seconds
+docker compose -f compose.yaml -f deploy/docker-compose.e2e.yml up -d --build --wait
+
+# 2. One-off: install the browser (CI does this with --with-deps)
+pnpm --filter @tracker/e2e exec playwright install chromium
+
+# 3. Run the tests against http://localhost:8080 (override with E2E_BASE_URL)
+pnpm test:e2e
+
+# 4. Reset the database (also needed before running them a second time)
+docker compose -f compose.yaml -f deploy/docker-compose.e2e.yml down -v
+```
+
+Without Docker, `scripts/e2e-local.sh up` starts a throwaway Postgres 16 (binaries from
+`/usr/lib/postgresql/16/bin`, override with `PG_BIN`), the api, the worker and the built SPA on
+<http://localhost:8080>, always from an empty database; `scripts/e2e-local.sh down` stops it and
+deletes the data. Failed runs leave traces in `e2e/test-results` (open one with
+`pnpm --filter @tracker/e2e exec playwright show-trace <trace.zip>`); local runs also write an
+HTML report to `e2e/playwright-report`. Tests run in en-GB with the Europe/London time zone.
 
 ## Database
 
