@@ -64,6 +64,11 @@ export function toWall(zone: IANAZone, instantMs: number): number {
   return instantMs + zone.offset(instantMs) * MS_PER_MINUTE;
 }
 
+/** Milliseconds after local midnight at `instantMs` in `zone`. */
+export function timeOfDayOf(zone: IANAZone, instantMs: number): number {
+  return ((toWall(zone, instantMs) % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY;
+}
+
 /**
  * The instant at which `zone`'s clocks show `wallMs`. Deterministic at DST changes:
  * - a time that does not exist (spring-forward gap) moves forward by the length of the gap,

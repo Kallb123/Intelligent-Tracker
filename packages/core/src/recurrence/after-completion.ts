@@ -3,10 +3,9 @@ import {
   assertValidInstant,
   fromWall,
   localDateOf,
-  MS_PER_DAY,
   parseLocalDate,
   resolveZone,
-  toWall,
+  timeOfDayOf,
 } from './calendar.js';
 import { assertInteger } from './errors.js';
 import { MAX_INTERVAL_DAYS } from './schedule.js';
@@ -33,6 +32,6 @@ export function nextAfterCompletion(input: NextAfterCompletionInput): Due {
   const previous = input.previousDue;
   if (previous.allDay) return { allDay: true, date };
   assertValidInstant(previous.at, 'previousDue');
-  const timeOfDay = ((toWall(zone, previous.at.getTime()) % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY;
+  const timeOfDay = timeOfDayOf(zone, previous.at.getTime());
   return { allDay: false, at: new Date(fromWall(zone, parseLocalDate(date) + timeOfDay)) };
 }
