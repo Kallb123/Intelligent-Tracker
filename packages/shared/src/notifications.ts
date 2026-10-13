@@ -44,3 +44,25 @@ export const reminderPayloadSchema = z.object({
 
 export type ReminderPayload = z.infer<typeof reminderPayloadSchema>;
 
+/** One in-app notification as the api serves it (`GET /api/notifications`). */
+export const notificationSchema = z.object({
+  id: z.uuid(),
+  createdAt: z.iso.datetime({ offset: true }),
+  /** When the member read it; `null` while unread. */
+  readAt: z.iso.datetime({ offset: true }).nullable(),
+  payload: reminderPayloadSchema,
+});
+
+export const notificationListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const notificationsResponseSchema = z.object({
+  /** The caller's newest sent in-app notifications, newest first. */
+  items: z.array(notificationSchema),
+  /** All unread ones, not only those in `items`. */
+  unreadCount: z.number().int().nonnegative(),
+});
+
+export type NotificationDto = z.infer<typeof notificationSchema>;
+export type NotificationsResponse = z.infer<typeof notificationsResponseSchema>;

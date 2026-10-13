@@ -165,6 +165,9 @@ h2 {
 
 .user {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .nav a {
@@ -360,6 +363,61 @@ h2 {
 
 .overdue-text {
   color: var(--p-red-500);
+}
+
+/* Notification bell */
+
+.bell-panel {
+  width: min(22rem, calc(100vw - 2rem));
+}
+
+.bell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.bell-empty {
+  margin: 0.5rem 0;
+}
+
+.bell-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 60dvh;
+  overflow-y: auto;
+}
+
+.bell-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.6rem 0.5rem;
+  border: 0;
+  border-bottom: 1px solid var(--p-content-border-color);
+  background: none;
+  color: var(--p-text-color);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.bell-item:hover,
+.bell-item:focus-visible {
+  background: var(--p-content-hover-background);
+}
+
+.bell-item-unread .bell-item-text {
+  font-weight: 600;
+}
+
+.bell-item-time {
+  font-size: 0.85rem;
 }
 
 /* Occurrence lists (Today, Coming up) */

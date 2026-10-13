@@ -32,6 +32,7 @@ export function registerOpenApi(app: FastifyInstance): void {
         { name: 'Links', description: 'One-time invite and password-reset links.' },
         { name: 'Tasks', description: 'Task definitions (the recurring series).' },
         { name: 'Occurrences', description: 'Dated instances of tasks, and acting on them.' },
+        { name: 'Notifications', description: 'In-app notifications (the bell).' },
       ],
       components: {
         securitySchemes: {
