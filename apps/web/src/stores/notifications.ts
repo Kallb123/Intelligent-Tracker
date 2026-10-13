@@ -15,14 +15,20 @@ export const useNotificationsStore = defineStore('notifications', () => {
   const unreadCount = ref(0);
   const error = ref('');
   let timer: ReturnType<typeof setInterval> | undefined;
+  // Bumped by `reset`, so a load that was in flight for the previous member is dropped when it
+  // lands instead of writing their notifications back.
+  let generation = 0;
 
   async function load(): Promise<void> {
+    const started = generation;
     try {
       const { data } = await getApi().GET('/api/notifications');
+      if (started !== generation) return;
       items.value = data?.items ?? [];
       unreadCount.value = data?.unreadCount ?? 0;
       error.value = '';
     } catch (err) {
+      if (started !== generation) return;
       // Keep what is shown; the next poll tries again.
       error.value = describeError(err);
     }
@@ -75,6 +81,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
 
   /** Stops polling and forgets everything, so the next member never sees these. */
   function reset(): void {
+    generation += 1;
     stopPolling();
     items.value = [];
     unreadCount.value = 0;

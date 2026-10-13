@@ -3,7 +3,9 @@ import { z } from 'zod';
 /**
  * Reminders and the notification outbox, shared by the worker (which writes them), the api (which
  * serves in-app notifications) and the web app. The enums mirror the Postgres enums in
- * `@tracker/db` exactly; `REMINDER_KINDS` also matches `ReminderKind` in `@tracker/core`.
+ * `@tracker/db` exactly. `REMINDER_KINDS` is the single source of the reminder kinds: `@tracker/core`'s
+ * planner takes `ReminderKind` from here, and its order is the order the planner returns reminders
+ * of the same instant in.
  */
 
 export const REMINDER_KINDS = ['heads_up', 'milestone', 'nudge', 'due', 'overdue'] as const;

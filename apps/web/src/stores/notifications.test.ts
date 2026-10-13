@@ -133,6 +133,53 @@ describe('notifications store', () => {
     expect(server.callsTo(LIST)).toHaveLength(2);
   });
 
+  it('drops a load that was in flight when the store was reset', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { notifications: n } = store({
+      [LIST]: async () => {
+        await gate;
+        return json({ items: [notification('previous-member')], unreadCount: 1 });
+      },
+    });
+
+    const inFlight = n.load();
+    n.reset();
+    release();
+    await inFlight;
+
+    expect(n.items).toEqual([]);
+    expect(n.unreadCount).toBe(0);
+  });
+
+  it('drops a failed load that was in flight when the store was reset', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { notifications: n } = store({
+      [LIST]: async () => {
+        await gate;
+        return apiError(500, 'internal_error', 'Something went wrong');
+      },
+    });
+
+    const inFlight = n.load();
+    n.reset();
+    release();
+    await inFlight;
+
+    expect(n.error).toBe('');
+  });
+
+  it('loads again normally after a reset', async () => {
+    const { notifications: n } = store({ [LIST]: list([notification('a')]) });
+    await n.load();
+    n.reset();
+
+    await n.load();
+
+    expect(n.items.map((i) => i.id)).toEqual(['a']);
+  });
+
   describe('polling', () => {
     const setHidden = (hidden: boolean) =>
       Object.defineProperty(document, 'hidden', { value: hidden, configurable: true });

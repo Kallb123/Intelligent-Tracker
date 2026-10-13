@@ -81,6 +81,7 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       cancelled: 0,
       planFailures: [],
       delivered: 0,
+      pruned: 0,
     });
     const rows = await occurrences();
     expect(rows).toHaveLength(13);
@@ -106,6 +107,7 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       cancelled: 0,
       planFailures: [],
       delivered: 0,
+      pruned: 0,
     });
     expect(await occurrences()).toEqual(before);
   });
@@ -497,6 +499,67 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
         expect.objectContaining({ occurrenceId: bad?.id }),
         'could not plan reminders',
       );
+    });
+
+    it('reports an occurrence it cannot plan once, even when it has a reminder that fell due', async () => {
+      const broken = await newTask({ title: 'Broken' });
+      await handle.db
+        .update(household)
+        .set({ timezone: 'Not/AZone' })
+        .where(eq(household.id, broken.householdId));
+      const [bad] = await handle.db
+        .insert(occurrence)
+        .values({ taskId: broken.id, dueDate: '2026-07-20', status: 'active' })
+        .returning();
+      await handle.db.insert(reminder).values({
+        occurrenceId: bad?.id ?? '',
+        key: 'heads_up',
+        kind: 'heads_up',
+        fireAt: HEADS_UP_TICK,
+      });
+
+      const result = await tick(HEADS_UP_TICK);
+
+      if (result.skipped) throw new Error('unreachable');
+      expect(result.queued).toBe(0);
+      expect(result.planFailures).toEqual([
+        expect.objectContaining({ occurrenceId: bad?.id, taskId: broken.id }),
+      ]);
+      expect((await reminders()).find((r) => r.key === 'heads_up')?.status).toBe('planned');
+    });
+
+    it('does not send a due reminder the occurrence was reassigned away from since the last tick', async () => {
+      const { people } = await setup({ assignees: 1, members: 2 });
+      await tick(NOW);
+      const o = await onlyOccurrence();
+      const other = people[1];
+      await handle.db
+        .update(occurrence)
+        .set({ assigneeId: other?.id ?? null })
+        .where(eq(occurrence.id, o.id));
+
+      const result = await tick(HEADS_UP_TICK);
+
+      expect(result).toMatchObject({ queued: 0, delivered: 0 });
+      expect(await notifications()).toEqual([]);
+      // The re-plan in the same tick addressed what is left to the new assignee.
+      expect((await planned()).every((r) => r.memberId === other?.id)).toBe(true);
+    });
+
+    it('prunes old notifications after delivering', async () => {
+      await setup({ assignees: 1 });
+      await tick(NOW);
+      await tick(HEADS_UP_TICK);
+      const [n] = await notifications();
+      expect(n?.sentAt).not.toBeNull();
+      // created_at is the database clock; put it where the tests' clock is.
+      await handle.db.update(notification).set({ createdAt: HEADS_UP_TICK });
+
+      const long = new Date(HEADS_UP_TICK.getTime() + 91 * 24 * 60 * 60 * 1000);
+      const result = await tick(long);
+
+      expect(result).toMatchObject({ skipped: false, pruned: 1 });
+      expect(await notifications()).toEqual([]);
     });
 
     describe('heartbeat', () => {

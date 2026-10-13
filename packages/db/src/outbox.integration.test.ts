@@ -3,7 +3,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { createDb, type Database, type DbHandle } from './client.js';
 import { recordHeartbeat } from './heartbeat.js';
 import { runMigrations } from './migrate.js';
-import { deliverOutbox, outboxBackoffMs, type OutboxHandler } from './outbox.js';
+import {
+  deliverOutbox,
+  OLD_NOTIFICATION_RETENTION_MS,
+  outboxBackoffMs,
+  pruneNotifications,
+  READ_NOTIFICATION_RETENTION_MS,
+  type OutboxHandler,
+} from './outbox.js';
 import {
   household,
   member,
@@ -334,6 +341,74 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
       expect([...delivered].sort()).toEqual([...ids].sort());
       const rows = await db.select().from(notification).orderBy(asc(notification.id));
       expect(rows.every((n) => n.sentAt !== null && n.attempts === 0)).toBe(true);
+    });
+  });
+
+  describe('pruneNotifications', () => {
+    const ago = (ms: number, extra = 0) => new Date(NOW.getTime() - ms + extra);
+    const remaining = async () =>
+      (await db.select({ id: notification.id }).from(notification)).map((n) => n.id).sort();
+
+    it('deletes in-app notifications read more than 30 days ago, and keeps newer reads', async () => {
+      const old = await queue({ sentAt: NOW, readAt: ago(READ_NOTIFICATION_RETENTION_MS, -1) });
+      const edge = await queue({ sentAt: NOW, readAt: ago(READ_NOTIFICATION_RETENTION_MS) });
+      const recent = await queue({ sentAt: NOW, readAt: ago(24 * 60 * 60 * 1000) });
+      const unread = await queue({ sentAt: NOW });
+
+      expect(await pruneNotifications(db, { now: NOW })).toBe(1);
+
+      expect(await remaining()).toEqual([edge.id, recent.id, unread.id].sort());
+      expect(await remaining()).not.toContain(old.id);
+    });
+
+    it('deletes delivered or failed notifications more than 90 days old, read or not', async () => {
+      const oldCreated = ago(OLD_NOTIFICATION_RETENTION_MS, -1);
+      const sent = await queue({ sentAt: NOW, createdAt: oldCreated });
+      const failed = await queue({ failedAt: NOW, createdAt: oldCreated });
+      const youngSent = await queue({ sentAt: NOW, createdAt: ago(OLD_NOTIFICATION_RETENTION_MS) });
+      const youngFailed = await queue({ failedAt: NOW, createdAt: ago(24 * 60 * 60 * 1000) });
+      // Not an in-app notification, so only the 90 day rule applies to it.
+      const telegram = await queue({
+        channel: 'telegram_group',
+        memberId: null,
+        sentAt: NOW,
+        createdAt: oldCreated,
+      });
+      const oldTelegramRead = await queue({
+        channel: 'telegram_group',
+        memberId: null,
+        sentAt: NOW,
+        readAt: ago(READ_NOTIFICATION_RETENTION_MS, -1),
+      });
+
+      expect(await pruneNotifications(db, { now: NOW })).toBe(3);
+
+      expect(await remaining()).toEqual([youngSent.id, youngFailed.id, oldTelegramRead.id].sort());
+      expect(await remaining()).not.toContain(sent.id);
+      expect(await remaining()).not.toContain(failed.id);
+      expect(await remaining()).not.toContain(telegram.id);
+    });
+
+    it('never deletes a notification that is still waiting for delivery', async () => {
+      const ancient = new Date(NOW.getTime() - 2 * OLD_NOTIFICATION_RETENTION_MS);
+      const pending = await queue({ createdAt: ancient });
+      // Not a state the api produces (it only reads sent ones), but pending is still safe.
+      const pendingRead = await queue({
+        createdAt: ancient,
+        readAt: ago(READ_NOTIFICATION_RETENTION_MS, -1),
+      });
+      const retrying = await queue({ createdAt: ancient, attempts: 3, lastError: 'boom' });
+
+      expect(await pruneNotifications(db, { now: NOW })).toBe(0);
+
+      expect(await remaining()).toEqual([pending.id, pendingRead.id, retrying.id].sort());
+    });
+
+    it('does nothing on an empty table or when everything is recent', async () => {
+      expect(await pruneNotifications(db, { now: NOW })).toBe(0);
+      await queue({ sentAt: NOW });
+      expect(await pruneNotifications(db, { now: NOW })).toBe(0);
+      expect(await remaining()).toHaveLength(1);
     });
   });
 

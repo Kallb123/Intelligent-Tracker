@@ -175,9 +175,14 @@ task + due) and serialised across workers by a Postgres advisory lock.
 The same tick keeps reminders in step with the planner: it queues the `planned` reminders that are
 due as `in_app` rows in the notification outbox (one per recipient, deduplicated by `dedupe_key`;
 reminders more than a day late are cancelled instead), then re-plans every open occurrence so
-edits, snoozes and completions take effect within a minute. After the transaction commits it
-delivers the outbox (retries with exponential backoff, gives up after 8 attempts) and records the
-worker's `service_heartbeat`. Telegram delivery arrives with the bot.
+edits, snoozes and completions take effect within a minute. A due reminder is only sent if the
+planner, run against the occurrence as it is now, still has it at that time for that member, so an
+edit made since the last tick (reassignment, away, snooze, lead time, slot) never sends a stale
+one. It goes to the occurrence's assignee, or to every household member when it has none. After the
+transaction commits it delivers the outbox (retries with exponential backoff, gives up after 8
+attempts), deletes notifications past their retention (in-app ones read over 30 days ago, and
+delivered or failed ones over 90 days old; pending ones never) and records the worker's
+`service_heartbeat`. Telegram delivery arrives with the bot.
 
 The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps/api/openapi.json`
 (the web app's typed client is generated from it). After changing a route, run `pnpm openapi`;

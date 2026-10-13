@@ -2,6 +2,7 @@ import {
   activateDue,
   deliverOutbox,
   materialiseAll,
+  pruneNotifications,
   queueDueReminders,
   recordHeartbeat,
   replanReminders,
@@ -47,7 +48,14 @@ export type TickResult =
       planFailures: ReminderPlanFailure[];
       /** Outbox notifications delivered after the transaction committed. */
       delivered: number;
+      /** Old notifications deleted by the retention sweep (see `pruneNotifications`). */
+      pruned: number;
     };
+
+/** An occurrence the planner rejects fails in both the queue check and the re-plan: report it once. */
+function uniqueFailures(failures: ReminderPlanFailure[]): ReminderPlanFailure[] {
+  return [...new Map(failures.map((f) => [f.occurrenceId, f])).values()];
+}
 
 /**
  * How each outbox channel is delivered. An in-app notification is the outbox row itself, so
@@ -67,7 +75,8 @@ const HANDLERS: Record<'in_app', OutboxHandler> = { in_app: async () => {} };
  *
  * Queuing and marking the reminders sent commit together, so a crash loses and duplicates
  * nothing. After the commit the tick records the worker's heartbeat and delivers the outbox
- * (a separate step: delivery is retried with backoff and must not hold the tick lock). The
+ * (a separate step: delivery is retried with backoff and must not hold the tick lock), then
+ * deletes notifications past their retention (`pruneNotifications`). The
  * heartbeat is also recorded when another worker holds the lock.
  * Idempotent. A task that cannot be materialised, or an occurrence that cannot be planned, is
  * logged and left to the next tick.
@@ -95,8 +104,9 @@ export async function runTick(
       queued: queued.queued,
       planned: replanned.planned,
       cancelled: queued.cancelled + replanned.cancelled,
-      planFailures: replanned.failures,
+      planFailures: uniqueFailures([...queued.failures, ...replanned.failures]),
       delivered: 0,
+      pruned: 0,
     };
   });
   await recordHeartbeat(db, WORKER_SERVICE, now);
@@ -115,5 +125,8 @@ export async function runTick(
       failure.gaveUp ? 'gave up delivering notification' : 'could not deliver notification',
     );
   }
-  return { ...result, delivered: delivery.delivered };
+  // Retention sweep, last: it never touches pending rows, so it cannot take away what was just
+  // queued or delivered.
+  const pruned = await pruneNotifications(db, { now });
+  return { ...result, delivered: delivery.delivered, pruned };
 }

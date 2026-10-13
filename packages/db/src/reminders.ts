@@ -29,7 +29,7 @@ import {
   task,
   taskMilestone,
 } from './schema/index.js';
-import type { NewNotification, NewReminder, ReminderData } from './schema/index.js';
+import type { NewNotification, NewReminder, Reminder, ReminderData } from './schema/index.js';
 
 /*
  * Reminders in the database. The pure planner (core's `planReminders`) says which reminders an
@@ -38,7 +38,9 @@ import type { NewNotification, NewReminder, ReminderData } from './schema/index.
  *   1. `queueDueReminders`: `planned` reminders whose time has come become `in_app` rows in the
  *      outbox (`notification`) and are marked `sent`. This runs first, because the planner
  *      drops reminders at or before `now`, so the persisted `planned` rows are the record of
- *      what is due.
+ *      what is due. A row may be stale (the occurrence was edited since the last tick), so each
+ *      is checked against the planner as it would have planned it just before it fell due, and
+ *      only sent if the plan still has it.
  *   2. `replanReminders`: every open occurrence is planned again and its `planned` rows are
  *      brought in line (inserted, moved, cancelled). Any edit, snooze, start, reassignment, away
  *      change or completion is therefore picked up by the next tick, and the overdue horizon
@@ -72,6 +74,11 @@ export interface QueueRemindersResult {
   notifications: number;
   /** Reminders cancelled because they were more than `MISSED_REMINDER_GRACE_MS` overdue. */
   cancelled: number;
+  /**
+   * Occurrences the planner rejected while checking their due reminders; those reminders were
+   * left as they were.
+   */
+  failures: ReminderPlanFailure[];
 }
 
 /** The dedupe key of the in-app notification of a reminder for one member. */
@@ -81,10 +88,22 @@ export function inAppDedupeKey(reminderId: string, memberId: string): string {
 
 /**
  * Queues the `planned` reminders that are due (`fire_at <= now`) in the outbox, in the same
- * transaction as marking them `sent`. A reminder goes to its `member_id`, or to every member of
- * the household when that is null. Reminders more than `MISSED_REMINDER_GRACE_MS` late are
+ * transaction as marking them `sent`. Reminders more than `MISSED_REMINDER_GRACE_MS` late are
  * cancelled instead. Reminders of an occurrence that is closed, snoozed past `now`, undated or
  * of an archived task are left alone for `replanReminders` to cancel or move.
+ *
+ * A `planned` row can be out of date: the occurrence may have been reassigned, its assignee put
+ * away, snoozed or its task edited since the last re-plan, and this runs before the re-plan. So
+ * each fresh due row is checked against the current state by planning its occurrence again with
+ * `now` one millisecond before the row's `fire_at` (when the planner would still have listed
+ * it), and is queued only if that plan holds the same key at the same time for the same member.
+ * Any other row is left `planned` for `replanReminders`, which cancels it (the planner never
+ * plans at or before `now`) or moves it.
+ *
+ * A reminder goes to the occurrence's current assignee alone, or to every member of the
+ * household when it has none. That includes an occurrence whose assignee was deleted: the
+ * foreign keys set both `occurrence.assignee_id` and `reminder.member_id` to null, which is
+ * exactly an unassigned occurrence, and the planner addresses those to the whole household.
  *
  * The due rows are locked (`FOR UPDATE`), so concurrent callers queue each reminder once, and
  * the outbox's `dedupe_key` is a second guard.
@@ -94,15 +113,9 @@ export async function queueDueReminders(
   options: { now: Date },
 ): Promise<QueueRemindersResult> {
   const { now } = options;
-  const rows = await db
-    .select({
-      reminder,
-      dueDate: occurrence.dueDate,
-      dueAt: occurrence.dueAt,
-      taskId: task.id,
-      taskTitle: task.title,
-      householdId: task.householdId,
-    })
+  const result: QueueRemindersResult = { queued: 0, notifications: 0, cancelled: 0, failures: [] };
+  const due = await db
+    .select({ reminder })
     .from(reminder)
     .innerJoin(occurrence, eq(occurrence.id, reminder.occurrenceId))
     .innerJoin(task, eq(task.id, occurrence.taskId))
@@ -118,15 +131,56 @@ export async function queueDueReminders(
     )
     .orderBy(asc(reminder.fireAt), asc(reminder.id))
     .for('update', { of: reminder });
-  if (rows.length === 0) return { queued: 0, notifications: 0, cancelled: 0 };
+  if (due.length === 0) return result;
 
   const staleBefore = now.getTime() - MISSED_REMINDER_GRACE_MS;
-  const stale = rows.filter((r) => r.reminder.fireAt.getTime() < staleBefore);
-  const fresh = rows.filter((r) => r.reminder.fireAt.getTime() >= staleBefore);
+  const stale = due.filter((r) => r.reminder.fireAt.getTime() < staleBefore);
+  const fresh = due.filter((r) => r.reminder.fireAt.getTime() >= staleBefore);
+
+  // The current state of every occurrence with a fresh due reminder, for the check below.
+  const contexts = await loadPlanContexts(db, [
+    ...new Set(fresh.map((r) => r.reminder.occurrenceId)),
+  ]);
+  const failed = new Set<string>();
+  // occurrence id -> key -> the planner's reminder, as planned just before the row fell due.
+  const plans = new Map<string, Map<string, PlannedReminder>>();
+  const sendable: { reminder: Reminder; context: PlanContext }[] = [];
+  for (const { reminder: rem } of fresh) {
+    const context = contexts.get(rem.occurrenceId);
+    // The row was locked above, but the occurrence may have been deleted meanwhile.
+    if (!context || failed.has(rem.occurrenceId)) continue;
+    // Planned once per distinct `fire_at`: occurrences usually have one due reminder at a time.
+    const planKey = `${rem.occurrenceId}@${rem.fireAt.getTime()}`;
+    let plan = plans.get(planKey);
+    if (!plan) {
+      try {
+        plan = new Map(planFor(context, new Date(rem.fireAt.getTime() - 1)).map((p) => [p.key, p]));
+      } catch (error) {
+        if (!(error instanceof RecurrenceError)) throw error;
+        failed.add(rem.occurrenceId);
+        result.failures.push(planFailure(context, error));
+        continue;
+      }
+      plans.set(planKey, plan);
+    }
+    const wanted = plan.get(rem.key);
+    if (
+      wanted &&
+      wanted.fireAt.getTime() === rem.fireAt.getTime() &&
+      wanted.memberId === rem.memberId &&
+      wanted.memberId === context.occurrence.assigneeId
+    ) {
+      sendable.push({ reminder: rem, context });
+    }
+  }
 
   // Everyone in the households whose unassigned reminders are due.
   const broadcastHouseholds = [
-    ...new Set(fresh.filter((r) => r.reminder.memberId === null).map((r) => r.householdId)),
+    ...new Set(
+      sendable
+        .filter((r) => r.context.occurrence.assigneeId === null)
+        .map((r) => r.context.task.householdId),
+    ),
   ];
   const membersByHousehold = new Map<string, string[]>();
   if (broadcastHouseholds.length > 0) {
@@ -144,27 +198,27 @@ export async function queueDueReminders(
   }
 
   const outbox: NewNotification[] = [];
-  for (const r of fresh) {
-    const { reminder: rem } = r;
+  for (const { reminder: rem, context } of sendable) {
+    const { occurrence: occ, task: t } = context;
     const payload: ReminderPayload = {
       type: 'reminder',
       kind: rem.kind,
-      taskId: r.taskId,
-      occurrenceId: rem.occurrenceId,
-      taskTitle: r.taskTitle,
-      dueDate: r.dueDate,
-      dueAt: r.dueAt?.toISOString() ?? null,
+      taskId: t.id,
+      occurrenceId: occ.id,
+      taskTitle: t.title,
+      dueDate: occ.dueDate,
+      dueAt: occ.dueAt?.toISOString() ?? null,
       fireAt: rem.fireAt.toISOString(),
-      assigneeId: rem.memberId,
+      assigneeId: occ.assigneeId,
       ...(rem.data.milestoneTitle !== undefined ? { milestoneTitle: rem.data.milestoneTitle } : {}),
       ...(rem.data.overdueDays !== undefined ? { overdueDays: rem.data.overdueDays } : {}),
     };
-    const recipients = rem.memberId
-      ? [rem.memberId]
-      : (membersByHousehold.get(r.householdId) ?? []);
+    const recipients = occ.assigneeId
+      ? [occ.assigneeId]
+      : (membersByHousehold.get(t.householdId) ?? []);
     for (const memberId of recipients) {
       outbox.push({
-        householdId: r.householdId,
+        householdId: t.householdId,
         memberId,
         reminderId: rem.id,
         channel: 'in_app',
@@ -175,16 +229,15 @@ export async function queueDueReminders(
     }
   }
 
-  let notifications = 0;
   for (const batch of chunks(outbox)) {
     const inserted = await db
       .insert(notification)
       .values(batch)
       .onConflictDoNothing({ target: notification.dedupeKey })
       .returning({ id: notification.id });
-    notifications += inserted.length;
+    result.notifications += inserted.length;
   }
-  for (const batch of chunks(fresh.map((r) => r.reminder.id))) {
+  for (const batch of chunks(sendable.map((r) => r.reminder.id))) {
     await db
       .update(reminder)
       .set({ status: 'sent', sentAt: now })
@@ -193,7 +246,9 @@ export async function queueDueReminders(
   for (const batch of chunks(stale.map((r) => r.reminder.id))) {
     await db.update(reminder).set({ status: 'cancelled' }).where(inArray(reminder.id, batch));
   }
-  return { queued: fresh.length, notifications, cancelled: stale.length };
+  result.queued = sendable.length;
+  result.cancelled = stale.length;
+  return result;
 }
 
 export interface ReminderPlanFailure {
@@ -213,6 +268,106 @@ export interface ReplanRemindersResult {
   cancelled: number;
   /** Occurrences the planner rejected; their reminders were left as they were. */
   failures: ReminderPlanFailure[];
+}
+
+/** An open occurrence with everything `planReminders` needs to plan it. */
+interface PlanContext {
+  occurrence: typeof occurrence.$inferSelect;
+  task: typeof task.$inferSelect;
+  household: typeof household.$inferSelect;
+  /** The assignee's away date; null when unassigned or not away. */
+  awayUntil: string | null;
+  milestones: PlanRemindersInput['task']['milestones'][number][];
+}
+
+/**
+ * Loads the planning context of the given open occurrences of non-archived tasks, or of all of
+ * them when no ids are given: three queries however many there are (per chunk of ids). Used by
+ * both `replanReminders` and `queueDueReminders`, so the two plan from the same state.
+ */
+async function loadPlanContexts(
+  db: DbOrTransaction,
+  occurrenceIds?: readonly string[],
+): Promise<Map<string, PlanContext>> {
+  const contexts = new Map<string, PlanContext>();
+  for (const ids of occurrenceIds ? chunks(occurrenceIds) : [undefined]) {
+    const rows = await db
+      .select({ occurrence, task, household, awayUntil: member.awayUntil })
+      .from(occurrence)
+      .innerJoin(task, eq(task.id, occurrence.taskId))
+      .innerJoin(household, eq(household.id, task.householdId))
+      .leftJoin(member, eq(member.id, occurrence.assigneeId))
+      .where(
+        and(
+          inArray(occurrence.status, OPEN),
+          isNull(task.archivedAt),
+          ids ? inArray(occurrence.id, ids) : undefined,
+        ),
+      )
+      .orderBy(asc(occurrence.id));
+    if (rows.length === 0) continue;
+
+    const taskIds = [...new Set(rows.map((r) => r.task.id))];
+    const milestoneRows = await db
+      .select()
+      .from(taskMilestone)
+      .where(inArray(taskMilestone.taskId, taskIds))
+      .orderBy(asc(taskMilestone.position));
+    const milestonesByTask = new Map<string, PlanContext['milestones']>();
+    for (const m of milestoneRows) {
+      const list = milestonesByTask.get(m.taskId) ?? [];
+      list.push({ id: m.id, title: m.title, offsetDaysBeforeDue: m.offsetDaysBeforeDue });
+      milestonesByTask.set(m.taskId, list);
+    }
+    for (const row of rows) {
+      contexts.set(row.occurrence.id, {
+        occurrence: row.occurrence,
+        task: row.task,
+        household: row.household,
+        awayUntil: row.awayUntil,
+        milestones: milestonesByTask.get(row.task.id) ?? [],
+      });
+    }
+  }
+  return contexts;
+}
+
+/** The reminders the planner wants for one occurrence at `now`. May throw `RecurrenceError`. */
+function planFor(context: PlanContext, now: Date): PlannedReminder[] {
+  const { occurrence: occ, task: t, household: h } = context;
+  return planReminders({
+    occurrence: {
+      due: dueOf(occ),
+      status: occ.status,
+      assigneeId: occ.assigneeId,
+      snoozedUntil: occ.snoozedUntil,
+      completedMilestoneIds: completedMilestoneIds(occ.milestoneProgress),
+    },
+    task: {
+      leadTimeDays: t.leadTimeDays,
+      reminderProfile: t.reminderProfile,
+      reminderSlot: t.reminderSlot,
+      reminderCustomTime: t.reminderCustomTime,
+      milestones: context.milestones,
+    },
+    assignee: occ.assigneeId === null ? null : { awayUntil: context.awayUntil },
+    household: {
+      timezone: h.timezone,
+      morningSlot: h.morningSlot,
+      eveningSlot: h.eveningSlot,
+      quietHours: { start: h.quietHoursStart, end: h.quietHoursEnd },
+    },
+    now,
+  });
+}
+
+function planFailure(context: PlanContext, error: RecurrenceError): ReminderPlanFailure {
+  return {
+    occurrenceId: context.occurrence.id,
+    taskId: context.task.id,
+    code: error.code,
+    message: error.message,
+  };
 }
 
 /**
@@ -304,33 +459,8 @@ export async function replanReminders(
     .returning({ id: reminder.id });
   result.cancelled += closed.length;
 
-  const open = await db
-    .select({
-      occurrence,
-      task,
-      household,
-      awayUntil: member.awayUntil,
-    })
-    .from(occurrence)
-    .innerJoin(task, eq(task.id, occurrence.taskId))
-    .innerJoin(household, eq(household.id, task.householdId))
-    .leftJoin(member, eq(member.id, occurrence.assigneeId))
-    .where(and(inArray(occurrence.status, OPEN), isNull(task.archivedAt)))
-    .orderBy(asc(occurrence.id));
-  if (open.length === 0) return result;
-
-  const taskIds = [...new Set(open.map((r) => r.task.id))];
-  const milestoneRows = await db
-    .select()
-    .from(taskMilestone)
-    .where(inArray(taskMilestone.taskId, taskIds))
-    .orderBy(asc(taskMilestone.position));
-  const milestonesByTask = new Map<string, PlanRemindersInput['task']['milestones'][number][]>();
-  for (const m of milestoneRows) {
-    const list = milestonesByTask.get(m.taskId) ?? [];
-    list.push({ id: m.id, title: m.title, offsetDaysBeforeDue: m.offsetDaysBeforeDue });
-    milestonesByTask.set(m.taskId, list);
-  }
+  const contexts = await loadPlanContexts(db);
+  if (contexts.size === 0) return result;
 
   const existingRows = await db
     .select({ reminder })
@@ -348,42 +478,14 @@ export async function replanReminders(
 
   const writes: NewReminder[] = [];
   const obsolete: string[] = [];
-  for (const row of open) {
-    const { occurrence: occ, task: t, household: h } = row;
+  for (const context of contexts.values()) {
+    const { occurrence: occ } = context;
     let plan: PlannedReminder[];
     try {
-      plan = planReminders({
-        occurrence: {
-          due: dueOf(occ),
-          status: occ.status,
-          assigneeId: occ.assigneeId,
-          snoozedUntil: occ.snoozedUntil,
-          completedMilestoneIds: completedMilestoneIds(occ.milestoneProgress),
-        },
-        task: {
-          leadTimeDays: t.leadTimeDays,
-          reminderProfile: t.reminderProfile,
-          reminderSlot: t.reminderSlot,
-          reminderCustomTime: t.reminderCustomTime,
-          milestones: milestonesByTask.get(t.id) ?? [],
-        },
-        assignee: occ.assigneeId === null ? null : { awayUntil: row.awayUntil },
-        household: {
-          timezone: h.timezone,
-          morningSlot: h.morningSlot,
-          eveningSlot: h.eveningSlot,
-          quietHours: { start: h.quietHoursStart, end: h.quietHoursEnd },
-        },
-        now,
-      });
+      plan = planFor(context, now);
     } catch (error) {
       if (!(error instanceof RecurrenceError)) throw error;
-      result.failures.push({
-        occurrenceId: occ.id,
-        taskId: t.id,
-        code: error.code,
-        message: error.message,
-      });
+      result.failures.push(planFailure(context, error));
       continue;
     }
     result.occurrences += 1;

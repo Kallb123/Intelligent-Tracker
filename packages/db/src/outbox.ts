@@ -1,6 +1,6 @@
 import type { NotificationChannel } from '@tracker/shared';
-import { and, asc, eq, inArray, isNull, lte } from 'drizzle-orm';
-import type { Database } from './client.js';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or } from 'drizzle-orm';
+import type { Database, DbOrTransaction } from './client.js';
 import { notification, type Notification } from './schema/index.js';
 
 /*
@@ -140,4 +140,47 @@ export async function deliverOutbox(
     if (done) break;
   }
   return result;
+}
+
+/** An in-app notification is deleted this long after the member read it. */
+export const READ_NOTIFICATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Any notification that was delivered (`sent_at`) or given up on (`failed_at`) is deleted this
+ * long after it was queued, read or not. Pending ones are never deleted.
+ */
+export const OLD_NOTIFICATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Deletes notifications that are no longer needed, so the table (and the bell's queries) stay
+ * small: delivered in-app ones read more than `READ_NOTIFICATION_RETENTION_MS` ago, and any that were
+ * delivered or failed and are more than `OLD_NOTIFICATION_RETENTION_MS` old. A notification still
+ * waiting for delivery (neither `sent_at` nor `failed_at`) is never deleted, however old. The
+ * reminder that produced it stays `sent`, so deleting the row cannot make it be queued again.
+ * Returns how many were deleted.
+ */
+export async function pruneNotifications(
+  db: DbOrTransaction,
+  options: { now: Date },
+): Promise<number> {
+  const { now } = options;
+  const readBefore = new Date(now.getTime() - READ_NOTIFICATION_RETENTION_MS);
+  const createdBefore = new Date(now.getTime() - OLD_NOTIFICATION_RETENTION_MS);
+  const deleted = await db
+    .delete(notification)
+    .where(
+      or(
+        and(
+          eq(notification.channel, 'in_app'),
+          isNotNull(notification.sentAt),
+          isNotNull(notification.readAt),
+          lt(notification.readAt, readBefore),
+        ),
+        and(
+          lt(notification.createdAt, createdBefore),
+          or(isNotNull(notification.sentAt), isNotNull(notification.failedAt)),
+        ),
+      ),
+    )
+    .returning({ id: notification.id });
+  return deleted.length;
 }

@@ -381,7 +381,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
       const result = await queueDueReminders(db, { now: DUE_NOW });
 
-      expect(result).toEqual({ queued: 1, notifications: 1, cancelled: 0 });
+      expect(result).toEqual({ queued: 1, notifications: 1, cancelled: 0, failures: [] });
       const [rem] = await reminders();
       expect(rem).toMatchObject({ key: 'heads_up', status: 'sent', sentAt: DUE_NOW });
       const [n] = await notifications();
@@ -421,7 +421,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
       const result = await queueDueReminders(db, { now: DUE_NOW });
 
-      expect(result).toEqual({ queued: 1, notifications: 2, cancelled: 0 });
+      expect(result).toEqual({ queued: 1, notifications: 2, cancelled: 0, failures: [] });
       const rows = await notifications();
       expect(rows.map((n) => n.memberId).sort()).toEqual([a.id, b.id].sort());
       expect(rows.every((n) => n.householdId === h.id && n.payload.assigneeId === null)).toBe(true);
@@ -454,7 +454,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       const again = await queueDueReminders(db, { now: DUE_NOW });
       const later = await queueDueReminders(db, { now: at('2026-07-10T19:00:00Z') });
 
-      expect(again).toEqual({ queued: 0, notifications: 0, cancelled: 0 });
+      expect(again).toEqual({ queued: 0, notifications: 0, cancelled: 0, failures: [] });
       expect(later.queued).toBe(0);
       expect(await notifications()).toHaveLength(1);
     });
@@ -465,7 +465,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
       const result = await queueDueReminders(db, { now: at('2026-07-10T17:59:59Z') });
 
-      expect(result).toEqual({ queued: 0, notifications: 0, cancelled: 0 });
+      expect(result).toEqual({ queued: 0, notifications: 0, cancelled: 0, failures: [] });
       expect((await planned()).length).toBe(5);
     });
 
@@ -476,7 +476,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       const late = new Date(HEADS_UP_AT.getTime() + MISSED_REMINDER_GRACE_MS + 1);
       const result = await queueDueReminders(db, { now: late });
 
-      expect(result).toEqual({ queued: 0, notifications: 0, cancelled: 1 });
+      expect(result).toEqual({ queued: 0, notifications: 0, cancelled: 1, failures: [] });
       expect((await reminders()).find((r) => r.key === 'heads_up')?.status).toBe('cancelled');
       expect(await notifications()).toEqual([]);
     });
@@ -515,7 +515,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       await db.update(occurrence).set(change).where(eq(occurrence.id, o.id));
       const result = await queueDueReminders(db, { now: DUE_NOW });
 
-      expect(result).toEqual({ queued: 0, notifications: 0, cancelled: 0 });
+      expect(result).toEqual({ queued: 0, notifications: 0, cancelled: 0, failures: [] });
       expect(await notifications()).toEqual([]);
       expect((await reminders()).find((r) => r.key === 'heads_up')?.status).toBe('planned');
     });
@@ -566,6 +566,216 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       expect((await reminders())[0]?.status).toBe('cancelled');
     });
 
+    describe('a reminder made stale by an edit since the last tick', () => {
+      // The heads-up (10 July, 18:00Z) is already past when the edit is noticed.
+      const headsUp = async () => (await reminders()).find((r) => r.key === 'heads_up');
+
+      async function expectHeldBack(edit: () => Promise<unknown>, expected: Date | 'cancelled') {
+        await replanReminders(db, { now: NOW });
+        await edit();
+
+        const queued = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(queued).toEqual({ queued: 0, notifications: 0, cancelled: 0, failures: [] });
+        expect(await notifications()).toEqual([]);
+        expect((await headsUp())?.status).toBe('planned');
+
+        await replanReminders(db, { now: DUE_NOW });
+        if (expected === 'cancelled') {
+          // The planner never plans at or before now, so the missed reminder is dropped.
+          expect((await headsUp())?.status).toBe('cancelled');
+        } else {
+          expect(await headsUp()).toMatchObject({ status: 'planned', fireAt: expected });
+        }
+        expect(await queueDueReminders(db, { now: DUE_NOW })).toMatchObject({ queued: 0 });
+        expect(await notifications()).toEqual([]);
+      }
+
+      it('is not sent after a reassignment, and the new plan is for the new assignee', async () => {
+        const { h, o } = await setup();
+        const sam = await newMember(h.id, 'sam');
+
+        await expectHeldBack(
+          () => db.update(occurrence).set({ assigneeId: sam.id }).where(eq(occurrence.id, o.id)),
+          'cancelled',
+        );
+
+        const rest = await planned();
+        expect(keys(rest)).toContain('due');
+        expect(rest.every((r) => r.memberId === sam.id)).toBe(true);
+      });
+
+      it('is not sent while the assignee is away', async () => {
+        const { alex } = await setup();
+        await expectHeldBack(
+          () => db.update(member).set({ awayUntil: '2026-07-12' }).where(eq(member.id, alex.id)),
+          'cancelled',
+        );
+
+        // The hold only moves reminders still to come, so the missed heads-up is dropped and
+        // the later ones are untouched.
+        expect(keys(await planned())).not.toContain('heads_up');
+        expect(keys(await planned())).toContain('nudge:2026-07-15');
+      });
+
+      it('is not sent after a snooze that ended since it fell due', async () => {
+        const { o } = await setup();
+        // Snoozed until 18:00:20, so by DUE_NOW (18:00:30) the snooze is over, yet it held the
+        // reminder (due 18:00:00) back.
+        await expectHeldBack(
+          () =>
+            db
+              .update(occurrence)
+              .set({ snoozedUntil: at('2026-07-10T18:00:20Z') })
+              .where(eq(occurrence.id, o.id)),
+          'cancelled',
+        );
+      });
+
+      it('is not sent after the lead time changed; it moves to the new time', async () => {
+        const { t } = await setup();
+        await expectHeldBack(
+          () => db.update(task).set({ leadTimeDays: 5 }).where(eq(task.id, t.id)),
+          at('2026-07-15T18:00:00Z'),
+        );
+      });
+
+      it('is not sent after the reminder slot changed; it moves to the new time', async () => {
+        const { t } = await setup();
+        await expectHeldBack(
+          () => db.update(task).set({ reminderSlot: 'morning' }).where(eq(task.id, t.id)),
+          // 07:00 BST is already past at DUE_NOW, so the planner drops it.
+          'cancelled',
+        );
+      });
+
+      it('is not sent after the due date moved', async () => {
+        const { o } = await setup();
+        await expectHeldBack(
+          () => db.update(occurrence).set({ dueDate: '2026-07-30' }).where(eq(occurrence.id, o.id)),
+          // 10 days before 30 July is 20 July.
+          at('2026-07-20T18:00:00Z'),
+        );
+      });
+
+      it('is not sent for a milestone that was ticked off', async () => {
+        const { t, o } = await setup({ reminderProfile: 'persistent' });
+        const [m] = await db
+          .insert(taskMilestone)
+          .values({ taskId: t.id, title: 'Get quotes', offsetDaysBeforeDue: 3, position: 0 })
+          .returning();
+        if (!m) throw new Error('insert failed');
+        await replanReminders(db, { now: NOW });
+        await db
+          .update(occurrence)
+          .set({ milestoneProgress: { [m.id]: true } })
+          .where(eq(occurrence.id, o.id));
+
+        // 17 July 18:30Z: the milestone (17 July 18:00Z) is due; so is nothing fresh besides it.
+        await queueDueReminders(db, { now: at('2026-07-17T18:30:00Z') });
+
+        const rows = await notifications();
+        expect(rows.map((n) => n.payload.kind)).not.toContain('milestone');
+        expect((await reminders()).find((r) => r.key === `milestone:${m.id}`)?.status).toBe(
+          'planned',
+        );
+        await replanReminders(db, { now: at('2026-07-17T18:30:00Z') });
+        expect((await reminders()).find((r) => r.key === `milestone:${m.id}`)?.status).toBe(
+          'cancelled',
+        );
+      });
+
+      it('still sends the ones that are unchanged while holding back the stale one', async () => {
+        const { h, alex } = await setup();
+        const sam = await newMember(h.id, 'sam');
+        // A second task due the same day, assigned to sam, whose reminder is still right.
+        const mot = await newTask(h.id, { title: 'MOT' });
+        const motOcc = await newOccurrence(mot.id, { assigneeId: sam.id });
+        await replanReminders(db, { now: NOW });
+        await db.update(member).set({ awayUntil: '2026-07-12' }).where(eq(member.id, alex.id));
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        const [n] = await notifications();
+        expect(n).toMatchObject({ memberId: sam.id });
+        expect(n?.payload).toMatchObject({ occurrenceId: motOcc.id, taskTitle: 'MOT' });
+      });
+
+      it('is left alone, and reported, when the planner rejects its occurrence', async () => {
+        const broken = await newHousehold({ timezone: 'Not/AZone' });
+        const brokenTask = await newTask(broken.id, { title: 'Broken' });
+        const brokenOcc = await newOccurrence(brokenTask.id);
+        await db.insert(reminder).values({
+          occurrenceId: brokenOcc.id,
+          key: 'heads_up',
+          kind: 'heads_up',
+          fireAt: HEADS_UP_AT,
+        });
+        const { o } = await setup();
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        // The healthy occurrence is still served; the broken one is reported once and kept.
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        expect(result.failures).toEqual([
+          {
+            occurrenceId: brokenOcc.id,
+            taskId: brokenTask.id,
+            code: expect.any(String),
+            message: expect.any(String),
+          },
+        ]);
+        expect((await notifications())[0]?.payload.occurrenceId).toBe(o.id);
+        expect((await reminders()).find((r) => r.occurrenceId === brokenOcc.id)?.status).toBe(
+          'planned',
+        );
+      });
+    });
+
+    describe('recipients', () => {
+      it('goes to the whole household when the assignee was deleted, not to a stale member', async () => {
+        const { h, alex } = await setup();
+        const sam = await newMember(h.id, 'sam');
+        await replanReminders(db, { now: NOW });
+
+        // Deleting the member sets occurrence.assignee_id and reminder.member_id to null, which
+        // is an unassigned occurrence, and those are addressed to the whole household.
+        await db.delete(member).where(eq(member.id, alex.id));
+        const [occ] = await db.select().from(occurrence);
+        expect(occ?.assigneeId).toBeNull();
+        expect((await planned()).every((r) => r.memberId === null)).toBe(true);
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        const rows = await notifications();
+        expect(rows.map((n) => n.memberId)).toEqual([sam.id]);
+        expect(rows[0]?.payload.assigneeId).toBeNull();
+      });
+
+      it('goes to the assignee only, even if the row says household-wide', async () => {
+        const { h, alex } = await setup();
+        await newMember(h.id, 'sam');
+        await replanReminders(db, { now: NOW });
+        // A row out of step with its occurrence (it should be for alex).
+        await db.update(reminder).set({ memberId: null });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        // Not sent: the plan addresses it to alex. The re-plan puts it right.
+        expect(result.queued).toBe(0);
+        await replanReminders(db, { now: at('2026-07-10T17:00:00Z') });
+        expect((await planned()).every((r) => r.memberId === alex.id)).toBe(true);
+        expect(await queueDueReminders(db, { now: DUE_NOW })).toMatchObject({
+          queued: 1,
+          notifications: 1,
+        });
+        expect((await notifications()).map((n) => n.memberId)).toEqual([alex.id]);
+      });
+    });
+
     it('queues nothing for a household without members', async () => {
       const h = await newHousehold();
       const t = await newTask(h.id);
@@ -574,7 +784,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
       const result = await queueDueReminders(db, { now: DUE_NOW });
 
-      expect(result).toEqual({ queued: 1, notifications: 0, cancelled: 0 });
+      expect(result).toEqual({ queued: 1, notifications: 0, cancelled: 0, failures: [] });
     });
 
     it('re-queues nothing after a rollback, and queues everything once afterwards', async () => {
