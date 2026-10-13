@@ -305,6 +305,35 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       expect(await reminders()).toEqual(before);
     });
 
+    it('delivers a heads-up held by away mode on the day after, when the away period is over', async () => {
+      await setup({ assignees: 1 });
+      const [alex] = await handle.db.select().from(member);
+      await handle.db
+        .update(member)
+        .set({ awayUntil: '2026-07-12' })
+        .where(eq(member.id, alex?.id ?? ''));
+      const held = at('2026-07-13T18:00:00Z');
+
+      for (const now of [
+        NOW,
+        '2026-07-12T12:00:00Z',
+        '2026-07-13T00:30:00Z',
+        '2026-07-13T12:00:00Z',
+      ]) {
+        await tick(typeof now === 'string' ? at(now) : now);
+      }
+      expect((await planned()).find((r) => r.key === 'heads_up')?.fireAt).toEqual(held);
+      expect(await notifications()).toEqual([]);
+
+      const result = await tick(at('2026-07-13T18:00:30Z'));
+
+      expect(result).toMatchObject({ queued: 1, delivered: 1 });
+      expect((await notifications())[0]?.payload).toMatchObject({
+        kind: 'heads_up',
+        fireAt: held.toISOString(),
+      });
+    });
+
     describe('re-plans on an edit', () => {
       it('snooze', async () => {
         await setup({ assignees: 1 });
@@ -528,7 +557,7 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       expect((await reminders()).find((r) => r.key === 'heads_up')?.status).toBe('planned');
     });
 
-    it('does not send a due reminder the occurrence was reassigned away from since the last tick', async () => {
+    it('sends a due reminder to the new assignee when it was reassigned since the last tick', async () => {
       const { people } = await setup({ assignees: 1, members: 2 });
       await tick(NOW);
       const o = await onlyOccurrence();
@@ -540,8 +569,8 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
 
       const result = await tick(HEADS_UP_TICK);
 
-      expect(result).toMatchObject({ queued: 0, delivered: 0 });
-      expect(await notifications()).toEqual([]);
+      expect(result).toMatchObject({ queued: 1, delivered: 1 });
+      expect((await notifications()).map((n) => n.memberId)).toEqual([other?.id]);
       // The re-plan in the same tick addressed what is left to the new assignee.
       expect((await planned()).every((r) => r.memberId === other?.id)).toBe(true);
     });
@@ -559,6 +588,23 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       const result = await tick(long);
 
       expect(result).toMatchObject({ skipped: false, pruned: 1 });
+      expect(await notifications()).toEqual([]);
+    });
+
+    it('does not prune when told not to', async () => {
+      await setup({ assignees: 1 });
+      await tick(NOW);
+      await tick(HEADS_UP_TICK);
+      await handle.db.update(notification).set({ createdAt: HEADS_UP_TICK });
+      const long = new Date(HEADS_UP_TICK.getTime() + 91 * 24 * 60 * 60 * 1000);
+
+      const skipped = await runTick(handle.db, { now: long, logger, prune: false });
+
+      expect(skipped).toMatchObject({ skipped: false, pruned: 0 });
+      expect(await notifications()).toHaveLength(1);
+      // The next tick that does prune clears it.
+      const pruning = await runTick(handle.db, { now: long, logger, prune: true });
+      expect(pruning).toMatchObject({ skipped: false, pruned: 1 });
       expect(await notifications()).toEqual([]);
     });
 

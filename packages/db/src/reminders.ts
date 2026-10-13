@@ -1,7 +1,6 @@
 import {
   planReminders,
   RecurrenceError,
-  type Due,
   type PlannedReminder,
   type PlanRemindersInput,
 } from '@tracker/core';
@@ -19,7 +18,9 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import type { DbOrTransaction } from './client.js';
+import { dueOf } from './due.js';
 import {
   household,
   member,
@@ -38,13 +39,19 @@ import type { NewNotification, NewReminder, Reminder, ReminderData } from './sch
  *   1. `queueDueReminders`: `planned` reminders whose time has come become `in_app` rows in the
  *      outbox (`notification`) and are marked `sent`. This runs first, because the planner
  *      drops reminders at or before `now`, so the persisted `planned` rows are the record of
- *      what is due. A row may be stale (the occurrence was edited since the last tick), so each
- *      is checked against the planner as it would have planned it just before it fell due, and
- *      only sent if the plan still has it.
- *   2. `replanReminders`: every open occurrence is planned again and its `planned` rows are
- *      brought in line (inserted, moved, cancelled). Any edit, snooze, start, reassignment, away
- *      change or completion is therefore picked up by the next tick, and the overdue horizon
- *      keeps rolling forward.
+ *      what is due.
+ *   2. `replanReminders`: an occurrence whose planner inputs changed since it was last planned
+ *      is planned again and its rows brought in line (inserted, moved, cancelled), so any edit,
+ *      snooze, start, reassignment, away change or completion is picked up by the next tick.
+ *      One whose inputs did not change only gets the reminders it lacks (the overdue horizon
+ *      rolling forward).
+ *
+ * "Changed" is judged by a fingerprint of the planner's inputs (everything but `now`), stored on
+ * the occurrence as `reminder_plan_hash`. That is what lets a hold outlive its condition: a
+ * snooze or away period moves a reminder to a later instant, and once the snooze or away period
+ * is over a fresh plan no longer knows of the move (the original time is past, so it drops the
+ * reminder). Re-planning only on change keeps the persisted row, moved time and all, until it
+ * fires.
  *
  * Both are idempotent and safe to repeat or race: `sent` reminders are never touched or re-sent,
  * an unchanged plan writes nothing, and the outbox's unique `dedupe_key` turns a repeated queue
@@ -93,17 +100,33 @@ export function inAppDedupeKey(reminderId: string, memberId: string): string {
  * of an archived task are left alone for `replanReminders` to cancel or move.
  *
  * A `planned` row can be out of date: the occurrence may have been reassigned, its assignee put
- * away, snoozed or its task edited since the last re-plan, and this runs before the re-plan. So
- * each fresh due row is checked against the current state by planning its occurrence again with
- * `now` one millisecond before the row's `fire_at` (when the planner would still have listed
- * it), and is queued only if that plan holds the same key at the same time for the same member.
- * Any other row is left `planned` for `replanReminders`, which cancels it (the planner never
- * plans at or before `now`) or moves it.
+ * away, snoozed or its task edited since the last re-plan, and this runs before the re-plan.
+ * Whether it is shows in the occurrence's plan hash:
  *
- * A reminder goes to the occurrence's current assignee alone, or to every member of the
- * household when it has none. That includes an occurrence whose assignee was deleted: the
- * foreign keys set both `occurrence.assignee_id` and `reminder.member_id` to null, which is
- * exactly an unassigned occurrence, and the planner addresses those to the whole household.
+ * - If the hash of its current planner inputs equals the stored one, nothing changed since the
+ *   row was planned, so the row is trustworthy and is queued as it is. (Planning again now would
+ *   be wrong: a snooze or away period that has ended since no longer holds the reminder, so a
+ *   fresh plan has lost the moved reminder, which is still due.)
+ * - Otherwise the inputs changed since the last plan, and the row is checked by planning the
+ *   occurrence again with `now` one millisecond before the row's `fire_at` (when the planner
+ *   would still have listed it). It is queued only if that plan holds the same key at the same
+ *   time, so an edit that moved or dropped it holds it back. Any other row is left `planned`
+ *   for `replanReminders`, which cancels it (the planner never plans at or before `now`) or
+ *   moves it.
+ *
+ * One edge remains: inputs that changed in the same one-tick window as a hold ending. The check
+ * then plans at `fire_at - 1ms`, when the hold may already be over, and can drop a reminder that
+ * the edited occurrence would still have held; it is left to the re-plan, which cancels it. For
+ * the same reason, an edit (or starting the occurrence) while a held reminder is outstanding
+ * re-plans it from `now`, and the planner has dropped the original time that the reminder was
+ * moved from, so the held reminder is cancelled; the new plan only covers reminders still to
+ * come. A reminder is only ever lost this way, never sent wrongly or twice.
+ *
+ * A reminder goes to the occurrence's current assignee alone (also after a reassignment since
+ * the row was planned), or to every member of the household when it has none. That includes an
+ * occurrence whose assignee was deleted: the foreign keys set both `occurrence.assignee_id` and
+ * `reminder.member_id` to null, which is exactly an unassigned occurrence, and the planner
+ * addresses those to the whole household.
  *
  * The due rows are locked (`FOR UPDATE`), so concurrent callers queue each reminder once, and
  * the outbox's `dedupe_key` is a second guard.
@@ -149,6 +172,11 @@ export async function queueDueReminders(
     const context = contexts.get(rem.occurrenceId);
     // The row was locked above, but the occurrence may have been deleted meanwhile.
     if (!context || failed.has(rem.occurrenceId)) continue;
+    // Nothing the planner reads changed since the row was planned: it is right as it stands.
+    if (isPlanCurrent(context)) {
+      sendable.push({ reminder: rem, context });
+      continue;
+    }
     // Planned once per distinct `fire_at`: occurrences usually have one due reminder at a time.
     const planKey = `${rem.occurrenceId}@${rem.fireAt.getTime()}`;
     let plan = plans.get(planKey);
@@ -164,12 +192,7 @@ export async function queueDueReminders(
       plans.set(planKey, plan);
     }
     const wanted = plan.get(rem.key);
-    if (
-      wanted &&
-      wanted.fireAt.getTime() === rem.fireAt.getTime() &&
-      wanted.memberId === rem.memberId &&
-      wanted.memberId === context.occurrence.assigneeId
-    ) {
+    if (wanted && wanted.fireAt.getTime() === rem.fireAt.getTime()) {
       sendable.push({ reminder: rem, context });
     }
   }
@@ -332,16 +355,16 @@ async function loadPlanContexts(
   return contexts;
 }
 
-/** The reminders the planner wants for one occurrence at `now`. May throw `RecurrenceError`. */
-function planFor(context: PlanContext, now: Date): PlannedReminder[] {
+/** Everything `planReminders` reads about an occurrence except the clock. */
+function planInputs(context: PlanContext): Omit<PlanRemindersInput, 'now'> {
   const { occurrence: occ, task: t, household: h } = context;
-  return planReminders({
+  return {
     occurrence: {
       due: dueOf(occ),
       status: occ.status,
       assigneeId: occ.assigneeId,
       snoozedUntil: occ.snoozedUntil,
-      completedMilestoneIds: completedMilestoneIds(occ.milestoneProgress),
+      completedMilestoneIds: completedMilestoneIds(occ.milestoneProgress).sort(),
     },
     task: {
       leadTimeDays: t.leadTimeDays,
@@ -357,8 +380,35 @@ function planFor(context: PlanContext, now: Date): PlannedReminder[] {
       eveningSlot: h.eveningSlot,
       quietHours: { start: h.quietHoursStart, end: h.quietHoursEnd },
     },
-    now,
-  });
+  };
+}
+
+/** The reminders the planner wants for one occurrence at `now`. May throw `RecurrenceError`. */
+function planFor(context: PlanContext, now: Date): PlannedReminder[] {
+  return planReminders({ ...planInputs(context), now });
+}
+
+/**
+ * A fingerprint of everything the planner reads about an occurrence except `now`: the
+ * occurrence's due, status, assignee, snooze and ticked milestones, the task's lead time,
+ * profile, slot, custom time and milestones, the assignee's away date, and the household's time
+ * zone, slots and quiet hours. The SHA-256 of a JSON document whose keys are always written in
+ * the same order, so equal inputs always give equal hashes.
+ *
+ * Of the open statuses the planner only tells `started` apart (it nudges less), so `upcoming`
+ * and `active` hash alike: the worker activating an occurrence is not a change, which matters
+ * because that happens right as the first reminder, possibly one held back, comes due.
+ */
+function planInputsHash(context: PlanContext): string {
+  const inputs = planInputs(context);
+  const status = inputs.occurrence.status === 'started' ? 'started' : 'open';
+  const document = { ...inputs, occurrence: { ...inputs.occurrence, status } };
+  return createHash('sha256').update(JSON.stringify(document)).digest('hex');
+}
+
+/** Whether the occurrence's planner inputs are the ones its reminders were last planned from. */
+function isPlanCurrent(context: PlanContext): boolean {
+  return context.occurrence.reminderPlanHash === planInputsHash(context);
 }
 
 function planFailure(context: PlanContext, error: RecurrenceError): ReminderPlanFailure {
@@ -382,12 +432,6 @@ export function completedMilestoneIds(progress: Record<string, unknown>): string
     .map(([id]) => id);
 }
 
-function dueOf(row: { dueDate: string | null; dueAt: Date | null }): Due | null {
-  if (row.dueAt !== null) return { allDay: false, at: row.dueAt };
-  if (row.dueDate !== null) return { allDay: true, date: row.dueDate };
-  return null;
-}
-
 /** The `reminder.data` of a planned reminder. */
 function dataOf(planned: PlannedReminder): ReminderData {
   return {
@@ -405,7 +449,16 @@ function sameData(a: ReminderData, b: ReminderData): boolean {
   );
 }
 
-/** Whether the stored `planned` / `cancelled` row differs from what the planner now wants. */
+/**
+ * Whether the stored row differs from what the planner now wants, so that a full re-plan must
+ * write it. A `planned` or `cancelled` row is rewritten when its kind, recipient, time or data
+ * differ (a cancelled one always, to revive it).
+ *
+ * A `sent` row is never rewritten and its key never resent, by design: keys are per occurrence,
+ * and an edit that moves a due date creates new occurrences (see `clearFutureOpenOccurrences`)
+ * with keys of their own. A snooze or away period set after a reminder was sent only shifts the
+ * reminders after it; the one already sent has been delivered and stays so.
+ */
 function needsWrite(
   existing: typeof reminder.$inferSelect | undefined,
   want: NewReminder,
@@ -421,16 +474,37 @@ function needsWrite(
   );
 }
 
+function wantedRow(occurrenceId: string, planned: PlannedReminder): NewReminder {
+  return {
+    occurrenceId,
+    key: planned.key,
+    kind: planned.kind,
+    memberId: planned.memberId,
+    fireAt: planned.fireAt,
+    status: 'planned',
+    data: dataOf(planned),
+  };
+}
+
 /**
  * Brings the `reminder` table in line with `planReminders` for every open occurrence of every
- * non-archived task:
+ * non-archived task. What happens depends on whether the occurrence's planner inputs (see
+ * `planInputsHash`) changed since it was last planned:
  *
- * - a reminder the planner wants and the table lacks is inserted as `planned`;
- * - a `planned` or `cancelled` row whose kind, recipient, time or data differ is updated back to
- *   `planned`; an identical one is left alone, so an idle tick writes nothing;
- * - a `sent` row is never changed (a key is never sent twice);
- * - a `planned` row the planner no longer wants is `cancelled`;
- * - `planned` rows of closed (done, skipped) occurrences and of archived tasks are `cancelled`.
+ * - Changed, or never planned: a full diff against the stored rows. A reminder the planner wants
+ *   and the table lacks is inserted as `planned`; a `planned` or `cancelled` row whose kind,
+ *   recipient, time or data differ is updated back to `planned`, an identical one left alone; a
+ *   `planned` row the planner no longer wants is `cancelled`. The new hash is then stored on the
+ *   occurrence.
+ * - Unchanged: insert only. The reminders the planner wants that have no row at all are added
+ *   (this is what rolls the overdue horizon forward); nothing is updated, revived or cancelled.
+ *   A fresh plan is not authoritative about the existing rows here: a hold (snooze, away) moves
+ *   a reminder to an instant after the hold's condition has ended, and a plan made then no
+ *   longer lists it, so cancelling on a difference would lose the held reminder.
+ *
+ * Either way a `sent` row is never changed (a key is never sent twice), and the `planned` rows
+ * of closed (done, skipped) occurrences and of archived tasks are `cancelled`. An idle tick
+ * writes nothing.
  *
  * Costs a constant number of queries however many occurrences there are. An occurrence the
  * planner rejects (`RecurrenceError`) is reported in `failures` and skipped; any other error is
@@ -477,7 +551,9 @@ export async function replanReminders(
   }
 
   const writes: NewReminder[] = [];
+  const inserts: NewReminder[] = [];
   const obsolete: string[] = [];
+  const hashes: { id: string; hash: string }[] = [];
   for (const context of contexts.values()) {
     const { occurrence: occ } = context;
     let plan: PlannedReminder[];
@@ -491,23 +567,24 @@ export async function replanReminders(
     result.occurrences += 1;
 
     const stored = existing.get(occ.id) ?? new Map<string, typeof reminder.$inferSelect>();
+    const hash = planInputsHash(context);
+    if (hash === occ.reminderPlanHash) {
+      for (const planned of plan) {
+        if (!stored.has(planned.key)) inserts.push(wantedRow(occ.id, planned));
+      }
+      continue;
+    }
+
     const wanted = new Set<string>();
     for (const planned of plan) {
       wanted.add(planned.key);
-      const want: NewReminder = {
-        occurrenceId: occ.id,
-        key: planned.key,
-        kind: planned.kind,
-        memberId: planned.memberId,
-        fireAt: planned.fireAt,
-        status: 'planned',
-        data: dataOf(planned),
-      };
+      const want = wantedRow(occ.id, planned);
       if (needsWrite(stored.get(planned.key), want)) writes.push(want);
     }
     for (const old of stored.values()) {
       if (old.status === 'planned' && !wanted.has(old.key)) obsolete.push(old.id);
     }
+    hashes.push({ id: occ.id, hash });
   }
 
   for (const batch of chunks(writes)) {
@@ -530,6 +607,14 @@ export async function replanReminders(
       .returning({ id: reminder.id });
     result.planned += rows.length;
   }
+  for (const batch of chunks(inserts)) {
+    const rows = await db
+      .insert(reminder)
+      .values(batch)
+      .onConflictDoNothing({ target: [reminder.occurrenceId, reminder.key] })
+      .returning({ id: reminder.id });
+    result.planned += rows.length;
+  }
   for (const batch of chunks(obsolete)) {
     const rows = await db
       .update(reminder)
@@ -537,6 +622,27 @@ export async function replanReminders(
       .where(and(inArray(reminder.id, batch), eq(reminder.status, 'planned')))
       .returning({ id: reminder.id });
     result.cancelled += rows.length;
+  }
+  // Last, so the hash only says "planned from these inputs" once the rows are written. It is the
+  // hash of the state that was planned, so an edit made meanwhile still shows as a change.
+  for (const batch of chunks(hashes)) {
+    const hashOf = sql.join(
+      batch.map(({ id, hash }) => sql`when ${id}::uuid then ${hash}::text`),
+      sql` `,
+    );
+    await db
+      .update(occurrence)
+      .set({
+        reminderPlanHash: sql`case ${occurrence.id} ${hashOf} end`,
+        // Bookkeeping, not an edit: leave `updated_at` as it is.
+        updatedAt: sql`${occurrence.updatedAt}`,
+      })
+      .where(
+        inArray(
+          occurrence.id,
+          batch.map(({ id }) => id),
+        ),
+      );
   }
   return result;
 }

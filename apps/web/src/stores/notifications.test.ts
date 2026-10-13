@@ -170,6 +170,93 @@ describe('notifications store', () => {
     expect(n.error).toBe('');
   });
 
+  describe('loads that land out of order', () => {
+    /** A list endpoint whose calls after the first wait for `release`, each with its own answer. */
+    function gatedList(answers: NotificationDto[][]) {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      const handler: Handler = async () => {
+        const items = answers[Math.min(calls, answers.length - 1)] ?? [];
+        const gated = calls > 0;
+        calls += 1;
+        if (gated) await gate;
+        return json({ items, unreadCount: items.filter((n) => n.readAt === null).length });
+      };
+      return { handler, release: () => release() };
+    }
+
+    it('does not let a poll in flight undo a notification marked read meanwhile', async () => {
+      const stale = gatedList([[notification('a')], [notification('a')]]);
+      const { notifications: n } = store({
+        [LIST]: stale.handler,
+        [readOne('a')]: new Response(null, { status: 204 }),
+      });
+      await n.load();
+
+      const poll = n.load(); // the answer was computed before the notification was read
+      await n.markRead('a');
+      stale.release();
+      await poll;
+
+      expect(n.items[0]?.readAt).not.toBeNull();
+      expect(n.unreadCount).toBe(0);
+    });
+
+    it('does not let a poll in flight undo marking everything read meanwhile', async () => {
+      const stale = gatedList([[notification('a')], [notification('a')]]);
+      const { notifications: n } = store({
+        [LIST]: stale.handler,
+        [READ_ALL]: new Response(null, { status: 204 }),
+      });
+      await n.load();
+
+      const poll = n.load();
+      await n.markAllRead();
+      stale.release();
+      await poll;
+
+      expect(n.items[0]?.readAt).not.toBeNull();
+      expect(n.unreadCount).toBe(0);
+    });
+
+    it('keeps the newest load when an older one lands after it', async () => {
+      // The first load is slow and answers with what was true when it started; the second is
+      // quick and sees a new notification.
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      const { notifications: n } = store({
+        [LIST]: async () => {
+          calls += 1;
+          if (calls === 1) {
+            await gate;
+            return json({ items: [notification('a')], unreadCount: 1 });
+          }
+          return json({ items: [notification('b'), notification('a')], unreadCount: 2 });
+        },
+      });
+
+      const poll = n.load();
+      const visibility = n.load();
+      await visibility;
+      release();
+      await poll;
+
+      expect(n.items.map((i) => i.id)).toEqual(['b', 'a']);
+      expect(n.unreadCount).toBe(2);
+    });
+
+    it('lets the later of two loads win when they land in order', async () => {
+      const { notifications: n } = store({ [LIST]: list([notification('a')]) });
+
+      await n.load();
+      await n.load();
+
+      expect(n.items.map((i) => i.id)).toEqual(['a']);
+    });
+  });
+
   it('loads again normally after a reset', async () => {
     const { notifications: n } = store({ [LIST]: list([notification('a')]) });
     await n.load();

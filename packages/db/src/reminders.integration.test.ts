@@ -34,6 +34,7 @@ const at = (iso: string): Date => new Date(iso);
  */
 const NOW = at('2026-07-06T09:00:00Z');
 const HEADS_UP_AT = at('2026-07-10T18:00:00Z');
+const DUE_AFTER_HEADS_UP = at('2026-07-10T18:00:30Z');
 const PLAN_KEYS = ['heads_up', 'nudge:2026-07-15', 'nudge:2026-07-18', 'nudge:2026-07-19', 'due'];
 
 describe.skipIf(!adminUrl)('reminders (integration)', () => {
@@ -146,6 +147,126 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       expect(later).toMatchObject({ planned: 0, cancelled: 0 });
       // updated_at included: not a single row was touched.
       expect(await reminders()).toEqual(before);
+    });
+
+    describe('the plan hash', () => {
+      const hashOf = async (id: string) =>
+        (await db.select().from(occurrence).where(eq(occurrence.id, id)))[0];
+
+      it('is stored on the occurrence without touching its updated_at', async () => {
+        const { o } = await setup();
+        expect((await hashOf(o.id))?.reminderPlanHash).toBeNull();
+
+        await replanReminders(db, { now: NOW });
+
+        const planned = await hashOf(o.id);
+        expect(planned?.reminderPlanHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(planned?.updatedAt).toEqual(o.updatedAt);
+      });
+
+      it('changes with the planner`s inputs, not with the clock or unrelated fields', async () => {
+        const { t, o, alex } = await setup();
+        await replanReminders(db, { now: NOW });
+        const hash = async () => (await hashOf(o.id))?.reminderPlanHash;
+        const first = await hash();
+
+        await replanReminders(db, { now: at('2026-07-08T09:00:00Z') });
+        await db.update(task).set({ title: 'Renamed' }).where(eq(task.id, t.id));
+        await replanReminders(db, { now: at('2026-07-08T09:00:00Z') });
+        expect(await hash()).toBe(first);
+
+        const edits = [
+          () => db.update(task).set({ leadTimeDays: 9 }).where(eq(task.id, t.id)),
+          () => db.update(member).set({ awayUntil: '2026-07-08' }).where(eq(member.id, alex.id)),
+          () =>
+            db
+              .update(occurrence)
+              .set({ snoozedUntil: at('2026-07-09T10:00:00Z') })
+              .where(eq(occurrence.id, o.id)),
+          () => db.update(household).set({ quietHoursStart: '23:00' }),
+        ];
+        const seen = new Set([first]);
+        for (const edit of edits) {
+          await edit();
+          await replanReminders(db, { now: at('2026-07-08T09:00:00Z') });
+          seen.add(await hash());
+        }
+        // Every edit gave a hash of its own.
+        expect(seen.size).toBe(edits.length + 1);
+      });
+
+      it('does not change when the worker activates the occurrence, but does when it is started', async () => {
+        const { o } = await setup();
+        await db.update(occurrence).set({ status: 'upcoming' }).where(eq(occurrence.id, o.id));
+        await replanReminders(db, { now: NOW });
+        const first = (await hashOf(o.id))?.reminderPlanHash;
+
+        await db.update(occurrence).set({ status: 'active' }).where(eq(occurrence.id, o.id));
+        await replanReminders(db, { now: NOW });
+        expect((await hashOf(o.id))?.reminderPlanHash).toBe(first);
+
+        await db.update(occurrence).set({ status: 'started' }).where(eq(occurrence.id, o.id));
+        await replanReminders(db, { now: NOW });
+        expect((await hashOf(o.id))?.reminderPlanHash).not.toBe(first);
+      });
+
+      it('lets an idle tick write nothing, occurrences included', async () => {
+        const { o } = await setup();
+        await replanReminders(db, { now: NOW });
+        const before = await hashOf(o.id);
+
+        await replanReminders(db, { now: at('2026-07-06T09:01:00Z') });
+
+        expect(await hashOf(o.id)).toEqual(before);
+      });
+
+      it('leaves rows alone while the inputs are unchanged, and only adds missing ones', async () => {
+        await setup();
+        await replanReminders(db, { now: NOW });
+        // Rows out of step with the plan: one cancelled, one moved, one gone.
+        await db.update(reminder).set({ status: 'cancelled' }).where(eq(reminder.key, 'heads_up'));
+        const moved = at('2026-07-17T10:00:00Z');
+        await db
+          .update(reminder)
+          .set({ fireAt: moved })
+          .where(eq(reminder.key, 'nudge:2026-07-15'));
+        await db.delete(reminder).where(eq(reminder.key, 'due'));
+
+        const result = await replanReminders(db, { now: NOW });
+
+        expect(result).toEqual({ occurrences: 1, planned: 1, cancelled: 0, failures: [] });
+        const byKey = Object.fromEntries((await reminders()).map((r) => [r.key, r]));
+        expect(byKey['heads_up']?.status).toBe('cancelled');
+        expect(byKey['nudge:2026-07-15']).toMatchObject({ status: 'planned', fireAt: moved });
+        expect(byKey['due']).toMatchObject({ status: 'planned' });
+      });
+
+      it('rolls the overdue horizon forward without disturbing the other reminders', async () => {
+        await setup({ reminderProfile: 'persistent' });
+        await replanReminders(db, { now: NOW });
+        const before = await reminders();
+        expect(before.some((r) => r.kind === 'overdue')).toBe(false);
+
+        const result = await replanReminders(db, { now: at('2026-07-12T09:00:00Z') });
+
+        // Overdue reminders from 21 to 25 July (19:00 BST, within 14 days of 12 July).
+        expect(result).toEqual({ occurrences: 1, planned: 5, cancelled: 0, failures: [] });
+        const after = await reminders();
+        expect(after.filter((r) => r.kind === 'overdue')).toHaveLength(5);
+        expect(after.filter((r) => r.kind !== 'overdue')).toEqual(before);
+      });
+
+      it('does not cancel a planned row the plan no longer lists, while the inputs are unchanged', async () => {
+        await setup();
+        await replanReminders(db, { now: NOW });
+
+        // After the heads-up time the planner no longer lists it, but it is still planned.
+        const result = await replanReminders(db, { now: DUE_AFTER_HEADS_UP });
+
+        // Only the overdue horizon moved forward (two reminders now in reach).
+        expect(result).toMatchObject({ planned: 2, cancelled: 0 });
+        expect((await planned()).map((r) => r.key)).toContain('heads_up');
+      });
     });
 
     it('stores the milestone and overdue details of a reminder', async () => {
@@ -591,18 +712,26 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         expect(await notifications()).toEqual([]);
       }
 
-      it('is not sent after a reassignment, and the new plan is for the new assignee', async () => {
-        const { h, o } = await setup();
+      it('goes to the new assignee after a reassignment', async () => {
+        const { h, alex, o } = await setup();
         const sam = await newMember(h.id, 'sam');
+        await replanReminders(db, { now: NOW });
+        await db.update(occurrence).set({ assigneeId: sam.id }).where(eq(occurrence.id, o.id));
 
-        await expectHeldBack(
-          () => db.update(occurrence).set({ assigneeId: sam.id }).where(eq(occurrence.id, o.id)),
-          'cancelled',
-        );
+        const result = await queueDueReminders(db, { now: DUE_NOW });
 
-        const rest = await planned();
-        expect(keys(rest)).toContain('due');
-        expect(rest.every((r) => r.memberId === sam.id)).toBe(true);
+        // The reminder is still wanted at the same time; it is for sam now, not alex.
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        const rows = await notifications();
+        expect(rows.map((n) => n.memberId)).toEqual([sam.id]);
+        expect(rows[0]?.payload).toMatchObject({ kind: 'heads_up', assigneeId: sam.id });
+        expect(rows.some((n) => n.memberId === alex.id)).toBe(false);
+        expect((await headsUp())?.status).toBe('sent');
+
+        // The re-plan addresses the rest to sam, and the sent heads-up is left alone.
+        await replanReminders(db, { now: DUE_NOW });
+        expect(keys(await planned())).not.toContain('heads_up');
+        expect((await planned()).every((r) => r.memberId === sam.id)).toBe(true);
       });
 
       it('is not sent while the assignee is away', async () => {
@@ -759,20 +888,45 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         const { h, alex } = await setup();
         await newMember(h.id, 'sam');
         await replanReminders(db, { now: NOW });
-        // A row out of step with its occurrence (it should be for alex).
+        // A row out of step with its occurrence (it should be for alex). Nothing the planner
+        // reads changed, so the row is queued as it stands, to the occurrence's assignee.
         await db.update(reminder).set({ memberId: null });
 
         const result = await queueDueReminders(db, { now: DUE_NOW });
 
-        // Not sent: the plan addresses it to alex. The re-plan puts it right.
-        expect(result.queued).toBe(0);
-        await replanReminders(db, { now: at('2026-07-10T17:00:00Z') });
-        expect((await planned()).every((r) => r.memberId === alex.id)).toBe(true);
-        expect(await queueDueReminders(db, { now: DUE_NOW })).toMatchObject({
-          queued: 1,
-          notifications: 1,
-        });
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
         expect((await notifications()).map((n) => n.memberId)).toEqual([alex.id]);
+      });
+    });
+
+    describe('trusting the persisted row', () => {
+      it('queues a due row as it stands when the plan inputs are unchanged', async () => {
+        await setup();
+        await replanReminders(db, { now: NOW });
+        // The row was moved on purpose (as a hold would); the planner would not list it here.
+        const moved = at('2026-07-10T12:00:00Z');
+        await db.update(reminder).set({ fireAt: moved }).where(eq(reminder.key, 'heads_up'));
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        expect((await notifications())[0]?.payload).toMatchObject({
+          fireAt: moved.toISOString(),
+        });
+      });
+
+      it('checks it against the planner once the plan inputs changed', async () => {
+        const { t } = await setup();
+        await replanReminders(db, { now: NOW });
+        const moved = at('2026-07-10T12:00:00Z');
+        await db.update(reminder).set({ fireAt: moved }).where(eq(reminder.key, 'heads_up'));
+        // A lead time of 9 days puts the heads-up on 11 July, so the moved row is not wanted.
+        await db.update(task).set({ leadTimeDays: 9 }).where(eq(task.id, t.id));
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 0, notifications: 0 });
+        expect((await reminders()).find((r) => r.key === 'heads_up')?.status).toBe('planned');
       });
     });
 
@@ -840,6 +994,101 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         .from(reminder)
         .where(and(eq(reminder.status, 'sent')));
       expect(sent).toHaveLength(2);
+    });
+  });
+
+  describe('a hold that outlasts the condition behind it', () => {
+    // What the worker does each tick: queue what is due, then re-plan.
+    async function tick(now: Date) {
+      const queued = await queueDueReminders(db, { now });
+      const replanned = await replanReminders(db, { now });
+      return { queued, replanned };
+    }
+    const headsUp = async () => (await reminders()).find((r) => r.key === 'heads_up');
+
+    it('sends a heads-up held to the day after the assignee`s away date when that day comes', async () => {
+      const { alex } = await setup();
+      await db.update(member).set({ awayUntil: '2026-07-12' }).where(eq(member.id, alex.id));
+      // Away until 12 July: the heads-up (10 July) waits for the evening slot on 13 July.
+      const held = at('2026-07-13T18:00:00Z');
+
+      await tick(NOW);
+      expect(await headsUp()).toMatchObject({ status: 'planned', fireAt: held });
+      await tick(at('2026-07-12T12:00:00Z'));
+      // On 13 July alex is no longer away, so the planner alone would not know of the hold.
+      await tick(at('2026-07-13T00:30:00Z'));
+      await tick(at('2026-07-13T12:00:00Z'));
+      expect(await headsUp()).toMatchObject({ status: 'planned', fireAt: held });
+      expect(await notifications()).toEqual([]);
+
+      const result = await tick(at('2026-07-13T18:00:30Z'));
+
+      expect(result.queued).toMatchObject({ queued: 1, notifications: 1 });
+      expect(await headsUp()).toMatchObject({ status: 'sent' });
+      expect((await notifications()).map((n) => n.payload)).toMatchObject([
+        { kind: 'heads_up', fireAt: held.toISOString() },
+      ]);
+    });
+
+    it('queues the held reminder without a re-plan in between', async () => {
+      const { alex } = await setup();
+      await db.update(member).set({ awayUntil: '2026-07-12' }).where(eq(member.id, alex.id));
+      await replanReminders(db, { now: NOW });
+
+      // The queue-time check must not drop it just because the away period is over.
+      const result = await queueDueReminders(db, { now: at('2026-07-13T18:00:30Z') });
+
+      expect(result).toMatchObject({ queued: 1, notifications: 1 });
+    });
+
+    describe('a snooze into quiet hours', () => {
+      // The task reminds at 19:00; both household slots are inside the quiet hours (22:00 to
+      // 07:30), so a time pushed out of them lands on 07:30.
+      async function setupQuiet() {
+        const fixture = await setup({ reminderSlot: 'custom_time', reminderCustomTime: '19:00' });
+        await db.update(household).set({
+          morningSlot: '07:00',
+          eveningSlot: '23:00',
+          quietHoursStart: '22:00',
+          quietHoursEnd: '07:30',
+        });
+        // Snoozed until 22:30 BST on 10 July: held to 07:30 BST the next morning.
+        await db
+          .update(occurrence)
+          .set({ snoozedUntil: at('2026-07-10T21:30:00Z') })
+          .where(eq(occurrence.id, fixture.o.id));
+        return fixture;
+      }
+      const held = at('2026-07-11T06:30:00Z');
+
+      it('is sent at the end of the quiet hours', async () => {
+        await setupQuiet();
+
+        await tick(NOW);
+        expect(await headsUp()).toMatchObject({ status: 'planned', fireAt: held });
+        // The snooze is over, the held time is not.
+        await tick(at('2026-07-10T21:45:00Z'));
+        await tick(at('2026-07-11T03:00:00Z'));
+        expect(await headsUp()).toMatchObject({ status: 'planned', fireAt: held });
+        expect(await notifications()).toEqual([]);
+
+        const result = await tick(at('2026-07-11T06:30:30Z'));
+
+        expect(result.queued).toMatchObject({ queued: 1, notifications: 1 });
+        expect((await notifications())[0]?.payload).toMatchObject({
+          kind: 'heads_up',
+          fireAt: held.toISOString(),
+        });
+      });
+
+      it('is queued without a re-plan in between', async () => {
+        await setupQuiet();
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: at('2026-07-11T06:30:30Z') });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+      });
     });
   });
 

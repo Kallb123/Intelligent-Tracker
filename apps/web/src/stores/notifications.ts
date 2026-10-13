@@ -15,20 +15,23 @@ export const useNotificationsStore = defineStore('notifications', () => {
   const unreadCount = ref(0);
   const error = ref('');
   let timer: ReturnType<typeof setInterval> | undefined;
-  // Bumped by `reset`, so a load that was in flight for the previous member is dropped when it
-  // lands instead of writing their notifications back.
-  let generation = 0;
+  // Bumped by every `load`, `markRead`, `markAllRead` and `reset`. A load applies its result
+  // only if nothing has bumped it since it started: an older load that lands late (a poll in
+  // flight while a notification is marked read, or a visibility load racing the poll) would
+  // otherwise overwrite newer state, and one in flight for the previous member (`reset`) would
+  // write their notifications back.
+  let sequence = 0;
 
   async function load(): Promise<void> {
-    const started = generation;
+    const started = (sequence += 1);
     try {
       const { data } = await getApi().GET('/api/notifications');
-      if (started !== generation) return;
+      if (started !== sequence) return;
       items.value = data?.items ?? [];
       unreadCount.value = data?.unreadCount ?? 0;
       error.value = '';
     } catch (err) {
-      if (started !== generation) return;
+      if (started !== sequence) return;
       // Keep what is shown; the next poll tries again.
       error.value = describeError(err);
     }
@@ -36,6 +39,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
 
   /** Marks one read on screen straight away, then tells the api (reloading if that fails). */
   async function markRead(id: string): Promise<void> {
+    sequence += 1;
     const item = items.value.find((n) => n.id === id);
     if (item && item.readAt === null) {
       item.readAt = new Date().toISOString();
@@ -50,6 +54,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
   }
 
   async function markAllRead(): Promise<void> {
+    sequence += 1;
     const now = new Date().toISOString();
     for (const item of items.value) item.readAt ??= now;
     unreadCount.value = 0;
@@ -81,7 +86,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
 
   /** Stops polling and forgets everything, so the next member never sees these. */
   function reset(): void {
-    generation += 1;
+    sequence += 1;
     stopPolling();
     items.value = [];
     unreadCount.value = 0;

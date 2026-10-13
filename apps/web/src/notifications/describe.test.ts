@@ -34,11 +34,57 @@ describe('describeReminder', () => {
     expect(words({ kind: 'nudge' })).toBe('Reminder: Car insurance is due 1 Nov 2026');
   });
 
-  it('describes a due reminder, with the time when timed', () => {
-    expect(words({ kind: 'due' })).toBe('Car insurance is due today');
-    expect(words({ kind: 'due', dueDate: null, dueAt: '2026-11-01T18:30:00.000Z' })).toBe(
-      'Car insurance is due today at 18:30',
-    );
+  describe('a due reminder', () => {
+    const onTheDay = { fireAt: '2026-11-01T19:00:00.000Z' };
+
+    it('says today on the due day, with the time when timed', () => {
+      expect(words({ kind: 'due', ...onTheDay })).toBe('Car insurance is due today');
+      expect(
+        words({ kind: 'due', dueDate: null, dueAt: '2026-11-01T18:30:00.000Z', ...onTheDay }),
+      ).toBe('Car insurance is due today at 18:30');
+    });
+
+    it('says tomorrow when it fires the evening before, as for an early timed due', () => {
+      expect(
+        words({
+          kind: 'due',
+          dueDate: null,
+          dueAt: '2026-11-01T14:00:00.000Z',
+          fireAt: '2026-10-31T19:00:00.000Z',
+        }),
+      ).toBe('Car insurance is due tomorrow at 14:00');
+      expect(words({ kind: 'due', fireAt: '2026-10-31T19:00:00.000Z' })).toBe(
+        'Car insurance is due tomorrow',
+      );
+    });
+
+    it('gives the date when a hold moved it to another day', () => {
+      expect(words({ kind: 'due', fireAt: '2026-11-03T19:00:00.000Z' })).toBe(
+        'Car insurance is due 1 Nov 2026',
+      );
+      expect(words({ kind: 'due', fireAt: '2026-10-25T19:00:00.000Z' })).toBe(
+        'Car insurance is due 1 Nov 2026',
+      );
+      expect(
+        words({
+          kind: 'due',
+          dueDate: null,
+          dueAt: '2026-11-01T14:00:00.000Z',
+          fireAt: '2026-11-03T19:00:00.000Z',
+        }),
+      ).toBe('Car insurance is due 1 Nov 2026 at 14:00');
+    });
+
+    it('compares days in the household time zone, not UTC', () => {
+      // 23:30 UTC on 31 October is already 1 November in Auckland (NZDT, +13), the due day.
+      const fireAt = '2026-10-31T23:30:00.000Z';
+      expect(describeReminder(payload({ kind: 'due', fireAt }), 'Pacific/Auckland')).toBe(
+        'Car insurance is due today',
+      );
+      expect(describeReminder(payload({ kind: 'due', fireAt }), 'Europe/London')).toBe(
+        'Car insurance is due tomorrow',
+      );
+    });
   });
 
   it('describes an overdue reminder in days', () => {

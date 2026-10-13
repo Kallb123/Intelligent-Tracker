@@ -1,6 +1,7 @@
 import { createDb } from '@tracker/db';
 import { writeFileSync } from 'node:fs';
 import { APP_NAME, startupMessage } from './index.js';
+import { createPruneSchedule } from './prune-schedule.js';
 import { runTick } from './tick.js';
 import { startTicker } from './ticker.js';
 
@@ -37,16 +38,21 @@ const heartbeat = setInterval(() => {
 
 // postgres.js connects lazily, so creating the pool before the api has migrated is safe.
 const dbHandle = databaseUrl ? createDb(databaseUrl) : undefined;
+const pruning = createPruneSchedule();
 const ticker = dbHandle
   ? startTicker({
       intervalMs: tickIntervalMs,
       // A failed tick (e.g. migrations not applied yet) is logged and retried on the next one.
       onError: (error) => write('error', 'tick failed', errorFields(error)),
       run: async () => {
+        const now = new Date();
+        const prune = pruning.due(now);
         const result = await runTick(dbHandle.db, {
-          now: new Date(),
+          now,
+          prune,
           logger: { warn: (fields, msg) => write('warn', msg, fields) },
         });
+        if (prune && !result.skipped) pruning.done(now);
         if (result.skipped) log('tick skipped; another worker holds the lock');
         else {
           const {

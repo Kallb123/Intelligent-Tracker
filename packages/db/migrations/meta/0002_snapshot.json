@@ -1,5 +1,5 @@
 {
-  "id": "09bc3b53-921a-414b-808b-4dd66385f191",
+  "id": "250e84f8-5896-44e1-8866-929dcc683aa8",
   "prevId": "eaaaf195-2336-4456-a2c5-c44e31829bb0",
   "version": "7",
   "dialect": "postgresql",
@@ -1134,6 +1134,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::jsonb"
+        },
+        "reminder_plan_hash": {
+          "name": "reminder_plan_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",

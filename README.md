@@ -174,15 +174,19 @@ task + due) and serialised across workers by a Postgres advisory lock.
 
 The same tick keeps reminders in step with the planner: it queues the `planned` reminders that are
 due as `in_app` rows in the notification outbox (one per recipient, deduplicated by `dedupe_key`;
-reminders more than a day late are cancelled instead), then re-plans every open occurrence so
-edits, snoozes and completions take effect within a minute. A due reminder is only sent if the
-planner, run against the occurrence as it is now, still has it at that time for that member, so an
-edit made since the last tick (reassignment, away, snooze, lead time, slot) never sends a stale
-one. It goes to the occurrence's assignee, or to every household member when it has none. After the
-transaction commits it delivers the outbox (retries with exponential backoff, gives up after 8
-attempts), deletes notifications past their retention (in-app ones read over 30 days ago, and
-delivered or failed ones over 90 days old; pending ones never) and records the worker's
-`service_heartbeat`. Telegram delivery arrives with the bot.
+reminders more than a day late are cancelled instead), then re-plans occurrences so edits,
+snoozes and completions take effect within a minute. An occurrence is only re-planned when
+something the planner reads has changed (a fingerprint of its inputs is kept in
+`occurrence.reminder_plan_hash`); otherwise the tick only adds reminders that are missing, which
+rolls the overdue horizon forward. That is what lets a snooze or away period hold a reminder back
+to a later time and still have it sent then, after the snooze or away period has ended. A due
+reminder whose occurrence was edited since the last tick is first checked against the planner, and
+only sent if it still has it at that time. It goes to the occurrence's current assignee, or to every
+household member when it has none. After the transaction commits it delivers the outbox (retries
+with exponential backoff, gives up after 8 attempts), deletes notifications past their retention
+(in-app ones read over 30 days ago, and delivered or failed ones over 90 days old; pending ones
+never) at most once an hour, and records the worker's `service_heartbeat`. Telegram delivery
+arrives with the bot.
 
 The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps/api/openapi.json`
 (the web app's typed client is generated from it). After changing a route, run `pnpm openapi`;

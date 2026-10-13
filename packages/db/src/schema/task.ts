@@ -149,6 +149,9 @@ export const occurrence = pgTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default(sql`'{}'::jsonb`),
+    // Fingerprint of everything the reminder planner read (bar the clock) when the worker last
+    // planned this occurrence's reminders; null until then. See `replanReminders`.
+    reminderPlanHash: text('reminder_plan_hash'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

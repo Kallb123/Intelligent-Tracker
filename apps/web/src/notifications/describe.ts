@@ -12,6 +12,26 @@ function dueWhen(payload: ReminderPayload, timeZone: string): string {
   return payload.dueDate ? formatCalendarDate(payload.dueDate) : '';
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * When a `due` reminder says the occurrence is due, relative to the day the reminder fires (in the
+ * household's zone): "today", "tomorrow" (a timed due is reminded the evening before when its slot
+ * would fall after the due time), or the date when a hold moved the reminder to another day. A
+ * timed due also gets its time.
+ */
+function dueDay(payload: ReminderPayload, timeZone: string): string {
+  const timed = payload.dueAt ? instantToWall(payload.dueAt, timeZone) : undefined;
+  const date = payload.dueDate ?? timed?.date;
+  if (!date) return '';
+  const daysAway =
+    (Date.parse(`${date}T00:00:00Z`) -
+      Date.parse(`${instantToWall(payload.fireAt, timeZone).date}T00:00:00Z`)) /
+    MS_PER_DAY;
+  const day = daysAway === 0 ? 'today' : daysAway === 1 ? 'tomorrow' : formatCalendarDate(date);
+  return timed ? `${day} at ${timed.time}` : day;
+}
+
 /**
  * What a reminder notification says, in one sentence. `timeZone` is the household's, for the time
  * of a timed due.
@@ -27,9 +47,7 @@ export function describeReminder(payload: ReminderPayload, timeZone: string): st
     case 'nudge':
       return when ? `Reminder: ${title} is due ${when}` : `Reminder: ${title}`;
     case 'due':
-      return payload.dueAt
-        ? `${title} is due today at ${instantToWall(payload.dueAt, timeZone).time}`
-        : `${title} is due today`;
+      return `${title} is due ${dueDay(payload, timeZone)}`;
     case 'overdue': {
       const days = payload.overdueDays;
       if (days === undefined) return `${title} is overdue`;

@@ -75,17 +75,23 @@ const HANDLERS: Record<'in_app', OutboxHandler> = { in_app: async () => {} };
  *
  * Queuing and marking the reminders sent commit together, so a crash loses and duplicates
  * nothing. After the commit the tick records the worker's heartbeat and delivers the outbox
- * (a separate step: delivery is retried with backoff and must not hold the tick lock), then
- * deletes notifications past their retention (`pruneNotifications`). The
+ * (a separate step: delivery is retried with backoff and must not hold the tick lock), then,
+ * when `prune` is set (the default), deletes notifications past their retention
+ * (`pruneNotifications`; the worker passes `prune` about once an hour, see `PruneSchedule`). The
  * heartbeat is also recorded when another worker holds the lock.
  * Idempotent. A task that cannot be materialised, or an occurrence that cannot be planned, is
  * logged and left to the next tick.
  */
 export async function runTick(
   db: Database,
-  options: { now: Date; logger: TickLogger },
+  options: {
+    now: Date;
+    logger: TickLogger;
+    /** Run the retention sweep after delivering. Defaults to true. */
+    prune?: boolean;
+  },
 ): Promise<TickResult> {
-  const { now, logger } = options;
+  const { now, logger, prune = true } = options;
   const result = await db.transaction(async (tx): Promise<TickResult> => {
     const rows = await tx.execute<{ locked: boolean }>(
       sql`select pg_try_advisory_xact_lock(${TICK_LOCK_KEY}::bigint) as locked`,
@@ -127,6 +133,6 @@ export async function runTick(
   }
   // Retention sweep, last: it never touches pending rows, so it cannot take away what was just
   // queued or delivered.
-  const pruned = await pruneNotifications(db, { now });
+  const pruned = prune ? await pruneNotifications(db, { now }) : 0;
   return { ...result, delivered: delivery.delivered, pruned };
 }
