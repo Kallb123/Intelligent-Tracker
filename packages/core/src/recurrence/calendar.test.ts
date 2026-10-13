@@ -12,6 +12,7 @@ import {
   localDateOf,
   parseLocalDate,
   resolveZone,
+  timeOfDayOf,
   toWall,
   wallOfDue,
 } from './calendar.js';
@@ -74,6 +75,15 @@ describe('wall time conversion', () => {
     expect(new Date(fromWall(london, wall('2026-01-15T08:00:00'))).toISOString()).toBe(
       '2026-01-15T08:00:00.000Z',
     );
+  });
+
+  it('gives the milliseconds after local midnight', () => {
+    const hours = (h: number) => h * 3_600_000;
+    expect(timeOfDayOf(london, at('2026-07-01T07:30:00Z').getTime())).toBe(hours(8.5));
+    expect(timeOfDayOf(london, at('2026-01-15T00:00:00Z').getTime())).toBe(0);
+    expect(timeOfDayOf(london, at('2026-07-01T23:30:00Z').getTime())).toBe(hours(0.5));
+    // Before 1970 the wall time is negative; the result is still a time of day.
+    expect(timeOfDayOf(london, at('1960-01-01T12:00:00Z').getTime())).toBe(hours(12));
   });
 
   it('keeps clock times before and after the spring change correct (2026-03-29)', () => {

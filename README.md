@@ -48,7 +48,7 @@ It is a pnpm workspace; every package is named `@tracker/<name>` and is consumed
 pnpm install            # install all workspace dependencies
 pnpm test               # run every package's tests once (Vitest)
 pnpm test:watch         # Vitest in watch mode
-pnpm test:coverage      # tests with coverage; the recurrence engine must stay at 100%
+pnpm test:coverage      # tests with coverage; the recurrence engine, rotation and reminder planner must stay at 100%
 pnpm typecheck          # tsc --noEmit in every package
 pnpm lint               # ESLint (zero warnings allowed)
 pnpm format             # Prettier, write
@@ -59,6 +59,8 @@ pnpm format:check       # Prettier, check only
 RFC 5545 rules in the household time zone (Europe/London by default, so "every day at 08:00" survives
 BST/GMT changes), handles all-day vs timed dues and "N days after completion" tasks, and decides
 which occurrences to materialise ahead of time. See `packages/core/src/recurrence/index.ts` for the API.
+The reminder planner (`src/reminders`) is a pure `planReminders` function that turns one occurrence, its task and the
+household settings into the heads-up, milestone, nudge, due and overdue reminders to send (see its doc comment for the rules).
 
 `pnpm build` bundles each backend app into `apps/<name>/dist/main.js` (esbuild) and builds the SPA
 with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watch) and

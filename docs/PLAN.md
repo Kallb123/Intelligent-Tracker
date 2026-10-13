@@ -452,7 +452,7 @@ deployable. Milestones mark points where the app is usable.
    - 2 Oct 19:00: heads-up + *Get quotes* milestone
    - 18 Oct 19:00: *Decide* milestone
    - 25 Oct 19:00: *Renew* milestone
-   - nudges at 19:00 at about 50% / 75% / 90% of the window if not Started, then 1 Nov due-day, then daily overdue
+   - nudges at 19:00 at about 50% / 75% / 90% of the window if not Started, then 1 Nov due-day, then overdue every 3 days
 4. At 19:00 on 2 Oct the group's "Tonight's jobs" message includes: *"🚗 @Alex Car insurance renews in 30 days (1 Nov). Time to get
    quotes."* [✅ Done] [▶️ Started] [⏰ Snooze] [🔁 Reassign]. Alex taps **Started**. The message
    updates to "▶️ Started by Alex", and the planner turns the nudges down a level but keeps the milestones.
