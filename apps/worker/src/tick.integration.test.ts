@@ -334,6 +334,33 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       });
     });
 
+    it('sends one overdue reminder, not one per day, when the assignee is away past the horizon', async () => {
+      const { t, people } = await setup({ assignees: 1 });
+      await handle.db.update(task).set({ reminderProfile: 'persistent' }).where(eq(task.id, t.id));
+      await handle.db
+        .update(member)
+        .set({ awayUntil: '2026-08-20' })
+        .where(eq(member.id, people[0]?.id ?? ''));
+
+      // Daily ticks from 22 July, two days overdue, to 20 August. The hold (19:00 BST on
+      // 21 August) is beyond the 14 day horizon until 8 August, and no overdue reminder before it
+      // may be added alongside the held one.
+      for (let day = 0; day < 30; day += 1) {
+        await tick(new Date(at('2026-07-22T09:00:00Z').getTime() + day * 24 * 60 * 60 * 1000));
+      }
+      const held = at('2026-08-21T18:00:00Z');
+      const overdue = (await reminders()).filter(
+        (r) => r.kind === 'overdue' && r.fireAt.getTime() <= held.getTime(),
+      );
+      expect(overdue).toMatchObject([{ status: 'planned', fireAt: held }]);
+      expect(await notifications()).toEqual([]);
+
+      const result = await tick(at('2026-08-21T18:00:30Z'));
+
+      expect(result).toMatchObject({ queued: 1, delivered: 1 });
+      expect((await notifications()).map((n) => n.payload)).toMatchObject([{ kind: 'overdue' }]);
+    });
+
     describe('re-plans on an edit', () => {
       it('snooze', async () => {
         await setup({ assignees: 1 });

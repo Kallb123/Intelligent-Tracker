@@ -1,4 +1,5 @@
 import {
+  localToday,
   planReminders,
   RecurrenceError,
   type PlannedReminder,
@@ -43,8 +44,8 @@ import type { NewNotification, NewReminder, Reminder, ReminderData } from './sch
  *   2. `replanReminders`: an occurrence whose planner inputs changed since it was last planned
  *      is planned again and its rows brought in line (inserted, moved, cancelled), so any edit,
  *      snooze, start, reassignment, away change or completion is picked up by the next tick.
- *      One whose inputs did not change only gets the reminders it lacks (the overdue horizon
- *      rolling forward).
+ *      One whose inputs did not change only gets the overdue reminders it lacks (the overdue
+ *      horizon rolling forward).
  *
  * "Changed" is judged by a fingerprint of the planner's inputs (everything but `now`), stored on
  * the occurrence as `reminder_plan_hash`. That is what lets a hold outlive its condition: a
@@ -497,13 +498,18 @@ function wantedRow(occurrenceId: string, planned: PlannedReminder): NewReminder 
  *   `planned` row the planner no longer wants is `cancelled`. The new hash is then stored on the
  *   occurrence.
  * - Unchanged: insert only, and only `overdue` reminders. The overdue ones the planner wants that
- *   have no row at all are added (this is what rolls the overdue horizon forward); nothing is
- *   updated, revived or cancelled, and no other kind is added. A fresh plan is not authoritative
- *   about the existing rows here: a hold (snooze, away) moves a reminder to an instant after the
- *   hold's condition has ended, and a plan made then no longer lists it, so cancelling on a
- *   difference would lose the held reminder. Nor may a missing row of another kind be added: the
- *   plan that held it may have deduplicated a nudge away that a plan made now would list again,
- *   on the day the held reminder now falls.
+ *   have no row at all are added (this is what rolls the overdue horizon forward), unless the
+ *   occurrence already has a reminder row, of any status, on the same household-local day as the
+ *   new one's `fireAt`. That skip is what a full plan would do for a crowded day, and it stops a
+ *   hold from multiplying: a hold moves only the latest held reminder to the hold instant, so
+ *   when the hold ends beyond the horizon, each tick a different `overdue:<day>` key is that
+ *   latest one, and inserting them all would send one notification per rolled day at the hold
+ *   instant. Nothing is updated, revived or cancelled, and no other kind is added. A fresh plan
+ *   is not authoritative about the existing rows here: a hold (snooze, away) moves a reminder to
+ *   an instant after the hold's condition has ended, and a plan made then no longer lists it, so
+ *   cancelling on a difference would lose the held reminder. Nor may a missing row of another
+ *   kind be added: the plan that held it may have deduplicated a nudge away that a plan made now
+ *   would list again, on the day the held reminder now falls.
  *
  * Either way a `sent` row is never changed (a key is never sent twice), and the `planned` rows
  * of closed (done, skipped) occurrences and of archived tasks are `cancelled`, their stored hash
@@ -581,10 +587,14 @@ export async function replanReminders(
     const stored = existing.get(occ.id) ?? new Map<string, typeof reminder.$inferSelect>();
     const hash = planInputsHash(context);
     if (hash === occ.reminderPlanHash) {
+      const timezone = context.household.timezone;
+      const takenDays = new Set([...stored.values()].map((r) => localToday(r.fireAt, timezone)));
       for (const planned of plan) {
-        if (planned.kind === 'overdue' && !stored.has(planned.key)) {
-          inserts.push(wantedRow(occ.id, planned));
-        }
+        if (planned.kind !== 'overdue' || stored.has(planned.key)) continue;
+        const day = localToday(planned.fireAt, timezone);
+        if (takenDays.has(day)) continue;
+        takenDays.add(day);
+        inserts.push(wantedRow(occ.id, planned));
       }
       continue;
     }

@@ -1098,6 +1098,67 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       expect(result).toMatchObject({ queued: 1, notifications: 1 });
     });
 
+    describe('an overdue occurrence whose assignee is away past the overdue horizon', () => {
+      // Due 20 July, persistent (a daily overdue reminder). Away until 20 August: everything
+      // that would fire before the evening slot of 21 August is held to it (19:00 BST).
+      const held = at('2026-08-21T18:00:00Z');
+      const overdue = async () => (await reminders()).filter((r) => r.kind === 'overdue');
+      const overdueUpToHold = async () =>
+        (await overdue()).filter((r) => r.fireAt.getTime() <= held.getTime());
+      const daily = async (from: string, to: string) => {
+        for (let ms = at(from).getTime(); ms <= at(to).getTime(); ms += 24 * 60 * 60 * 1000) {
+          await tick(new Date(ms));
+        }
+      };
+
+      async function setupAway() {
+        const fixture = await setup({ reminderProfile: 'persistent' });
+        await db
+          .update(member)
+          .set({ awayUntil: '2026-08-20' })
+          .where(eq(member.id, fixture.alex.id));
+        return fixture;
+      }
+
+      it('keeps one overdue reminder at the hold instant as the horizon rolls', async () => {
+        await setupAway();
+
+        // The 14 day horizon stays short of the hold until 8 August, so each tick a later
+        // overdue day is the latest held one, moved to the hold instant.
+        await daily('2026-07-22T09:00:00Z', '2026-08-07T09:00:00Z');
+
+        expect(await overdue()).toMatchObject([{ status: 'planned', fireAt: held }]);
+      });
+
+      it('adds no second overdue reminder on the hold instant`s day once the horizon reaches it', async () => {
+        await setupAway();
+
+        // From 8 August the horizon covers 21 August: that day's reminder is not held, but it
+        // falls on the day the held one already occupies. Later days are plain overdue ones.
+        await daily('2026-07-22T09:00:00Z', '2026-08-12T09:00:00Z');
+
+        expect(await overdueUpToHold()).toMatchObject([{ status: 'planned', fireAt: held }]);
+        const later = (await overdue()).filter((r) => r.fireAt.getTime() > held.getTime());
+        expect(later.length).toBeGreaterThan(0);
+        expect(later.every((r) => r.fireAt.getTime() >= at('2026-08-22T00:00:00Z').getTime())).toBe(
+          true,
+        );
+      });
+
+      it('sends one notification at the hold instant', async () => {
+        await setupAway();
+        await daily('2026-07-22T09:00:00Z', '2026-08-20T09:00:00Z');
+        expect(await notifications()).toEqual([]);
+
+        const result = await tick(at('2026-08-21T18:00:30Z'));
+
+        expect(result.queued).toMatchObject({ queued: 1, notifications: 1 });
+        expect((await notifications()).map((n) => n.payload)).toMatchObject([
+          { kind: 'overdue', fireAt: held.toISOString() },
+        ]);
+      });
+    });
+
     describe('a snooze into quiet hours', () => {
       // The task reminds at 19:00; both household slots are inside the quiet hours (22:00 to
       // 07:30), so a time pushed out of them lands on 07:30.
@@ -1146,6 +1207,58 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
         expect(result).toMatchObject({ queued: 1, notifications: 1 });
       });
+    });
+  });
+
+  describe('an occurrence closed and then reopened', () => {
+    const tick = async (now: Date) => {
+      const queued = await queueDueReminders(db, { now });
+      const replanned = await replanReminders(db, { now });
+      return { queued, replanned };
+    };
+    const hashOf = async (id: string) =>
+      (await db.select().from(occurrence).where(eq(occurrence.id, id)))[0]?.reminderPlanHash;
+
+    it.each(['done', 'skipped'] as const)(
+      'has its plan hash cleared when it is %s',
+      async (status) => {
+        const { o } = await setup();
+        await replanReminders(db, { now: NOW });
+        expect(await hashOf(o.id)).toMatch(/^[0-9a-f]{64}$/);
+
+        await db.update(occurrence).set({ status }).where(eq(occurrence.id, o.id));
+        await replanReminders(db, { now: NOW });
+
+        expect(await hashOf(o.id)).toBeNull();
+      },
+    );
+
+    it('sends nothing stale when a reminder was due while it was closed, and the revived rows later', async () => {
+      const { o } = await setup();
+      await tick(NOW);
+      await db.update(occurrence).set({ status: 'done' }).where(eq(occurrence.id, o.id));
+      await tick(at('2026-07-07T09:00:00Z'));
+      expect(await planned()).toEqual([]);
+
+      // Reopened with the heads-up (10 July) due: its row was cancelled while closed.
+      await db.update(occurrence).set({ status: 'active' }).where(eq(occurrence.id, o.id));
+      const reopened = await tick(DUE_AFTER_HEADS_UP);
+
+      expect(reopened.queued).toMatchObject({ queued: 0, notifications: 0 });
+      expect(await notifications()).toEqual([]);
+      const rows = await reminders();
+      expect(rows.find((r) => r.key === 'heads_up')?.status).toBe('cancelled');
+      // The upcoming ones were revived by the full re-plan the cleared hash gave.
+      expect(keys((await planned()).filter((r) => r.kind !== 'overdue'))).toEqual(
+        PLAN_KEYS.filter((key) => key !== 'heads_up').sort(),
+      );
+
+      const later = await tick(at('2026-07-15T18:00:30Z'));
+
+      expect(later.queued).toMatchObject({ queued: 1, notifications: 1 });
+      expect((await notifications()).map((n) => n.payload)).toMatchObject([
+        { kind: 'nudge', fireAt: '2026-07-15T18:00:00.000Z' },
+      ]);
     });
   });
 
