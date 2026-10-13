@@ -220,7 +220,7 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         expect(await hashOf(o.id)).toEqual(before);
       });
 
-      it('leaves rows alone while the inputs are unchanged, and only adds missing ones', async () => {
+      it('leaves rows alone while the inputs are unchanged, adding no missing row but overdue ones', async () => {
         await setup();
         await replanReminders(db, { now: NOW });
         // Rows out of step with the plan: one cancelled, one moved, one gone.
@@ -234,11 +234,12 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
         const result = await replanReminders(db, { now: NOW });
 
-        expect(result).toEqual({ occurrences: 1, planned: 1, cancelled: 0, failures: [] });
+        expect(result).toEqual({ occurrences: 1, planned: 0, cancelled: 0, failures: [] });
         const byKey = Object.fromEntries((await reminders()).map((r) => [r.key, r]));
         expect(byKey['heads_up']?.status).toBe('cancelled');
         expect(byKey['nudge:2026-07-15']).toMatchObject({ status: 'planned', fireAt: moved });
-        expect(byKey['due']).toMatchObject({ status: 'planned' });
+        // A missing row is only restored with a full re-plan, except for overdue ones.
+        expect(byKey['due']).toBeUndefined();
       });
 
       it('rolls the overdue horizon forward without disturbing the other reminders', async () => {
@@ -254,6 +255,20 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         const after = await reminders();
         expect(after.filter((r) => r.kind === 'overdue')).toHaveLength(5);
         expect(after.filter((r) => r.kind !== 'overdue')).toEqual(before);
+      });
+
+      it('adds only overdue reminders while the inputs are unchanged', async () => {
+        await setup({ reminderProfile: 'persistent' });
+        await replanReminders(db, { now: NOW });
+        // A nudge the held plan had deduplicated away looks like this: no row, still wanted.
+        await db.delete(reminder).where(eq(reminder.key, 'nudge:2026-07-15'));
+
+        const result = await replanReminders(db, { now: at('2026-07-12T09:00:00Z') });
+
+        expect(result).toMatchObject({ planned: 5, cancelled: 0 });
+        const rows = await reminders();
+        expect(rows.filter((r) => r.kind === 'overdue')).toHaveLength(5);
+        expect(rows.map((r) => r.key)).not.toContain('nudge:2026-07-15');
       });
 
       it('does not cancel a planned row the plan no longer lists, while the inputs are unchanged', async () => {
@@ -332,6 +347,48 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
       expect(result).toEqual({ occurrences: 0, planned: 0, cancelled: 5, failures: [] });
       expect((await reminders()).every((r) => r.status === 'cancelled')).toBe(true);
+    });
+
+    it('plans an unarchived task`s reminders again, overdue ones included', async () => {
+      const { t, o } = await setup({ reminderProfile: 'persistent' });
+      await db.update(occurrence).set({ status: 'started' }).where(eq(occurrence.id, o.id));
+      const overdueNow = at('2026-07-22T09:00:00Z');
+      await replanReminders(db, { now: overdueNow });
+      const before = await planned();
+      expect(before.some((r) => r.kind === 'overdue')).toBe(true);
+      const [stamped] = await db.select().from(occurrence).where(eq(occurrence.id, o.id));
+
+      await db.update(task).set({ archivedAt: overdueNow }).where(eq(task.id, t.id));
+      const archived = await replanReminders(db, { now: overdueNow });
+      expect(archived).toMatchObject({ cancelled: before.length });
+      expect(await planned()).toEqual([]);
+      const [hash] = await db.select().from(occurrence).where(eq(occurrence.id, o.id));
+      expect(hash?.reminderPlanHash).toBeNull();
+      expect(hash?.updatedAt).toEqual(stamped?.updatedAt);
+      // Archived and idle: nothing more to write.
+      const rows = await reminders();
+      await replanReminders(db, { now: overdueNow });
+      expect(await reminders()).toEqual(rows);
+
+      await db.update(task).set({ archivedAt: null }).where(eq(task.id, t.id));
+      await replanReminders(db, { now: overdueNow });
+
+      const withoutUpdatedAt = (rows: { updatedAt: Date }[]) =>
+        rows.map((r) => ({ ...r, updatedAt: null }));
+      expect(withoutUpdatedAt(await planned())).toEqual(withoutUpdatedAt(before));
+    });
+
+    it('plans a reopened occurrence`s reminders again', async () => {
+      const { o } = await setup();
+      await replanReminders(db, { now: NOW });
+      await db.update(occurrence).set({ status: 'done' }).where(eq(occurrence.id, o.id));
+      await replanReminders(db, { now: NOW });
+      expect(await planned()).toEqual([]);
+
+      await db.update(occurrence).set({ status: 'active' }).where(eq(occurrence.id, o.id));
+      await replanReminders(db, { now: NOW });
+
+      expect(keys(await planned())).toEqual([...PLAN_KEYS].sort());
     });
 
     it('addresses the reminders to the new assignee after a reassignment', async () => {

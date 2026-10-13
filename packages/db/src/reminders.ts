@@ -496,15 +496,19 @@ function wantedRow(occurrenceId: string, planned: PlannedReminder): NewReminder 
  *   recipient, time or data differ is updated back to `planned`, an identical one left alone; a
  *   `planned` row the planner no longer wants is `cancelled`. The new hash is then stored on the
  *   occurrence.
- * - Unchanged: insert only. The reminders the planner wants that have no row at all are added
- *   (this is what rolls the overdue horizon forward); nothing is updated, revived or cancelled.
- *   A fresh plan is not authoritative about the existing rows here: a hold (snooze, away) moves
- *   a reminder to an instant after the hold's condition has ended, and a plan made then no
- *   longer lists it, so cancelling on a difference would lose the held reminder.
+ * - Unchanged: insert only, and only `overdue` reminders. The overdue ones the planner wants that
+ *   have no row at all are added (this is what rolls the overdue horizon forward); nothing is
+ *   updated, revived or cancelled, and no other kind is added. A fresh plan is not authoritative
+ *   about the existing rows here: a hold (snooze, away) moves a reminder to an instant after the
+ *   hold's condition has ended, and a plan made then no longer lists it, so cancelling on a
+ *   difference would lose the held reminder. Nor may a missing row of another kind be added: the
+ *   plan that held it may have deduplicated a nudge away that a plan made now would list again,
+ *   on the day the held reminder now falls.
  *
  * Either way a `sent` row is never changed (a key is never sent twice), and the `planned` rows
- * of closed (done, skipped) occurrences and of archived tasks are `cancelled`. An idle tick
- * writes nothing.
+ * of closed (done, skipped) occurrences and of archived tasks are `cancelled`, their stored hash
+ * cleared so that the occurrence is fully re-planned should it open again. An idle tick writes
+ * nothing.
  *
  * Costs a constant number of queries however many occurrences there are. An occurrence the
  * planner rejects (`RecurrenceError`) is reported in `failures` and skipped; any other error is
@@ -518,20 +522,28 @@ export async function replanReminders(
   const result: ReplanRemindersResult = { occurrences: 0, planned: 0, cancelled: 0, failures: [] };
 
   // Closed occurrences and archived tasks: nothing planned should fire any more.
+  const isClosed = or(notInArray(occurrence.status, OPEN), isNotNull(task.archivedAt));
   const closed = await db
     .update(reminder)
     .set({ status: 'cancelled' })
     .from(occurrence)
     .innerJoin(task, eq(task.id, occurrence.taskId))
-    .where(
-      and(
-        eq(reminder.occurrenceId, occurrence.id),
-        eq(reminder.status, 'planned'),
-        or(notInArray(occurrence.status, OPEN), isNotNull(task.archivedAt)),
-      ),
-    )
+    .where(and(eq(reminder.occurrenceId, occurrence.id), eq(reminder.status, 'planned'), isClosed))
     .returning({ id: reminder.id });
   result.cancelled += closed.length;
+  // Forget what they were planned from, so that if one opens again (a task unarchived) the next
+  // plan is a full diff that revives the cancelled rows, instead of the insert-only pass that
+  // an unchanged hash would give. Only hashes that are set are cleared, so an idle tick writes
+  // nothing.
+  await db
+    .update(occurrence)
+    .set({
+      reminderPlanHash: null,
+      // Bookkeeping, not an edit: leave `updated_at` as it is.
+      updatedAt: sql`${occurrence.updatedAt}`,
+    })
+    .from(task)
+    .where(and(eq(task.id, occurrence.taskId), isNotNull(occurrence.reminderPlanHash), isClosed));
 
   const contexts = await loadPlanContexts(db);
   if (contexts.size === 0) return result;
@@ -570,7 +582,9 @@ export async function replanReminders(
     const hash = planInputsHash(context);
     if (hash === occ.reminderPlanHash) {
       for (const planned of plan) {
-        if (!stored.has(planned.key)) inserts.push(wantedRow(occ.id, planned));
+        if (planned.kind === 'overdue' && !stored.has(planned.key)) {
+          inserts.push(wantedRow(occ.id, planned));
+        }
       }
       continue;
     }
