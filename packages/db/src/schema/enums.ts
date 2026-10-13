@@ -1,4 +1,5 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
+import { NOTIFICATION_CHANNELS, REMINDER_KINDS, REMINDER_STATUSES } from '@tracker/shared';
 
 export const memberRole = pgEnum('member_role', ['admin', 'member']);
 
@@ -31,3 +32,9 @@ export const bankHolidayRegion = pgEnum('bank_holiday_region', [
   'scotland',
   'northern-ireland',
 ]);
+
+export const reminderKind = pgEnum('reminder_kind', REMINDER_KINDS);
+
+export const reminderStatus = pgEnum('reminder_status', REMINDER_STATUSES);
+
+export const notificationChannel = pgEnum('notification_channel', NOTIFICATION_CHANNELS);
