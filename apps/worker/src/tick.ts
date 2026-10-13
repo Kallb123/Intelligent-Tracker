@@ -1,4 +1,16 @@
-import { activateDue, materialiseAll, type Database, type MaterialiseFailure } from '@tracker/db';
+import {
+  activateDue,
+  deliverOutbox,
+  materialiseAll,
+  queueDueReminders,
+  recordHeartbeat,
+  replanReminders,
+  WORKER_SERVICE,
+  type Database,
+  type MaterialiseFailure,
+  type OutboxHandler,
+  type ReminderPlanFailure,
+} from '@tracker/db';
 import { sql } from 'drizzle-orm';
 
 /**
@@ -25,13 +37,40 @@ export type TickResult =
       activated: number;
       /** Tasks whose schedule could not be materialised; the others were. */
       failures: MaterialiseFailure[];
+      /** Due reminders queued in the outbox (and marked sent). */
+      queued: number;
+      /** Reminder rows inserted or changed by the re-plan. */
+      planned: number;
+      /** Reminders cancelled: stale ones that were never sent, and ones no longer wanted. */
+      cancelled: number;
+      /** Occurrences whose reminders could not be planned; the others were. */
+      planFailures: ReminderPlanFailure[];
+      /** Outbox notifications delivered after the transaction committed. */
+      delivered: number;
     };
 
 /**
- * One worker tick: materialises every task's upcoming occurrences, then activates those whose
- * start has arrived. Idempotent, and serialised across workers by a transaction-scoped advisory
- * lock (released on commit or rollback, so a crashed worker cannot leave it held).
- * A task that cannot be materialised is logged and left to the next tick.
+ * How each outbox channel is delivered. An in-app notification is the outbox row itself, so
+ * delivering it only stamps `sent_at` (which makes it show up in the member's bell). The
+ * `telegram_group` channel has no handler here: the bot owns it, so the worker never claims it.
+ */
+const HANDLERS: Record<'in_app', OutboxHandler> = { in_app: async () => {} };
+
+/**
+ * One worker tick. Inside a single transaction, serialised across workers by a transaction-scoped
+ * advisory lock (released on commit or rollback, so a crashed worker cannot leave it held):
+ *
+ *   1. materialise every task's upcoming occurrences,
+ *   2. activate those whose start has arrived,
+ *   3. queue the reminders that are due in the outbox,
+ *   4. re-plan the reminders of every open occurrence.
+ *
+ * Queuing and marking the reminders sent commit together, so a crash loses and duplicates
+ * nothing. After the commit the tick records the worker's heartbeat and delivers the outbox
+ * (a separate step: delivery is retried with backoff and must not hold the tick lock). The
+ * heartbeat is also recorded when another worker holds the lock.
+ * Idempotent. A task that cannot be materialised, or an occurrence that cannot be planned, is
+ * logged and left to the next tick.
  */
 export async function runTick(
   db: Database,
@@ -45,18 +84,36 @@ export async function runTick(
     if (!rows[0]?.locked) return { skipped: true };
     const materialised = await materialiseAll(tx, { now });
     const activated = await activateDue(tx, { now });
+    const queued = await queueDueReminders(tx, { now });
+    const replanned = await replanReminders(tx, { now });
     return {
       skipped: false,
       tasks: materialised.tasks,
       inserted: materialised.inserted,
       activated,
       failures: materialised.failures,
+      queued: queued.queued,
+      planned: replanned.planned,
+      cancelled: queued.cancelled + replanned.cancelled,
+      planFailures: replanned.failures,
+      delivered: 0,
     };
   });
-  if (!result.skipped) {
-    for (const failure of result.failures) {
-      logger.warn({ ...failure }, 'could not materialise task');
-    }
+  await recordHeartbeat(db, WORKER_SERVICE, now);
+  if (result.skipped) return result;
+
+  for (const failure of result.failures) {
+    logger.warn({ ...failure }, 'could not materialise task');
   }
-  return result;
+  for (const failure of result.planFailures) {
+    logger.warn({ ...failure }, 'could not plan reminders');
+  }
+  const delivery = await deliverOutbox(db, { now, handlers: HANDLERS });
+  for (const failure of delivery.failures) {
+    logger.warn(
+      { ...failure },
+      failure.gaveUp ? 'gave up delivering notification' : 'could not deliver notification',
+    );
+  }
+  return { ...result, delivered: delivery.delivered };
 }

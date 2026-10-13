@@ -1,5 +1,5 @@
 import cookie from '@fastify/cookie';
-import { serviceHeartbeat, type Database } from '@tracker/db';
+import { serviceHeartbeat, WORKER_SERVICE, type Database } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -76,7 +76,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         const [beat] = await options.db
           .select({ beatAt: serviceHeartbeat.beatAt })
           .from(serviceHeartbeat)
-          .where(eq(serviceHeartbeat.service, 'worker'))
+          .where(eq(serviceHeartbeat.service, WORKER_SERVICE))
           .catch(() => []);
         const stale = !beat || now.getTime() - beat.beatAt.getTime() > WORKER_STALE_AFTER_MS;
         return { ...body, worker: { lastBeatAt: beat?.beatAt.toISOString() ?? null, stale } };

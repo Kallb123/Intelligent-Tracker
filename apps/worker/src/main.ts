@@ -49,8 +49,19 @@ const ticker = dbHandle
         });
         if (result.skipped) log('tick skipped; another worker holds the lock');
         else {
-          const { tasks, inserted, activated, failures } = result;
-          log('tick', { tasks, inserted, activated, failed: failures.length });
+          const { tasks, inserted, activated, failures, queued, planned, cancelled, delivered } =
+            result;
+          log('tick', {
+            tasks,
+            inserted,
+            activated,
+            failed: failures.length,
+            queued,
+            planned,
+            cancelled,
+            planFailed: result.planFailures.length,
+            delivered,
+          });
         }
       },
     })
