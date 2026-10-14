@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import type { NotificationDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Menu from 'primevue/menu';
 import type { MenuItem } from 'primevue/menuitem';
-import { ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError } from '../api/index.js';
 import AppFooter from '../components/AppFooter.vue';
+import NotificationBell from '../components/NotificationBell.vue';
+import { useNotificationsStore } from '../stores/notifications.js';
 import { useSessionStore } from '../stores/session.js';
 
 /**
@@ -14,6 +17,16 @@ import { useSessionStore } from '../stores/session.js';
  */
 const session = useSessionStore();
 const router = useRouter();
+const notifications = useNotificationsStore();
+
+// Polls while the shell is up; leaving it (logging out) drops the member's notifications.
+onMounted(() => notifications.startPolling());
+onUnmounted(() => notifications.reset());
+
+async function openNotification(n: NotificationDto): Promise<void> {
+  void notifications.markRead(n.id);
+  await router.push({ name: 'task-edit', params: { id: n.payload.taskId } });
+}
 
 const nav = [
   { to: { name: 'home' }, label: 'Today', icon: 'pi pi-home' },
@@ -57,6 +70,13 @@ const items: MenuItem[] = [
       </nav>
 
       <div class="user">
+        <NotificationBell
+          :notifications="notifications.items"
+          :unread-count="notifications.unreadCount"
+          :time-zone="session.timeZone"
+          @select="openNotification"
+          @mark-all-read="notifications.markAllRead()"
+        />
         <Button
           type="button"
           :label="session.member?.name"

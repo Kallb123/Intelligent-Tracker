@@ -10,6 +10,32 @@ export {
   type MaterialiseTaskResult,
 } from './materialise.js';
 export { dueInstant, dueOrder } from './due.js';
+export { recordHeartbeat, WORKER_SERVICE } from './heartbeat.js';
+export {
+  DEFAULT_OUTBOX_BATCH_SIZE,
+  DEFAULT_OUTBOX_MAX_ATTEMPTS,
+  deliverOutbox,
+  OLD_NOTIFICATION_RETENTION_MS,
+  OUTBOX_RETRY_BASE_MS,
+  OUTBOX_RETRY_MAX_MS,
+  outboxBackoffMs,
+  pruneNotifications,
+  READ_NOTIFICATION_RETENTION_MS,
+  type DeliverOutboxOptions,
+  type DeliverOutboxResult,
+  type DeliveryFailure,
+  type OutboxHandler,
+} from './outbox.js';
+export {
+  completedMilestoneIds,
+  inAppDedupeKey,
+  MISSED_REMINDER_GRACE_MS,
+  queueDueReminders,
+  replanReminders,
+  type QueueRemindersResult,
+  type ReminderPlanFailure,
+  type ReplanRemindersResult,
+} from './reminders.js';
 export { consumeRotationTurn, replanRotation, replanRotationsForMember } from './rotation.js';
 export {
   MIGRATION_LOCK_KEY,

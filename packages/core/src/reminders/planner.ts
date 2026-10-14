@@ -1,5 +1,11 @@
 import type { IANAZone } from 'luxon';
-import type { OccurrenceStatus, ReminderProfile, ReminderSlot } from '@tracker/shared';
+import {
+  REMINDER_KINDS,
+  type OccurrenceStatus,
+  type ReminderKind,
+  type ReminderProfile,
+  type ReminderSlot,
+} from '@tracker/shared';
 import {
   addDays,
   assertValidDue,
@@ -22,10 +28,11 @@ import { parseTimeOfDay, quietHoursAdjuster } from './slots.js';
  * result; `key` is stable per occurrence so the outbox can dedupe what was already sent.
  */
 
-export type ReminderKind = 'heads_up' | 'milestone' | 'nudge' | 'due' | 'overdue';
+// The kinds live in `@tracker/shared` (the db, api and web use them too); re-exported unchanged.
+export type { ReminderKind };
 
-/** The order reminders of the same instant are returned in. */
-const KIND_ORDER: readonly ReminderKind[] = ['heads_up', 'milestone', 'nudge', 'due', 'overdue'];
+/** The order reminders of the same instant are returned in: the order of `REMINDER_KINDS`. */
+const KIND_ORDER: readonly ReminderKind[] = REMINDER_KINDS;
 
 export interface PlannedReminder {
   kind: ReminderKind;

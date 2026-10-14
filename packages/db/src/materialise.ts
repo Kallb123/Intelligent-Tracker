@@ -9,7 +9,7 @@ import {
 } from '@tracker/core';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
-import { dueInstant } from './due.js';
+import { dueInstant, dueOf } from './due.js';
 import { assigneeIdsOf, replanRotation } from './rotation.js';
 import { household, occurrence, task } from './schema/index.js';
 import type { NewOccurrence, Task } from './schema/index.js';
@@ -109,11 +109,9 @@ async function lastCompletedOf(
     .orderBy(desc(occurrence.completedAt))
     .limit(1);
   if (!row?.completedAt) return undefined;
-  if (row.dueAt) return { completedAt: row.completedAt, due: { allDay: false, at: row.dueAt } };
-  if (row.dueDate)
-    return { completedAt: row.completedAt, due: { allDay: true, date: row.dueDate } };
+  const due = dueOf(row);
   // An undated occurrence has no due to anchor to, so the schedule's own start applies.
-  return undefined;
+  return due ? { completedAt: row.completedAt, due } : undefined;
 }
 
 async function hasOpenOccurrence(db: DbOrTransaction, taskId: string): Promise<boolean> {

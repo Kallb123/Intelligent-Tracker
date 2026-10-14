@@ -15,6 +15,13 @@
       "when": 1791672385347,
       "tag": "0001_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791927259120,
+      "tag": "0002_reminders",
+      "breakpoints": true
     }
   ]
 }

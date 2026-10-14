@@ -18,4 +18,5 @@ export const HOUSEHOLD_DEFAULTS = {
 export type HouseholdDefaults = typeof HOUSEHOLD_DEFAULTS;
 
 export * from './auth.js';
+export * from './notifications.js';
 export * from './tasks.js';
