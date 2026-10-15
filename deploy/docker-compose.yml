@@ -85,6 +85,12 @@ services:
     environment:
       <<: *backend-env
       HEARTBEAT_FILE: /tmp/heartbeat
+    # The api applies the migrations on start, and the bot's linking and delivery need them.
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     healthcheck: *heartbeat-healthcheck
 
   web:

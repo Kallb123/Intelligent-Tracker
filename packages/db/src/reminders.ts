@@ -38,7 +38,8 @@ import type { NewNotification, NewReminder, Reminder, ReminderData } from './sch
  * occurrence should have; the worker keeps the `reminder` table in step with it every tick:
  *
  *   1. `queueDueReminders`: `planned` reminders whose time has come become `in_app` rows in the
- *      outbox (`notification`) and are marked `sent`. This runs first, because the planner
+ *      outbox (`notification`), plus one `telegram_group` row when the household has linked its
+ *      Telegram group, and are marked `sent`. This runs first, because the planner
  *      drops reminders at or before `now`, so the persisted `planned` rows are the record of
  *      what is due.
  *   2. `replanReminders`: an occurrence whose planner inputs changed since it was last planned
@@ -78,7 +79,7 @@ const OPEN = [...OPEN_OCCURRENCE_STATUSES];
 export interface QueueRemindersResult {
   /** Reminders marked `sent` (queued in the outbox). */
   queued: number;
-  /** Outbox rows inserted: one per recipient. */
+  /** Outbox rows inserted: one `in_app` per recipient, and one `telegram_group` per reminder. */
   notifications: number;
   /** Reminders cancelled because they were more than `MISSED_REMINDER_GRACE_MS` overdue. */
   cancelled: number;
@@ -92,6 +93,14 @@ export interface QueueRemindersResult {
 /** The dedupe key of the in-app notification of a reminder for one member. */
 export function inAppDedupeKey(reminderId: string, memberId: string): string {
   return `reminder:${reminderId}:in_app:${memberId}`;
+}
+
+/**
+ * The dedupe key of the Telegram group notification of a reminder. The group is one recipient
+ * (the message mentions the assignee itself), so unlike `inAppDedupeKey` there is no member.
+ */
+export function telegramGroupDedupeKey(reminderId: string): string {
+  return `reminder:${reminderId}:telegram_group`;
 }
 
 /**
@@ -128,6 +137,11 @@ export function inAppDedupeKey(reminderId: string, memberId: string): string {
  * occurrence whose assignee was deleted: the foreign keys set both `occurrence.assignee_id` and
  * `reminder.member_id` to null, which is exactly an unassigned occurrence, and the planner
  * addresses those to the whole household.
+ *
+ * A household that has linked a Telegram group (`telegram_group_chat_id`) also gets one
+ * `telegram_group` row per reminder, with no member: the bot posts the reminders due together as
+ * one message that mentions the assignee. A household without a group gets none, so linking a
+ * group later does not replay reminders that were already queued.
  *
  * The due rows are locked (`FOR UPDATE`), so concurrent callers queue each reminder once, and
  * the outbox's `dedupe_key` is a second guard.
@@ -248,6 +262,17 @@ export async function queueDueReminders(
         channel: 'in_app',
         payload,
         dedupeKey: inAppDedupeKey(rem.id, memberId),
+        nextAttemptAt: now,
+      });
+    }
+    if (context.household.telegramGroupChatId !== null) {
+      outbox.push({
+        householdId: t.householdId,
+        memberId: null,
+        reminderId: rem.id,
+        channel: 'telegram_group',
+        payload,
+        dedupeKey: telegramGroupDedupeKey(rem.id),
         nextAttemptAt: now,
       });
     }

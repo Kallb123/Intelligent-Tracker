@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { localToday } from '@tracker/core';
-import type { OccurrenceDto } from '@tracker/shared';
+import { formatDayHeading, type OccurrenceDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import { computed, onMounted, ref } from 'vue';
@@ -8,7 +8,7 @@ import OccurrenceItem from '../components/OccurrenceItem.vue';
 import PersonFilter from '../components/PersonFilter.vue';
 import { useOccurrenceList } from '../composables/useOccurrenceList.js';
 import { usePersonFilter } from '../composables/usePersonFilter.js';
-import { formatDayHeading, formatTime } from '../format.js';
+import { formatTime } from '../format.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
 import { describePrepStart, groupByDate } from '../tasks/occurrences.js';

@@ -9,22 +9,30 @@ export {
   type MaterialiseFailure,
   type MaterialiseTaskResult,
 } from './materialise.js';
+export { uniqueViolation } from './errors.js';
 export { dueInstant, dueOrder } from './due.js';
 export { recordHeartbeat, WORKER_SERVICE } from './heartbeat.js';
 export {
   DEFAULT_OUTBOX_BATCH_SIZE,
   DEFAULT_OUTBOX_MAX_ATTEMPTS,
+  DEFAULT_OUTBOX_MAX_MESSAGES,
+  DEFAULT_OUTBOX_MESSAGE_SIZE,
   deliverOutbox,
+  deliverOutboxBatches,
+  giveUpStaleNotifications,
   OLD_NOTIFICATION_RETENTION_MS,
   OUTBOX_RETRY_BASE_MS,
   OUTBOX_RETRY_MAX_MS,
   outboxBackoffMs,
   pruneNotifications,
   READ_NOTIFICATION_RETENTION_MS,
+  type DeliverOutboxBatchesOptions,
   type DeliverOutboxOptions,
   type DeliverOutboxResult,
   type DeliveryFailure,
+  type OutboxBatchHandler,
   type OutboxHandler,
+  type OutboxSent,
 } from './outbox.js';
 export {
   completedMilestoneIds,
@@ -32,10 +40,18 @@ export {
   MISSED_REMINDER_GRACE_MS,
   queueDueReminders,
   replanReminders,
+  telegramGroupDedupeKey,
   type QueueRemindersResult,
   type ReminderPlanFailure,
   type ReplanRemindersResult,
 } from './reminders.js';
+export {
+  applyOccurrenceAction,
+  OccurrenceActionError,
+  type OccurrenceAction,
+  type OccurrenceActionInput,
+  type OccurrenceActionResult,
+} from './occurrence-actions.js';
 export { consumeRotationTurn, replanRotation, replanRotationsForMember } from './rotation.js';
 export {
   MIGRATION_LOCK_KEY,
@@ -44,6 +60,29 @@ export {
   type MigrationLogger,
   type RunMigrationsOptions,
 } from './migrate.js';
+export {
+  findHouseholdById,
+  findHouseholdByTelegramChat,
+  findMemberByTelegramUserId,
+  findMembersByIds,
+  issueGroupLinkCode,
+  issueMemberLinkCode,
+  migrateTelegramGroupChat,
+  OCCURRENCE_ACTOR_KINDS,
+  occurrenceStates,
+  redeemGroupLinkCode,
+  redeemMemberLinkCode,
+  TELEGRAM_LINK_CODE_TTL_MS,
+  telegramMessageNotifications,
+  unlinkGroup,
+  unlinkMember,
+  type LinkedMember,
+  type MemberLinkResult,
+  type OccurrenceActorKind,
+  type OccurrenceState,
+  type TelegramLinkCode,
+} from './telegram.js';
+export { generateToken, hashToken } from './tokens.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';
 export * from './seed/index.js';

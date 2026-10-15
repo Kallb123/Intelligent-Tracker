@@ -1,11 +1,9 @@
 import {
-  activity,
-  consumeRotationTurn,
-  materialiseTask,
+  applyOccurrenceAction,
   occurrence,
+  OccurrenceActionError,
   task,
-  type DbOrTransaction,
-  type NewOccurrence,
+  type OccurrenceAction,
 } from '@tracker/db';
 import {
   OPEN_OCCURRENCE_STATUSES,
@@ -15,7 +13,6 @@ import {
   occurrencesResponseSchema,
   snoozeBodySchema,
   type OccurrenceDto,
-  type OccurrenceStatus,
 } from '@tracker/shared';
 import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -34,28 +31,6 @@ import {
 } from '../tasks/payloads.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const NOT_STARTED = ['upcoming', 'active'] as const satisfies OccurrenceStatus[];
-
-/** What a status change does to an occurrence and how it is logged. */
-interface Transition {
-  /** Statuses the occurrence may currently have; any other is `occurrence_closed`. */
-  from: readonly OccurrenceStatus[];
-  changes: Partial<Pick<NewOccurrence, 'status' | 'snoozedUntil' | 'completedAt' | 'completedBy'>>;
-  activityKind: string;
-  activityData?: Record<string, unknown>;
-  /** Treated as success without doing anything when the occurrence is already in this status. */
-  idempotentIn?: OccurrenceStatus;
-  /** Runs in the same transaction after the change; returns ids of occurrences it created. */
-  after?: (tx: DbOrTransaction, changed: ChangedOccurrence) => Promise<string[]>;
-}
-
-/** An occurrence that a `Transition` has just changed. */
-interface ChangedOccurrence {
-  id: string;
-  taskId: string;
-  /** Its status before the change. */
-  previousStatus: OccurrenceStatus;
-}
 
 /**
  * Occurrences (the concrete, dated instances of tasks) and what members do with them. All need a
@@ -83,99 +58,37 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
   };
 
   /**
-   * Applies `transition` to the household's occurrence and returns it. The change is a single
-   * conditional UPDATE, so of two simultaneous requests only one finds the occurrence still
-   * open; the other gets 409 (or, for `start`, the already-started occurrence).
+   * Applies `action` to the household's occurrence (see `applyOccurrenceAction`) and returns it
+   * as a DTO, with the ids of the occurrences it created.
    */
-  async function transitionOccurrence(
-    householdId: string,
-    memberId: string,
+  async function actOnOccurrence(
+    me: { householdId: string; id: string },
     occurrenceId: string,
-    transition: Transition,
+    action: OccurrenceAction,
     now: Date,
   ): Promise<{ dto: OccurrenceDto; createdIds: string[]; clock: OverdueClock }> {
-    const { timezone } = await householdSettings(ctx.db, householdId);
-    const clock = { now, timezone };
-
-    return ctx.db.transaction(async (tx) => {
-      const owned = tx.select({ id: task.id }).from(task).where(eq(task.householdId, householdId));
-      // Lock order is task, then occurrence, like every other writer, so the actions cannot
-      // deadlock with task edits, away changes or the worker. The lock on the occurrence also
-      // makes the status read below and the change after it one step, so exactly one request
-      // sees the occurrence not yet started and uses up the turn.
-      const [ref] = await tx
-        .select({ taskId: occurrence.taskId })
-        .from(occurrence)
-        .where(and(eq(occurrence.id, occurrenceId), inArray(occurrence.taskId, owned)));
-      if (!ref) throw notFound('No such occurrence');
-      await tx
-        .select({ id: task.id })
-        .from(task)
-        .where(eq(task.id, ref.taskId))
-        .for('no key update');
-      const [before] = await tx
-        .select({ status: occurrence.status })
-        .from(occurrence)
-        .where(eq(occurrence.id, occurrenceId))
-        .for('no key update');
-      // Gone while waiting for the lock (the task was deleted or rescheduled).
-      if (!before) throw notFound('No such occurrence');
-      const changed = await tx
-        .update(occurrence)
-        .set(transition.changes)
-        .where(
-          and(
-            eq(occurrence.id, occurrenceId),
-            inArray(occurrence.status, [...transition.from]),
-            inArray(occurrence.taskId, owned),
-          ),
-        )
-        .returning({ taskId: occurrence.taskId });
-
-      const [current] = await selectOccurrences(tx)
-        .where(and(eq(occurrence.id, occurrenceId), eq(task.householdId, householdId)))
-        .limit(1);
-      if (!current) throw notFound('No such occurrence');
-      const changedRow = changed[0];
-      if (changedRow === undefined) {
-        if (current.occurrence.status === transition.idempotentIn) {
-          return { dto: toOccurrenceDto(current, clock), createdIds: [], clock };
-        }
-        throw conflict(
-          'occurrence_closed',
-          `That occurrence is already ${current.occurrence.status}`,
-        );
-      }
-
-      await tx.insert(activity).values({
-        householdId,
-        memberId,
-        taskId: changedRow.taskId,
+    const clock = { now, timezone: (await householdSettings(ctx.db, me.householdId)).timezone };
+    let createdIds: string[];
+    try {
+      ({ createdIds } = await applyOccurrenceAction(ctx.db, {
+        householdId: me.householdId,
+        memberId: me.id,
         occurrenceId,
-        kind: transition.activityKind,
-        data: { title: current.task.title, ...transition.activityData },
-      });
-      const createdIds =
-        (await transition.after?.(tx, {
-          id: occurrenceId,
-          taskId: changedRow.taskId,
-          previousStatus: before.status,
-        })) ?? [];
-      return { dto: toOccurrenceDto(current, clock), createdIds, clock };
-    });
+        now,
+        action,
+      }));
+    } catch (error) {
+      if (!(error instanceof OccurrenceActionError)) throw error;
+      if (error.code === 'not_found') throw notFound('No such occurrence');
+      throw conflict('occurrence_closed', error.message);
+    }
+    const [dto] = await loadOccurrenceDtos(ctx.db, me.householdId, [occurrenceId], clock);
+    if (!dto) throw notFound('No such occurrence');
+    return { dto, createdIds, clock };
   }
 
-  /** Uses up the assignee's rotation turn (a no-op if the occurrence had already been started). */
-  const consumeTurn = (tx: DbOrTransaction, changed: ChangedOccurrence, now: Date) =>
-    consumeRotationTurn(tx, changed.id, { now, previousStatus: changed.previousStatus });
-
   /** Complete or skip: closes the occurrence and lets the schedule produce the next one. */
-  function registerClose(
-    action: 'complete' | 'skip',
-    status: 'done' | 'skipped',
-    summary: string,
-    description: string,
-  ): void {
+  function registerClose(action: 'complete' | 'skip', summary: string, description: string): void {
     r.post(
       `/api/occurrences/:id/${action}`,
       {
@@ -191,21 +104,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
       async (request) => {
         const me = authOf(request).member;
         const now = ctx.config.clock();
-        const result = await transitionOccurrence(
-          me.householdId,
-          me.id,
-          request.params.id,
-          {
-            from: OPEN_OCCURRENCE_STATUSES,
-            changes: { status, completedAt: now, completedBy: me.id, snoozedUntil: null },
-            activityKind: `occurrence.${status === 'done' ? 'completed' : 'skipped'}`,
-            after: async (tx, changed) => {
-              await consumeTurn(tx, changed, now);
-              return (await materialiseTask(tx, changed.taskId, { now })).occurrenceIds;
-            },
-          },
-          now,
-        );
+        const result = await actOnOccurrence(me, request.params.id, { type: action }, now);
         const [next] = await loadOccurrenceDtos(
           ctx.db,
           me.householdId,
@@ -219,14 +118,12 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
 
   registerClose(
     'complete',
-    'done',
     'Complete an occurrence',
     'Marks an open occurrence done. For an `after_completion` task the next occurrence is ' +
       'created straight away and returned as `next`.',
   );
   registerClose(
     'skip',
-    'skipped',
     'Skip an occurrence',
     'Like completing, but recorded as skipped. An `after_completion` task still moves on to its next occurrence.',
   );
@@ -255,18 +152,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
       if (until <= now)
         throw new AppError(400, 'invalid_snooze', 'Snooze until a time in the future');
 
-      const { dto } = await transitionOccurrence(
-        me.householdId,
-        me.id,
-        request.params.id,
-        {
-          from: OPEN_OCCURRENCE_STATUSES,
-          changes: { snoozedUntil: until },
-          activityKind: 'occurrence.snoozed',
-          activityData: { until: until.toISOString() },
-        },
-        now,
-      );
+      const { dto } = await actOnOccurrence(me, request.params.id, { type: 'snooze', until }, now);
       return { occurrence: dto };
     },
   );
@@ -288,22 +174,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
     async (request) => {
       const me = authOf(request).member;
       const now = ctx.config.clock();
-      const { dto } = await transitionOccurrence(
-        me.householdId,
-        me.id,
-        request.params.id,
-        {
-          from: NOT_STARTED,
-          changes: { status: 'started', snoozedUntil: null },
-          activityKind: 'occurrence.started',
-          idempotentIn: 'started',
-          after: async (tx, changed) => {
-            await consumeTurn(tx, changed, now);
-            return [];
-          },
-        },
-        now,
-      );
+      const { dto } = await actOnOccurrence(me, request.params.id, { type: 'start' }, now);
       return { occurrence: dto };
     },
   );

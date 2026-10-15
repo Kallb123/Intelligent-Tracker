@@ -23,7 +23,7 @@ import type { Occurrence } from './schema/index.js';
  * first (`FOR NO KEY UPDATE`, which excludes other such writers but not the key-share locks that
  * inserts referencing the task take) and only then touches the occurrences: `replanRotation`
  * and `consumeRotationTurn` (so also the away change), `materialiseTask`, `activateDue`, the
- * api's task edits and `transitionOccurrence`, and deleting a task does so by itself. Code that
+ * api's task edits and `applyOccurrenceAction`, and deleting a task does so by itself. Code that
  * locks several tasks does so in `task.id` order. `clearFutureOpenOccurrences` expects its caller
  * to hold the lock.
  */

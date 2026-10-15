@@ -1,9 +1,9 @@
 import { createDb } from '@tracker/db';
+import { startTicker } from '@tracker/shared';
 import { writeFileSync } from 'node:fs';
 import { APP_NAME, startupMessage } from './index.js';
 import { createPruneSchedule } from './prune-schedule.js';
 import { runTick } from './tick.js';
-import { startTicker } from './ticker.js';
 
 const HEARTBEAT_MS = 60_000;
 const heartbeatFile = process.env['HEARTBEAT_FILE'];

@@ -2,13 +2,17 @@ import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDb, type Database, type DbHandle } from './client.js';
 import { recordHeartbeat } from './heartbeat.js';
+import { MISSED_REMINDER_GRACE_MS } from './reminders.js';
 import { runMigrations } from './migrate.js';
 import {
   deliverOutbox,
+  deliverOutboxBatches,
+  giveUpStaleNotifications,
   OLD_NOTIFICATION_RETENTION_MS,
   outboxBackoffMs,
   pruneNotifications,
   READ_NOTIFICATION_RETENTION_MS,
+  type OutboxBatchHandler,
   type OutboxHandler,
 } from './outbox.js';
 import {
@@ -120,15 +124,24 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('stores the Telegram message id a handler returns', async () => {
+    it('stores the Telegram chat and message id a handler returns', async () => {
       const n = await queue({ channel: 'telegram_group', memberId: null });
 
       await deliverOutbox(db, {
         now: NOW,
-        handlers: { telegram_group: async () => ({ telegramMessageId: 4_294_967_296 }) },
+        handlers: {
+          telegram_group: async () => ({
+            telegramChatId: -1_001_234_567_890,
+            telegramMessageId: 4_294_967_296,
+          }),
+        },
       });
 
-      expect(await row(n.id)).toMatchObject({ sentAt: NOW, telegramMessageId: 4_294_967_296 });
+      expect(await row(n.id)).toMatchObject({
+        sentAt: NOW,
+        telegramChatId: -1_001_234_567_890,
+        telegramMessageId: 4_294_967_296,
+      });
     });
 
     it('only claims channels that have a handler', async () => {
@@ -340,6 +353,359 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
       expect(results.reduce((sum, r) => sum + r.delivered, 0)).toBe(12);
       expect([...delivered].sort()).toEqual([...ids].sort());
       const rows = await db.select().from(notification).orderBy(asc(notification.id));
+      expect(rows.every((n) => n.sentAt !== null && n.attempts === 0)).toBe(true);
+    });
+  });
+
+  describe('giveUpStaleNotifications', () => {
+    const fireAt = (ms: number) => ({
+      payload: {
+        type: 'reminder' as const,
+        kind: 'due' as const,
+        taskId: '00000000-0000-4000-8000-000000000001',
+        occurrenceId: '00000000-0000-4000-8000-000000000002',
+        taskTitle: 'Bins',
+        dueDate: '2026-07-10',
+        dueAt: null,
+        fireAt: new Date(NOW.getTime() - ms).toISOString(),
+        assigneeId: null,
+      },
+    });
+    const queueGroup = (values: Partial<NewNotification> = {}) =>
+      queue({ channel: 'telegram_group', memberId: null, ...values });
+
+    it('fails pending rows whose reminder was due too long ago, and says why', async () => {
+      const stale = await queueGroup(fireAt(MISSED_REMINDER_GRACE_MS + 1000));
+
+      const count = await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' });
+
+      expect(count).toBe(1);
+      expect(await row(stale.id)).toMatchObject({
+        sentAt: null,
+        failedAt: NOW,
+        lastError: expect.stringContaining('too late'),
+      });
+      // It is never claimed afterwards.
+      const handler = vi.fn<OutboxBatchHandler>(async () => {});
+      await deliverOutboxBatches(db, { now: NOW, channel: 'telegram_group', handler });
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('keeps a reminder exactly at the limit, and uses maxAgeMs when given', async () => {
+      const edge = await queueGroup(fireAt(MISSED_REMINDER_GRACE_MS));
+      const recent = await queueGroup(fireAt(60_000));
+
+      expect(await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' })).toBe(0);
+      expect(
+        await giveUpStaleNotifications(db, {
+          now: NOW,
+          channel: 'telegram_group',
+          maxAgeMs: 30_000,
+        }),
+      ).toBe(2);
+      expect((await row(edge.id)).failedAt).toEqual(NOW);
+      expect((await row(recent.id)).failedAt).toEqual(NOW);
+    });
+
+    it('goes by when the reminder was due, not by when it was queued or last tried', async () => {
+      const lateQueued = await queueGroup({
+        ...fireAt(MISSED_REMINDER_GRACE_MS + 1000),
+        createdAt: NOW,
+        nextAttemptAt: at('2026-07-10T18:30:00Z'),
+        attempts: 2,
+      });
+
+      await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' });
+
+      // Still backing off, but already too old to be worth sending.
+      expect((await row(lateQueued.id)).failedAt).toEqual(NOW);
+    });
+
+    it('leaves other channels, sent rows and rows already given up alone', async () => {
+      const old = fireAt(MISSED_REMINDER_GRACE_MS * 2);
+      const inApp = await queue(old);
+      const sent = await queueGroup({ ...old, sentAt: at('2026-07-09T00:00:00Z') });
+      const failedAt = at('2026-07-09T00:00:00Z');
+      const failed = await queueGroup({ ...old, failedAt, lastError: 'earlier' });
+
+      const count = await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' });
+
+      expect(count).toBe(0);
+      expect(await row(inApp.id)).toMatchObject({ failedAt: null, sentAt: null });
+      expect((await row(sent.id)).failedAt).toBeNull();
+      expect(await row(failed.id)).toMatchObject({ failedAt, lastError: 'earlier' });
+    });
+  });
+
+  describe('deliverOutboxBatches', () => {
+    const queueGroup = (values: Partial<NewNotification> = {}) =>
+      queue({ channel: 'telegram_group', memberId: null, ...values });
+    const okBatch: OutboxBatchHandler = async () => {};
+    const otherHousehold = async () => {
+      const [h] = await db.insert(household).values({ name: 'Other' }).returning();
+      return h?.id ?? '';
+    };
+    const ids = (rows: { id: string }[]) => rows.map((n) => n.id);
+
+    it('hands every pending row of a household to the handler as one batch', async () => {
+      const a = await queueGroup();
+      const b = await queueGroup();
+      const handler = vi.fn<OutboxBatchHandler>(async () => ({
+        telegramChatId: -1_001_234_567_890,
+        telegramMessageId: 4_294_967_296,
+      }));
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+      });
+
+      expect(result).toEqual({ delivered: 2, failures: [] });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(ids(handler.mock.calls[0]?.[0] ?? []).sort()).toEqual([a.id, b.id].sort());
+      for (const n of [a, b]) {
+        expect(await row(n.id)).toMatchObject({
+          sentAt: NOW,
+          lastError: null,
+          attempts: 0,
+          telegramChatId: -1_001_234_567_890,
+          telegramMessageId: 4_294_967_296,
+        });
+      }
+    });
+
+    it('sends one batch per household, the household with the oldest row first', async () => {
+      const other = await otherHousehold();
+      const mine1 = await queueGroup({ nextAttemptAt: at('2026-07-10T17:30:00Z') });
+      const theirs = await queueGroup({
+        householdId: other,
+        nextAttemptAt: at('2026-07-10T17:00:00Z'),
+      });
+      const mine2 = await queueGroup({ nextAttemptAt: at('2026-07-10T17:45:00Z') });
+      const batches: string[][] = [];
+      let messageId = 100;
+      const handler: OutboxBatchHandler = async (rows) => {
+        batches.push(ids(rows));
+        return { telegramChatId: -5, telegramMessageId: (messageId += 1) };
+      };
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+      });
+
+      expect(result.delivered).toBe(3);
+      expect(batches).toEqual([[theirs.id], [mine1.id, mine2.id]]);
+      expect(await row(theirs.id)).toMatchObject({ telegramChatId: -5, telegramMessageId: 101 });
+      expect((await row(mine1.id)).telegramMessageId).toBe(102);
+      expect((await row(mine2.id)).telegramMessageId).toBe(102);
+    });
+
+    it('splits a household into batches of at most batchSize, oldest first', async () => {
+      const queued = [];
+      for (let i = 0; i < 5; i += 1) {
+        queued.push(await queueGroup({ nextAttemptAt: new Date(NOW.getTime() - (5 - i) * 1000) }));
+      }
+      const batches: string[][] = [];
+      const handler: OutboxBatchHandler = async (rows) => {
+        batches.push(ids(rows));
+      };
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+        batchSize: 2,
+      });
+
+      expect(result.delivered).toBe(5);
+      expect(batches).toEqual([
+        [queued[0]?.id, queued[1]?.id],
+        [queued[2]?.id, queued[3]?.id],
+        [queued[4]?.id],
+      ]);
+    });
+
+    it('stops after maxBatches and leaves the rest pending', async () => {
+      for (let i = 0; i < 5; i += 1) await queueGroup();
+      const handler = vi.fn(okBatch);
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+        batchSize: 2,
+        maxBatches: 2,
+      });
+
+      expect(result.delivered).toBe(4);
+      expect(handler).toHaveBeenCalledTimes(2);
+      const left = await deliverOutboxBatches(db, { now: NOW, channel: 'telegram_group', handler });
+      expect(left.delivered).toBe(1);
+    });
+
+    it('only claims rows of its channel that are due, unsent and not given up', async () => {
+      const inApp = await queue();
+      await queueGroup({ nextAttemptAt: at('2026-07-10T18:00:01Z') });
+      await queueGroup({ sentAt: at('2026-07-10T17:00:00Z') });
+      await queueGroup({ failedAt: at('2026-07-10T17:00:00Z') });
+      const handler = vi.fn(okBatch);
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+      });
+
+      expect(result).toEqual({ delivered: 0, failures: [] });
+      expect(handler).not.toHaveBeenCalled();
+      expect((await row(inApp.id)).sentAt).toBeNull();
+    });
+
+    it('counts a failed attempt, with backoff, on every row of the batch, then succeeds', async () => {
+      const a = await queueGroup();
+      const b = await queueGroup();
+      let calls = 0;
+      const handler: OutboxBatchHandler = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('telegram down');
+      };
+
+      const first = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+      });
+
+      expect(first.delivered).toBe(0);
+      expect(first.failures).toHaveLength(2);
+      expect(first.failures).toEqual(
+        expect.arrayContaining(
+          [a, b].map((n) => ({
+            notificationId: n.id,
+            channel: 'telegram_group',
+            attempts: 1,
+            error: 'telegram down',
+            gaveUp: false,
+          })),
+        ),
+      );
+      // The failed batch is not retried within the same call.
+      expect(calls).toBe(1);
+      for (const n of [a, b]) {
+        expect(await row(n.id)).toMatchObject({
+          attempts: 1,
+          lastError: 'telegram down',
+          sentAt: null,
+          failedAt: null,
+          telegramMessageId: null,
+          nextAttemptAt: new Date(NOW.getTime() + 30_000),
+        });
+      }
+
+      const retryAt = at('2026-07-10T18:00:30Z');
+      const second = await deliverOutboxBatches(db, {
+        now: retryAt,
+        channel: 'telegram_group',
+        handler,
+      });
+      expect(second.delivered).toBe(2);
+      expect(await row(a.id)).toMatchObject({ attempts: 1, lastError: null, sentAt: retryAt });
+    });
+
+    it('gives up on every row of the batch after maxAttempts', async () => {
+      const a = await queueGroup();
+      const b = await queueGroup({ attempts: 1 });
+      const handler: OutboxBatchHandler = async () => {
+        throw new Error('still down');
+      };
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler,
+        maxAttempts: 2,
+      });
+
+      // Rows are judged by their own attempts: b gives up, a has one more try.
+      expect(result.failures).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ notificationId: a.id, attempts: 1, gaveUp: false }),
+          expect.objectContaining({ notificationId: b.id, attempts: 2, gaveUp: true }),
+        ]),
+      );
+      expect((await row(a.id)).failedAt).toBeNull();
+      expect((await row(b.id)).failedAt).toEqual(NOW);
+    });
+
+    it('does not let a failed batch hold back the next household', async () => {
+      const other = await otherHousehold();
+      const bad = await queueGroup({ nextAttemptAt: at('2026-07-10T17:00:00Z') });
+      const good = await queueGroup({ householdId: other });
+
+      const result = await deliverOutboxBatches(db, {
+        now: NOW,
+        channel: 'telegram_group',
+        handler: async (rows) => {
+          if (rows.some((n) => n.id === bad.id)) throw new Error('nope');
+        },
+      });
+
+      expect(result.delivered).toBe(1);
+      expect(result.failures.map((f) => f.notificationId)).toEqual([bad.id]);
+      expect((await row(good.id)).sentAt).toEqual(NOW);
+    });
+
+    it('skips rows another deliverer has claimed', async () => {
+      const held = await queueGroup({ nextAttemptAt: at('2026-07-10T17:00:00Z') });
+      const free = await queueGroup();
+      let release: () => void = () => {};
+      let claimed: () => void = () => {};
+      const waiting = new Promise<void>((resolve) => (claimed = resolve));
+      const other = db.transaction(async (tx) => {
+        await tx.select().from(notification).where(eq(notification.id, held.id)).for('update');
+        claimed();
+        await new Promise<void>((resolve) => (release = resolve));
+      });
+      await waiting;
+      try {
+        const handler = vi.fn(okBatch);
+        const result = await deliverOutboxBatches(db, {
+          now: NOW,
+          channel: 'telegram_group',
+          handler,
+        });
+
+        expect(result.delivered).toBe(1);
+        expect(handler.mock.calls.map(([rows]) => ids(rows))).toEqual([[free.id]]);
+      } finally {
+        release();
+        await other;
+      }
+      expect((await row(held.id)).sentAt).toBeNull();
+    });
+
+    it('delivers each row once when deliverers run at once', async () => {
+      const queued = (await Promise.all(Array.from({ length: 12 }, () => queueGroup()))).map(
+        (n) => n.id,
+      );
+      const delivered: string[] = [];
+      const handler: OutboxBatchHandler = async (rows) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        delivered.push(...ids(rows));
+      };
+
+      const results = await Promise.all(
+        [1, 2, 3, 4].map(() =>
+          deliverOutboxBatches(db, { now: NOW, channel: 'telegram_group', handler, batchSize: 3 }),
+        ),
+      );
+
+      expect(results.reduce((sum, r) => sum + r.delivered, 0)).toBe(12);
+      expect([...delivered].sort()).toEqual([...queued].sort());
+      const rows = await db.select().from(notification);
       expect(rows.every((n) => n.sentAt !== null && n.attempts === 0)).toBe(true);
     });
   });

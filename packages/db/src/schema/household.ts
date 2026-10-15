@@ -26,8 +26,12 @@ export const household = pgTable('household', {
     .default(HOUSEHOLD_DEFAULTS.bankHolidayRegion),
   icalPublicHost: text('ical_public_host').notNull().default(HOUSEHOLD_DEFAULTS.icalPublicHost),
   // bigint: Telegram group chat ids (e.g. -100…) do not fit in int32. mode 'number' is exact
-  // up to 2^53, far beyond any Telegram id.
-  telegramGroupChatId: bigint('telegram_group_chat_id', { mode: 'number' }),
+  // up to 2^53, far beyond any Telegram id. Unique (NULLs never collide): the bot finds the
+  // household of a group by its chat, so a group can belong to one household only.
+  telegramGroupChatId: bigint('telegram_group_chat_id', { mode: 'number' }).unique(),
+  // SHA-256 (hex) of the one-time code the admin sends as `/linkgroup <code>`; cleared when used.
+  telegramGroupLinkCode: text('telegram_group_link_code').unique(),
+  telegramGroupLinkExpiresAt: timestamp('telegram_group_link_expires_at', { withTimezone: true }),
   defaultReminderProfile: reminderProfile('default_reminder_profile')
     .notNull()
     .default(HOUSEHOLD_DEFAULTS.defaultReminderProfile),
@@ -53,7 +57,10 @@ export const member = pgTable(
     // Argon2id PHC string. Null until the member sets a password via setup or an invite link.
     passwordHash: text('password_hash'),
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).unique(),
+    // SHA-256 (hex) of the one-time code in the member's `t.me/<bot>?start=<code>` link; cleared
+    // when used.
     telegramLinkCode: text('telegram_link_code').unique(),
+    telegramLinkExpiresAt: timestamp('telegram_link_expires_at', { withTimezone: true }),
     preferredReminderTimes: time('preferred_reminder_times')
       .array()
       .notNull()

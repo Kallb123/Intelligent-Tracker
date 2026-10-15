@@ -1,6 +1,5 @@
 import { isAwayOn } from '@tracker/core';
-import type { MemberDto, TaskDto } from '@tracker/shared';
-import { formatDayHeading } from '../format.js';
+import { formatDayHeading, type MemberDto, type TaskDto } from '@tracker/shared';
 
 /** Away dates and rotation order: pure helpers for the People page, task editor and task list. */
 

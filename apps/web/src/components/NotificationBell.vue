@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import type { NotificationDto } from '@tracker/shared';
+import { describeReminder, type NotificationDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import OverlayBadge from 'primevue/overlaybadge';
 import Popover from 'primevue/popover';
 import { computed, ref, useId } from 'vue';
 import { formatRelative } from '../format.js';
-import { describeReminder } from '../notifications/describe.js';
 
 /**
  * The bell in the top bar: a button with the unread count that opens a list of the latest

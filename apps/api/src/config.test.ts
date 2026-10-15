@@ -25,6 +25,14 @@ describe('configFromEnv', () => {
     expect(configFromEnv({ TRUST_PROXY: 'no' }).trustProxy).toBe(false);
   });
 
+  it('reads TELEGRAM_BOT_USERNAME without a leading @, and ignores an empty one', () => {
+    expect(configFromEnv({ TELEGRAM_BOT_USERNAME: ' @tracker_bot ' }).auth).toEqual({
+      cookieSecure: false,
+      telegramBotUsername: 'tracker_bot',
+    });
+    expect(configFromEnv({ TELEGRAM_BOT_USERNAME: '@' }).auth).toEqual({ cookieSecure: false });
+  });
+
   it('ignores an empty PUBLIC_BASE_URL', () => {
     expect(configFromEnv({ PUBLIC_BASE_URL: '  ' }).auth).toEqual({ cookieSecure: false });
   });

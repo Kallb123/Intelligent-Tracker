@@ -1,6 +1,7 @@
 import type { NotificationChannel } from '@tracker/shared';
-import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { Database, DbOrTransaction } from './client.js';
+import { MISSED_REMINDER_GRACE_MS } from './reminders.js';
 import { notification, type Notification } from './schema/index.js';
 
 /*
@@ -15,6 +16,14 @@ import { notification, type Notification } from './schema/index.js';
  * makes at-most-once, and handlers for external channels should be idempotent where they can.
  * An `in_app` notification needs no sending (the row is the notification), so its handler is a
  * no-op and delivery just stamps `sent_at`, which is when the member's bell starts showing it.
+ *
+ * Where one message carries several notifications (the Telegram group gets all the reminders due
+ * together as a single message), `deliverOutboxBatches` claims them a household at a time and
+ * hands the handler the whole batch; success and failure then apply to every row of it.
+ *
+ * A deliverer that was down or idle comes back to a backlog, and posting hours-old reminders in a
+ * burst is worse than dropping them, so `giveUpStaleNotifications` fails the rows that are too
+ * old before the next delivery.
  */
 
 /** The first retry waits this long; each further failure doubles the wait. */
@@ -22,6 +31,14 @@ export const OUTBOX_RETRY_BASE_MS = 30_000;
 /** No retry waits longer than this. */
 export const OUTBOX_RETRY_MAX_MS = 60 * 60 * 1000;
 export const DEFAULT_OUTBOX_BATCH_SIZE = 50;
+/**
+ * The most notifications `deliverOutboxBatches` puts in one message: Telegram caps a message at
+ * 4096 characters and an inline keyboard at 100 buttons, and every reminder brings its own line
+ * and row of buttons.
+ */
+export const DEFAULT_OUTBOX_MESSAGE_SIZE = 8;
+/** The most messages one `deliverOutboxBatches` call sends, so one call cannot run unbounded. */
+export const DEFAULT_OUTBOX_MAX_MESSAGES = 10;
 /** Delivery is given up (`failed_at`) after this many failed attempts. */
 export const DEFAULT_OUTBOX_MAX_ATTEMPTS = 8;
 
@@ -33,10 +50,21 @@ export function outboxBackoffMs(attempts: number): number {
   return Math.min(OUTBOX_RETRY_BASE_MS * 2 ** (Math.max(1, attempts) - 1), OUTBOX_RETRY_MAX_MS);
 }
 
+/**
+ * What a handler may report about the message it sent. A Telegram message is identified by its
+ * chat together with its id (ids are only unique within a chat), so a handler that sends one
+ * reports both.
+ */
+export type OutboxSent = { telegramChatId?: number; telegramMessageId?: number } | void;
+
 /** Delivers one notification; throws to have it retried. */
-export type OutboxHandler = (
-  notification: Notification,
-) => Promise<{ telegramMessageId?: number } | void>;
+export type OutboxHandler = (notification: Notification) => Promise<OutboxSent>;
+
+/**
+ * Delivers several notifications of one household and channel as one message; throws to have all
+ * of them retried.
+ */
+export type OutboxBatchHandler = (notifications: Notification[]) => Promise<OutboxSent>;
 
 export interface DeliveryFailure {
   notificationId: string;
@@ -53,6 +81,65 @@ export interface DeliverOutboxResult {
   failures: DeliveryFailure[];
 }
 
+/** Oldest first: the order in which pending notifications are claimed. */
+const CLAIM_ORDER = [asc(notification.nextAttemptAt), asc(notification.id)] as const;
+
+/** Rows on these channels that are still to deliver and whose next attempt is due. */
+function isPending(channels: readonly NotificationChannel[], now: Date): SQL | undefined {
+  return and(
+    inArray(notification.channel, [...channels]),
+    isNull(notification.sentAt),
+    isNull(notification.failedAt),
+    lte(notification.nextAttemptAt, now),
+  );
+}
+
+/** Stamps rows as delivered, with the Telegram chat and message id the handler reported, if any. */
+async function markSent(
+  tx: DbOrTransaction,
+  ids: string[],
+  now: Date,
+  sent: OutboxSent,
+): Promise<void> {
+  await tx
+    .update(notification)
+    .set({
+      sentAt: now,
+      lastError: null,
+      ...(sent?.telegramChatId !== undefined ? { telegramChatId: sent.telegramChatId } : {}),
+      ...(sent?.telegramMessageId !== undefined
+        ? { telegramMessageId: sent.telegramMessageId }
+        : {}),
+    })
+    .where(inArray(notification.id, ids));
+}
+
+/**
+ * Records a failed attempt on a row: counts it, keeps the error, delays the next attempt by
+ * `outboxBackoffMs` and, on the `maxAttempts`-th, gives up (`failed_at`).
+ */
+async function markFailed(
+  tx: DbOrTransaction,
+  row: Notification,
+  now: Date,
+  error: unknown,
+  maxAttempts: number,
+): Promise<DeliveryFailure> {
+  const attempts = row.attempts + 1;
+  const message = error instanceof Error ? error.message : String(error);
+  const gaveUp = attempts >= maxAttempts;
+  await tx
+    .update(notification)
+    .set({
+      attempts,
+      lastError: message,
+      nextAttemptAt: new Date(now.getTime() + outboxBackoffMs(attempts)),
+      ...(gaveUp ? { failedAt: now } : {}),
+    })
+    .where(eq(notification.id, row.id));
+  return { notificationId: row.id, channel: row.channel, attempts, error: message, gaveUp };
+}
+
 export interface DeliverOutboxOptions {
   now: Date;
   /** Only channels with a handler are claimed; rows of other channels are left to their owner. */
@@ -66,7 +153,7 @@ export interface DeliverOutboxOptions {
 /**
  * Delivers pending notifications (`sent_at` and `failed_at` unset, `next_attempt_at <= now`) on
  * the channels that have a handler, oldest first, up to `batchSize`. A handler that returns
- * stamps `sent_at` (and `telegram_message_id` if it gives one). A handler that throws adds an
+ * stamps `sent_at` (and `telegram_chat_id` and `telegram_message_id` if it gives them). A handler that throws adds an
  * attempt, records `last_error` and delays the next attempt by `outboxBackoffMs`; the
  * `maxAttempts`-th failure sets `failed_at` and gives up. Failures are returned, not thrown;
  * only database errors are thrown.
@@ -87,15 +174,8 @@ export async function deliverOutbox(
       const [row] = await tx
         .select()
         .from(notification)
-        .where(
-          and(
-            inArray(notification.channel, channels),
-            isNull(notification.sentAt),
-            isNull(notification.failedAt),
-            lte(notification.nextAttemptAt, now),
-          ),
-        )
-        .orderBy(asc(notification.nextAttemptAt), asc(notification.id))
+        .where(isPending(channels, now))
+        .orderBy(...CLAIM_ORDER)
         .limit(1)
         .for('update', { skipLocked: true });
       if (!row) return true;
@@ -103,43 +183,135 @@ export async function deliverOutbox(
       try {
         // `handlers` has an entry for every channel selected above.
         const sent = await (handlers[row.channel] as OutboxHandler)(row);
-        await tx
-          .update(notification)
-          .set({
-            sentAt: now,
-            lastError: null,
-            ...(sent?.telegramMessageId !== undefined
-              ? { telegramMessageId: sent.telegramMessageId }
-              : {}),
-          })
-          .where(eq(notification.id, row.id));
+        await markSent(tx, [row.id], now, sent);
         result.delivered += 1;
       } catch (error) {
-        const attempts = row.attempts + 1;
-        const message = error instanceof Error ? error.message : String(error);
-        const gaveUp = attempts >= maxAttempts;
-        await tx
-          .update(notification)
-          .set({
-            attempts,
-            lastError: message,
-            nextAttemptAt: new Date(now.getTime() + outboxBackoffMs(attempts)),
-            ...(gaveUp ? { failedAt: now } : {}),
-          })
-          .where(eq(notification.id, row.id));
-        result.failures.push({
-          notificationId: row.id,
-          channel: row.channel,
-          attempts,
-          error: message,
-          gaveUp,
-        });
+        result.failures.push(await markFailed(tx, row, now, error, maxAttempts));
       }
       return false;
     });
     if (done) break;
   }
   return result;
+}
+
+export interface DeliverOutboxBatchesOptions {
+  now: Date;
+  /** The one channel to deliver. */
+  channel: NotificationChannel;
+  handler: OutboxBatchHandler;
+  /** The most notifications in one handler call. Default `DEFAULT_OUTBOX_MESSAGE_SIZE`. */
+  batchSize?: number;
+  /** The most handler calls in one call of this function. Default `DEFAULT_OUTBOX_MAX_MESSAGES`. */
+  maxBatches?: number;
+  /** Failed attempts before giving up. Default `DEFAULT_OUTBOX_MAX_ATTEMPTS`. */
+  maxAttempts?: number;
+}
+
+/**
+ * Like `deliverOutbox`, for a channel where one message carries several notifications: pending
+ * rows of `channel` are claimed one household at a time, oldest first, up to `batchSize` of
+ * them, and the handler is called once with all of them. The household is that of the oldest
+ * pending row; its other pending rows follow it into the batch, so everything that fell due in
+ * the same tick goes out together, and a household with more than `batchSize` pending gets
+ * several messages in a row.
+ *
+ * The batch is claimed (`FOR UPDATE SKIP LOCKED`) in a transaction that stays open while the
+ * handler runs, so concurrent callers never share a row. A handler that returns stamps `sent_at`
+ * on every row (and the `telegram_chat_id` and `telegram_message_id` it reports, which is what
+ * lets a button press find the rows again). One that throws counts a failed attempt on every row, with the same
+ * backoff and give-up as `deliverOutbox`, and returns one `DeliveryFailure` per row. Batches
+ * are delivered until nothing is pending or `maxBatches` were handled; a batch that failed is
+ * not retried within the call, as its rows wait out their backoff.
+ */
+export async function deliverOutboxBatches(
+  db: Database,
+  options: DeliverOutboxBatchesOptions,
+): Promise<DeliverOutboxResult> {
+  const { now, channel, handler } = options;
+  const batchSize = options.batchSize ?? DEFAULT_OUTBOX_MESSAGE_SIZE;
+  const maxBatches = options.maxBatches ?? DEFAULT_OUTBOX_MAX_MESSAGES;
+  const maxAttempts = options.maxAttempts ?? DEFAULT_OUTBOX_MAX_ATTEMPTS;
+  const result: DeliverOutboxResult = { delivered: 0, failures: [] };
+
+  for (let handled = 0; handled < maxBatches; handled += 1) {
+    const done = await db.transaction(async (tx): Promise<boolean> => {
+      const [first] = await tx
+        .select()
+        .from(notification)
+        .where(isPending([channel], now))
+        .orderBy(...CLAIM_ORDER)
+        .limit(1)
+        .for('update', { skipLocked: true });
+      if (!first) return true;
+
+      // The first row is already locked by this transaction, so it is part of the batch; the
+      // rest are the household's other pending rows that no one else holds.
+      const rows = await tx
+        .select()
+        .from(notification)
+        .where(and(isPending([channel], now), eq(notification.householdId, first.householdId)))
+        .orderBy(...CLAIM_ORDER)
+        .limit(batchSize)
+        .for('update', { skipLocked: true });
+
+      try {
+        const sent = await handler(rows);
+        await markSent(
+          tx,
+          rows.map((row) => row.id),
+          now,
+          sent,
+        );
+        result.delivered += rows.length;
+      } catch (error) {
+        for (const row of rows) {
+          result.failures.push(await markFailed(tx, row, now, error, maxAttempts));
+        }
+      }
+      return false;
+    });
+    if (done) break;
+  }
+  return result;
+}
+
+/**
+ * Gives up on the pending notifications of `channel` whose reminder was due more than
+ * `maxAgeMs` before `now` (default `MISSED_REMINDER_GRACE_MS`), so a channel whose deliverer was
+ * down or idle does not post hours-old reminders in a burst when it comes back. Such a row gets
+ * `failed_at` and a `last_error` saying why, and is never sent. Returns how many were given up.
+ *
+ * Age is measured from the reminder's own `payload.fireAt`, the same clock `queueDueReminders`
+ * uses to cancel reminders the worker missed, so a reminder is dropped at the same lateness
+ * whether the worker or the deliverer was the one that fell behind. `created_at` would instead
+ * restart the clock whenever the worker queued a reminder late, and `next_attempt_at` moves with
+ * every retry. A row mid-delivery by another process is waited for, then re-checked, so one
+ * that was just sent is left alone.
+ */
+export async function giveUpStaleNotifications(
+  db: DbOrTransaction,
+  options: { now: Date; channel: NotificationChannel; maxAgeMs?: number },
+): Promise<number> {
+  const { now, channel } = options;
+  const staleBefore = new Date(now.getTime() - (options.maxAgeMs ?? MISSED_REMINDER_GRACE_MS));
+  const given = await db
+    .update(notification)
+    .set({
+      failedAt: now,
+      lastError: `Not sent: the reminder was due before ${staleBefore.toISOString()}, too late to be useful`,
+    })
+    .where(
+      and(
+        // Not `isPending`: a stale row that is backing off after a failed send is given up too.
+        eq(notification.channel, channel),
+        isNull(notification.sentAt),
+        isNull(notification.failedAt),
+        sql`(${notification.payload}->>'fireAt')::timestamptz < ${staleBefore.toISOString()}::timestamptz`,
+      ),
+    )
+    .returning({ id: notification.id });
+  return given.length;
 }
 
 /** An in-app notification is deleted this long after the member read it. */

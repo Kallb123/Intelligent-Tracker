@@ -73,6 +73,7 @@ export const session = (overrides: Partial<SessionInfo['member']> = {}): Session
     role: 'admin',
     pending: false,
     awayUntil: null,
+    telegramLinked: false,
     ...overrides,
   },
   household: {

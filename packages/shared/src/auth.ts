@@ -69,6 +69,8 @@ export const memberSchema = z.object({
    * up to and including it. `null` when not away.
    */
   awayUntil: calendarDateSchema.nullable(),
+  /** True once the member has linked their Telegram account (the id itself is never exposed). */
+  telegramLinked: z.boolean(),
 });
 
 /** Body of `PATCH /api/members/:id/away`; `null` clears the away date. */
