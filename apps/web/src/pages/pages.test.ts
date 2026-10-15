@@ -847,6 +847,33 @@ describe('Telegram on the AccountPage', () => {
       expect(group().text()).toContain('Linked');
     });
 
+    it('shows the command for replacing a group that is already linked', async () => {
+      const linked = { ...notLinked, groupLinked: true };
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json(linked),
+        'POST /api/telegram/group-link': json({
+          code: 'new789',
+          expiresAt,
+          command: '/linkgroup new789',
+        }),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+
+      await buttonLabelled(wrapper, 'Link a different group')?.trigger('click');
+      await flushPromises();
+
+      // The refresh after issuing the code still says linked; the code stays on display.
+      expect(server.callsTo('GET /api/telegram').length).toBeGreaterThan(1);
+      const box = wrapper.get('.link-box');
+      expect((box.get('input').element as HTMLInputElement).value).toBe('/linkgroup new789');
+
+      await buttonLabelled(wrapper, 'Refresh status')?.trigger('click');
+      await flushPromises();
+      expect(wrapper.find('.link-box').exists()).toBe(true);
+    });
+
     it('asks for confirmation before unlinking the group', async () => {
       const server = fakeServer({
         [ME]: json(session()),

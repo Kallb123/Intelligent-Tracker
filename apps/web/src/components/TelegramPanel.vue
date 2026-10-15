@@ -24,13 +24,20 @@ const memberLink = ref<MemberLinkResponse | null>(null);
 const groupLink = ref<GroupLinkResponse | null>(null);
 const confirmingGroupUnlink = ref(false);
 
+/**
+ * Fetches the status. A code on display is dropped when its link has just happened (the status
+ * went from not linked to linked), not whenever the status says linked: an admin who is
+ * replacing an already linked group is issued a code while `groupLinked` is true, and the
+ * refresh that follows issuing it must not discard it.
+ */
 async function refresh(): Promise<void> {
   try {
     const { data } = await getApi().GET('/api/telegram');
     if (!data) return;
+    const before = status.value;
     status.value = data;
-    if (data.memberLinked) memberLink.value = null;
-    if (data.groupLinked) groupLink.value = null;
+    if (before && !before.memberLinked && data.memberLinked) memberLink.value = null;
+    if (before && !before.groupLinked && data.groupLinked) groupLink.value = null;
   } catch (err) {
     failure.value = describeError(err);
   }

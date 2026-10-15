@@ -36,9 +36,16 @@ describe('configFromEnv', () => {
     });
   });
 
-  it('falls back to the default for a delivery interval that is not a number', () => {
-    expect(configFromEnv({ DELIVERY_INTERVAL_MS: 'soon' }).deliveryIntervalMs).toBe(
-      DEFAULT_DELIVERY_INTERVAL_MS,
-    );
+  it.each(['soon', '', '0', '-5000', '1', '999', 'Infinity', 'NaN'])(
+    'falls back to the default for a delivery interval of %j',
+    (value) => {
+      expect(configFromEnv({ DELIVERY_INTERVAL_MS: value }).deliveryIntervalMs).toBe(
+        DEFAULT_DELIVERY_INTERVAL_MS,
+      );
+    },
+  );
+
+  it('accepts a delivery interval from the minimum up', () => {
+    expect(configFromEnv({ DELIVERY_INTERVAL_MS: '1000' }).deliveryIntervalMs).toBe(1000);
   });
 });

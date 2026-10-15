@@ -47,6 +47,9 @@ function isNotModified(error: unknown): boolean {
 export function registerActions(bot: Bot, deps: BotDeps): void {
   const { db, now, logger } = deps;
 
+  // Presses cannot race each other: `bot.start()` long polling (grammY's built-in runner)
+  // handles updates one at a time, and Telegram allows a single `getUpdates` consumer per token,
+  // so the render and edit after one press's action are never interleaved with another press's.
   bot.on('callback_query:data', async (ctx) => {
     const action = decodeCallback(ctx.callbackQuery.data);
     const message = ctx.callbackQuery.message;

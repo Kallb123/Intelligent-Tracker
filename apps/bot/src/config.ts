@@ -13,15 +13,24 @@ export interface BotConfig {
   heartbeatFile: string | undefined;
 }
 
+/** No faster than this: a smaller value would hammer the database with a near-continuous loop. */
+export const MIN_DELIVERY_INTERVAL_MS = 1000;
+
 /** A trimmed, non-empty value, or undefined. */
 function present(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
 }
 
+/** The configured delivery interval when it is a finite number of at least 1000, else the default. */
+function deliveryInterval(value: string | undefined): number {
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms >= MIN_DELIVERY_INTERVAL_MS ? ms : DEFAULT_DELIVERY_INTERVAL_MS;
+}
+
 /**
  * Reads the bot's settings from the environment:
  * - `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`: both needed for the bot to do anything.
- * - `DELIVERY_INTERVAL_MS`: how often group reminders are sent (default 10 seconds).
+ * - `DELIVERY_INTERVAL_MS`: how often group reminders are sent (default 10 seconds; at least 1000).
  * - `PUBLIC_BASE_URL`: the web app's address, mentioned in replies that send people there.
  * - `HEARTBEAT_FILE`: see `BotConfig.heartbeatFile`.
  */
@@ -29,7 +38,7 @@ export function configFromEnv(env: Record<string, string | undefined>): BotConfi
   return {
     token: present(env['TELEGRAM_BOT_TOKEN']),
     databaseUrl: present(env['DATABASE_URL']),
-    deliveryIntervalMs: Number(env['DELIVERY_INTERVAL_MS']) || DEFAULT_DELIVERY_INTERVAL_MS,
+    deliveryIntervalMs: deliveryInterval(env['DELIVERY_INTERVAL_MS']),
     publicBaseUrl: present(env['PUBLIC_BASE_URL'])?.replace(/\/+$/, ''),
     heartbeatFile: present(env['HEARTBEAT_FILE']),
   };
