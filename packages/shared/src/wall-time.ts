@@ -1,5 +1,5 @@
 /**
- * Wall-clock times in the household's zone <-> instants, for the editor's date and time inputs.
+ * Wall-clock times in the household's zone <-> instants, for the web editor's date and time inputs and for reminder text.
  * A browser input has no zone, but a timed task is stored as an instant, and it must mean the
  * same wall time for everyone in the household whatever zone their device is set to.
  */

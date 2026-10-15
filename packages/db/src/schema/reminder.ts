@@ -98,6 +98,10 @@ export const notification = pgTable(
       .on(t.channel, t.nextAttemptAt)
       .where(sql`${t.sentAt} IS NULL AND ${t.failedAt} IS NULL`),
     index('notification_member_created_at_idx').on(t.memberId, t.createdAt),
+    // The bot finds the lines of a group message when one of its buttons is pressed.
+    index('notification_telegram_message_idx')
+      .on(t.householdId, t.telegramMessageId)
+      .where(sql`${t.telegramMessageId} IS NOT NULL`),
   ],
 );
 

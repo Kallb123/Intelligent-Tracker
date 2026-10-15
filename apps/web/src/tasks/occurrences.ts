@@ -1,6 +1,6 @@
 import { addLocalDays, localToday } from '@tracker/core';
-import type { MemberDto, OccurrenceDto } from '@tracker/shared';
-import { formatDayHeading, formatTime } from '../format.js';
+import { formatDayHeading, type MemberDto, type OccurrenceDto } from '@tracker/shared';
+import { formatTime } from '../format.js';
 
 /** The household-local calendar date an occurrence is due, or null for an undated one. */
 export function dueDateOf(occurrence: OccurrenceDto, timeZone: string): string | null {

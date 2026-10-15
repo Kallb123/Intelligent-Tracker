@@ -1,6 +1,6 @@
-import type { ReminderPayload } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
-import { describeReminder } from './describe.js';
+import type { ReminderPayload } from './notifications.js';
+import { describeReminder } from './reminder-text.js';
 
 const payload = (overrides: Partial<ReminderPayload>): ReminderPayload => ({
   type: 'reminder',

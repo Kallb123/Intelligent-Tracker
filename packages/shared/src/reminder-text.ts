@@ -1,11 +1,11 @@
-import type { ReminderPayload } from '@tracker/shared';
-import { formatCalendarDate } from '../format.js';
-import { instantToWall } from '../wall-time.js';
+import { formatCalendarDate } from './calendar-date.js';
+import type { ReminderPayload } from './notifications.js';
+import { instantToWall } from './wall-time.js';
 
 /** When the occurrence is due: "1 Nov 2026", or "1 Nov 2026 at 18:30" for a timed one. */
 function dueWhen(payload: ReminderPayload, timeZone: string): string {
   if (payload.dueAt) {
-    // The date of a timed due is the household's local date, not the browser's.
+    // The date of a timed due is the household's local date, not the viewer's.
     const { date, time } = instantToWall(payload.dueAt, timeZone);
     return `${formatCalendarDate(date)} at ${time}`;
   }

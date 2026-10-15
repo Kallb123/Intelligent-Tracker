@@ -1,6 +1,4 @@
-import type { TaskDto } from '@tracker/shared';
-import { formatCalendarDate } from '../format.js';
-import { instantToWall } from '../wall-time.js';
+import { formatCalendarDate, instantToWall, type TaskDto } from '@tracker/shared';
 import {
   MONTH_NAMES,
   parseRecurrence,

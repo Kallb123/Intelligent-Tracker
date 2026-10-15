@@ -8,6 +8,7 @@ import {
   MISSED_REMINDER_GRACE_MS,
   queueDueReminders,
   replanReminders,
+  telegramGroupDedupeKey,
 } from './reminders.js';
 import {
   household,
@@ -953,6 +954,92 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
         expect(result).toMatchObject({ queued: 1, notifications: 1 });
         expect((await notifications()).map((n) => n.memberId)).toEqual([alex.id]);
+      });
+    });
+
+    describe('the Telegram group', () => {
+      it('gets one member-less row per reminder next to the in-app one, once', async () => {
+        const { h, alex, t, o } = await setup();
+        await db.update(household).set({ telegramGroupChatId: -1_001_234_567_890 });
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toEqual({ queued: 1, notifications: 2, cancelled: 0, failures: [] });
+        const [rem] = await reminders();
+        const group = (await notifications()).filter((n) => n.channel === 'telegram_group');
+        expect(group).toHaveLength(1);
+        expect(group[0]).toMatchObject({
+          householdId: h.id,
+          memberId: null,
+          reminderId: rem?.id,
+          dedupeKey: telegramGroupDedupeKey(rem?.id ?? ''),
+          attempts: 0,
+          sentAt: null,
+          failedAt: null,
+          telegramMessageId: null,
+          nextAttemptAt: DUE_NOW,
+          payload: { kind: 'heads_up', taskId: t.id, occurrenceId: o.id, assigneeId: alex.id },
+        });
+        const inApp = (await notifications()).filter((n) => n.channel === 'in_app');
+        expect(inApp.map((n) => n.payload)).toEqual(group.map((n) => n.payload));
+      });
+
+      it('sends one row for an unassigned reminder, not one per member', async () => {
+        const h = await newHousehold({ telegramGroupChatId: -100_1 });
+        await newMember(h.id, 'a');
+        await newMember(h.id, 'b');
+        await newOccurrence((await newTask(h.id)).id);
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 3 });
+        const rows = await notifications();
+        expect(rows.filter((n) => n.channel === 'telegram_group')).toHaveLength(1);
+        expect(rows.filter((n) => n.channel === 'in_app')).toHaveLength(2);
+      });
+
+      it('is not queued for a household without a linked group', async () => {
+        const linked = await setup();
+        await db
+          .update(household)
+          .set({ telegramGroupChatId: -100_2 })
+          .where(eq(household.id, linked.h.id));
+        const unlinked = await setup();
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 2, notifications: 3 });
+        const group = (await notifications()).filter((n) => n.channel === 'telegram_group');
+        expect(group.map((n) => n.householdId)).toEqual([linked.h.id]);
+        expect(unlinked.h.telegramGroupChatId).toBeNull();
+      });
+
+      it('does not queue a reminder twice when the queue runs again', async () => {
+        await setup();
+        await db.update(household).set({ telegramGroupChatId: -100_3 });
+        await replanReminders(db, { now: NOW });
+        await queueDueReminders(db, { now: DUE_NOW });
+        // Put the reminder back as if a concurrent tick had queued it without marking it sent.
+        await db.update(reminder).set({ status: 'planned', sentAt: null });
+
+        const again = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(again).toMatchObject({ queued: 1, notifications: 0 });
+        expect(await notifications()).toHaveLength(2);
+      });
+
+      it('does not replay reminders that were queued before the group was linked', async () => {
+        await setup();
+        await replanReminders(db, { now: NOW });
+        await queueDueReminders(db, { now: DUE_NOW });
+
+        await db.update(household).set({ telegramGroupChatId: -100_4 });
+        await queueDueReminders(db, { now: DUE_NOW });
+
+        expect((await notifications()).map((n) => n.channel)).toEqual(['in_app']);
       });
     });
 
