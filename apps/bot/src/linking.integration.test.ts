@@ -4,6 +4,7 @@ import {
   issueMemberLinkCode,
   TELEGRAM_LINK_CODE_TTL_MS,
   member,
+  unlinkMember,
 } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -86,6 +87,32 @@ describe.skipIf(!adminUrl)('bot linking (integration)', () => {
       expect(telegram.sentTexts[0]).toContain('expired');
     });
 
+    it('refuses a group that belongs to another household and spends the code', async () => {
+      const owner = await newHousehold(test.db, { name: 'Owners', telegramGroupChatId: CHAT_ID });
+      const h = await newHousehold(test.db, { name: 'Others', telegramGroupChatId: null });
+      const { code } = await issueGroupLinkCode(test.db, h.id, { now: NOW });
+      const { bot, telegram } = newTestBot(test.db);
+
+      await bot.handleUpdate(groupCommand(`/linkgroup ${code}`));
+
+      expect((await reload(owner.id)).telegramGroupChatId).toBe(CHAT_ID);
+      expect(await reload(h.id)).toMatchObject({
+        telegramGroupChatId: null,
+        telegramGroupLinkCode: null,
+        telegramGroupLinkExpiresAt: null,
+      });
+      expect(telegram.sentTexts[0]).toContain('already belongs to another household');
+      expect(telegram.sentTexts[0]).toContain('used up');
+
+      // The code was posted in the group, so it is dead even once the group is free.
+      await test.db
+        .update(household)
+        .set({ telegramGroupChatId: null })
+        .where(eq(household.id, owner.id));
+      await bot.handleUpdate(groupCommand(`/linkgroup ${code}`));
+      expect((await reload(h.id)).telegramGroupChatId).toBeNull();
+    });
+
     it('explains the usage when there is no code', async () => {
       const { bot, telegram } = newTestBot(test.db);
 
@@ -122,6 +149,31 @@ describe.skipIf(!adminUrl)('bot linking (integration)', () => {
       expect(linked?.telegramUserId).toBe(5001);
       expect(telegram.to('sendMessage')[0]).toMatchObject({ chat_id: 5001 });
       expect(telegram.sentTexts[0]).toContain("You're linked as Alex");
+    });
+
+    it('refuses a Telegram account that is already connected to another member', async () => {
+      const h = await newHousehold(test.db);
+      const alex = await newMember(test.db, h.id, 'Alex', 5001);
+      const sam = await newMember(test.db, h.id, 'Sam');
+      const { code } = await issueMemberLinkCode(test.db, sam.id, { now: NOW });
+      const { bot, telegram } = newTestBot(test.db, { publicBaseUrl: 'https://tracker.example' });
+
+      await bot.handleUpdate(privateCommand(`/start ${code}`));
+
+      const text = telegram.sentTexts[0] ?? '';
+      expect(text).toContain('already connected to Alex');
+      expect(text).toContain('disconnect');
+      expect(text).toContain('Account → Telegram');
+      expect(text).not.toContain("You're linked");
+      const members = await test.db.select().from(member);
+      expect(Object.fromEntries(members.map((m) => [m.name, m.telegramUserId]))).toEqual({
+        Alex: 5001,
+        Sam: null,
+      });
+      // The code is still good once Alex has disconnected.
+      await unlinkMember(test.db, alex.id);
+      await bot.handleUpdate(privateCommand(`/start ${code}`));
+      expect(telegram.sentTexts[1]).toContain("You're linked as Sam");
     });
 
     it('explains how to connect from the web app without a code', async () => {

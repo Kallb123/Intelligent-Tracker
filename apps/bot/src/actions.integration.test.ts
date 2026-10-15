@@ -1,4 +1,4 @@
-import { applyOccurrenceAction, occurrence } from '@tracker/db';
+import { applyOccurrenceAction, household, occurrence } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
@@ -7,6 +7,7 @@ import { deliverGroupMessages } from './delivery.js';
 import {
   adminUrl,
   CHAT_ID,
+  migrateUpdate,
   newHousehold,
   newMember,
   newOccurrence,
@@ -332,6 +333,38 @@ describe.skipIf(!adminUrl)('button presses in the group (integration)', () => {
       if (!occ) throw new Error('no occurrence');
 
       await press({ type: 'complete', occurrenceId: occ.id }, SAM_TG, CHAT_ID, 4242);
+
+      expect((await stored(occ.id)).status).toBe('active');
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({
+        text: 'I no longer have the details of that message.',
+      });
+      expect(edited(telegram)).toEqual([]);
+    });
+
+    it('keeps working on old messages after the group becomes a supergroup', async () => {
+      const { occurrences, press, stored, telegram, bot } = await deliveredMessage();
+      const [occ] = occurrences;
+      if (!occ) throw new Error('no occurrence');
+      // Telegram moves the group to a new chat id; its messages keep their ids.
+      await bot.handleUpdate(migrateUpdate(CHAT_ID, -1_009_999));
+
+      await press({ type: 'complete', occurrenceId: occ.id }, SAM_TG, -1_009_999);
+
+      expect((await stored(occ.id)).status).toBe('done');
+      expect(edited(telegram)[0]).toMatchObject({ chat_id: -1_009_999, message_id: 1001 });
+    });
+
+    it('does not mix up a message of an earlier group with the same id', async () => {
+      const { h, occurrences, press, stored, telegram } = await deliveredMessage();
+      const [occ] = occurrences;
+      if (!occ) throw new Error('no occurrence');
+      // The household moves to another group, where Telegram happens to reuse message id 1001.
+      await test.db
+        .update(household)
+        .set({ telegramGroupChatId: -2_002 })
+        .where(eq(household.id, h.id));
+
+      await press({ type: 'complete', occurrenceId: occ.id }, SAM_TG, -2_002);
 
       expect((await stored(occ.id)).status).toBe('active');
       expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({

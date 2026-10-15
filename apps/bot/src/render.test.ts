@@ -1,13 +1,16 @@
 import { snoozeOptions } from '@tracker/core';
-import type { OccurrenceState } from '@tracker/db';
+import { DEFAULT_OUTBOX_MESSAGE_SIZE, type OccurrenceState } from '@tracker/db';
 import type { ReminderPayload } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
 import { decodeCallback } from './callback-data.js';
 import {
   escapeHtml,
   formatSnoozeUntil,
+  MAX_LINE_LENGTH,
   renderMessage,
   snoozeChoices,
+  TELEGRAM_MESSAGE_LIMIT,
+  truncate,
   type RenderInput,
   type RenderLine,
 } from './render.js';
@@ -261,6 +264,104 @@ describe('renderMessage', () => {
     for (const button of [...plain.keyboard.flat(), ...menu.keyboard.flat()]) {
       expect(Buffer.byteLength(button.callback_data)).toBeLessThanOrEqual(64);
     }
+  });
+});
+
+/** What Telegram counts: the text with the tags dropped and the entities decoded. */
+function visibleLength(html: string): number {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&').length;
+}
+
+describe('message length', () => {
+  // Every character that is an entity once escaped, as long as the schemas allow.
+  const title = '&<>'.repeat(66).slice(0, 200);
+  const longName = '<&>'.repeat(26).slice(0, 80);
+  const full = Array.from({ length: DEFAULT_OUTBOX_MESSAGE_SIZE }, (_, i) => i);
+  const futureSnooze = new Date('2026-11-03T19:00:00Z');
+
+  const states: [string, (id: string) => OccurrenceState | undefined][] = [
+    ['open', (id) => open(id)],
+    ['done', (id) => open(id, { status: 'done', actors: { completed: longName } })],
+    ['skipped', (id) => open(id, { status: 'skipped', actors: { skipped: longName } })],
+    ['started', (id) => open(id, { status: 'started', actors: { started: longName } })],
+    ['snoozed', (id) => open(id, { snoozedUntil: futureSnooze, actors: { snoozed: longName } })],
+    ['removed', () => undefined],
+  ];
+
+  it.each(states)('fits a full batch of the longest lines in Telegram (%s)', (_name, state) => {
+    for (const kind of ['milestone', 'heads_up', 'nudge', 'due', 'overdue'] as const) {
+      const lines = full.map((i) =>
+        line(
+          `00000000-0000-4000-8000-00000000000${i}`,
+          { kind, taskTitle: title, milestoneTitle: title, overdueDays: 100, dueAt: null },
+          { name: longName, telegramUserId: 1000 + i },
+        ),
+      );
+      const { text } = render(
+        lines,
+        lines.flatMap((l) => state(l.payload.occurrenceId) ?? []),
+      );
+
+      expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+      // The longest text (milestone title and task title together) is the one that gets cut.
+      if (kind === 'milestone') expect(text).toContain('…');
+    }
+  });
+
+  it('fits a full batch where every line is in a different state', () => {
+    const lines = full.map((i) =>
+      line(
+        `00000000-0000-4000-8000-00000000000${i}`,
+        { kind: 'milestone', taskTitle: title, milestoneTitle: title },
+        { name: longName, telegramUserId: 1000 + i },
+      ),
+    );
+    const { text } = render(
+      lines,
+      lines.flatMap((l, i) => states[i % states.length]?.[1](l.payload.occurrenceId) ?? []),
+    );
+    expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+  });
+
+  it('keeps every line within its budget and escapes the cut text whole', () => {
+    const { text } = render(
+      [line(OCC_A, { taskTitle: title }, { name: longName, telegramUserId: 7 })],
+      [open(OCC_A, { status: 'started', actors: { started: longName } })],
+    );
+
+    expect(visibleLength(text)).toBeLessThanOrEqual(MAX_LINE_LENGTH);
+    expect(text).toContain('…');
+    // No entity was cut in two: every "&" starts a whole one.
+    expect(text.match(/&(?!amp;|lt;|gt;)/g)).toBeNull();
+    // The name is shortened too.
+    expect(text).not.toContain(longName);
+  });
+
+  it('leaves text that fits untouched', () => {
+    const { text } = render([line(OCC_A)], [open(OCC_A)]);
+    expect(text).not.toContain('…');
+  });
+});
+
+describe('truncate', () => {
+  it('returns text that fits as it is', () => {
+    expect(truncate('abc', 3)).toBe('abc');
+  });
+
+  it('cuts to the length with an ellipsis and drops the space before it', () => {
+    expect(truncate('hello world', 7)).toBe('hello…');
+    expect(truncate('abcdefgh', 5)).toBe('abcd…');
+  });
+
+  it('never splits a surrogate pair', () => {
+    // "ab😀cd": the emoji is two UTF-16 units at index 2-3.
+    expect(truncate('ab😀cd', 4)).toBe('ab…');
+    expect(truncate('ab😀cd', 5)).toBe('ab😀…');
+    expect(truncate('😀'.repeat(10), 7).length).toBeLessThanOrEqual(7);
   });
 });
 

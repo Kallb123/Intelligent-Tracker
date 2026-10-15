@@ -131,20 +131,45 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
       expect((await reload(h.id)).telegramGroupChatId).toBeNull();
     });
 
-    it('refuses a chat another household is linked to, and keeps the code', async () => {
+    it('refuses a chat another household is linked to, and spends the code', async () => {
       const taken = await newHousehold();
       await db
         .update(household)
         .set({ telegramGroupChatId: CHAT })
         .where(eq(household.id, taken.id));
       const h = await newHousehold();
+      await db.update(household).set({ telegramGroupChatId: -77 }).where(eq(household.id, h.id));
       const { code } = await issueGroupLinkCode(db, h.id, { now: NOW });
 
       expect(await redeemGroupLinkCode(db, code, CHAT, { now: NOW })).toBeNull();
-      expect((await reload(h.id)).telegramGroupLinkCode).toBe(hashToken(code));
 
+      // Spent (it was posted in a group that is not ours), and nobody's link changed.
+      expect(await reload(h.id)).toMatchObject({
+        telegramGroupChatId: -77,
+        telegramGroupLinkCode: null,
+        telegramGroupLinkExpiresAt: null,
+      });
+      expect((await reload(taken.id)).telegramGroupChatId).toBe(CHAT);
       await unlinkGroup(db, taken.id);
-      expect(await redeemGroupLinkCode(db, code, CHAT, { now: NOW })).toBe(h.id);
+      expect(await redeemGroupLinkCode(db, code, CHAT, { now: NOW })).toBeNull();
+      expect((await reload(h.id)).telegramGroupChatId).toBe(-77);
+    });
+
+    it('spends the code of the loser when two households race for one chat', async () => {
+      const [a, b] = [await newHousehold(), await newHousehold()];
+      const [codeA, codeB] = [
+        await issueGroupLinkCode(db, a.id, { now: NOW }),
+        await issueGroupLinkCode(db, b.id, { now: NOW }),
+      ];
+
+      await Promise.all([
+        redeemGroupLinkCode(db, codeA.code, CHAT, { now: NOW }),
+        redeemGroupLinkCode(db, codeB.code, CHAT, { now: NOW }),
+      ]);
+
+      for (const h of [await reload(a.id), await reload(b.id)]) {
+        expect(h.telegramGroupLinkCode).toBeNull();
+      }
     });
 
     it('lets only one of two households win a chat they redeem at once', async () => {
@@ -227,14 +252,21 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
 
       const linked = await redeemMemberLinkCode(db, code, USER, { now: later(1000) });
 
-      expect(linked).toEqual({ memberId: alex.id, householdId: h.id, name: 'Alex' });
+      expect(linked).toEqual({
+        status: 'linked',
+        memberId: alex.id,
+        householdId: h.id,
+        name: 'Alex',
+      });
       expect(await reloadMember(alex.id)).toMatchObject({
         telegramUserId: USER,
         telegramLinkCode: null,
         telegramLinkExpiresAt: null,
       });
       expect((await findMemberByTelegramUserId(db, USER))?.id).toBe(alex.id);
-      expect(await redeemMemberLinkCode(db, code, USER + 1, { now: later(1000) })).toBeNull();
+      expect(await redeemMemberLinkCode(db, code, USER + 1, { now: later(1000) })).toEqual({
+        status: 'invalid',
+      });
       expect((await reloadMember(alex.id)).telegramUserId).toBe(USER);
     });
 
@@ -244,29 +276,89 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
       const old = await issueMemberLinkCode(db, alex.id, { now: NOW });
       const fresh = await issueMemberLinkCode(db, alex.id, { now: NOW });
 
-      expect(await redeemMemberLinkCode(db, 'nope', USER, { now: NOW })).toBeNull();
-      expect(await redeemMemberLinkCode(db, old.code, USER, { now: NOW })).toBeNull();
+      const invalid = { status: 'invalid' };
+      expect(await redeemMemberLinkCode(db, 'nope', USER, { now: NOW })).toEqual(invalid);
+      expect(await redeemMemberLinkCode(db, old.code, USER, { now: NOW })).toEqual(invalid);
       expect(
         await redeemMemberLinkCode(db, fresh.code, USER, {
           now: later(TELEGRAM_LINK_CODE_TTL_MS),
         }),
-      ).toBeNull();
+      ).toEqual(invalid);
       expect(await findMemberByTelegramUserId(db, USER)).toBeNull();
     });
 
-    it('moves a Telegram user who was linked to another member', async () => {
+    it('refuses a Telegram user who is linked to another member, and keeps the code', async () => {
       const h = await newHousehold();
       const alex = await newMember(h.id, 'Alex');
       const sam = await newMember(h.id, 'Sam');
       await db.update(member).set({ telegramUserId: USER }).where(eq(member.id, alex.id));
       const { code } = await issueMemberLinkCode(db, sam.id, { now: NOW });
 
-      expect(await redeemMemberLinkCode(db, code, USER, { now: NOW })).toMatchObject({
-        memberId: sam.id,
+      expect(await redeemMemberLinkCode(db, code, USER, { now: NOW })).toEqual({
+        status: 'already_linked',
+        name: 'Alex',
       });
 
-      expect((await reloadMember(alex.id)).telegramUserId).toBeNull();
-      expect((await findMemberByTelegramUserId(db, USER))?.id).toBe(sam.id);
+      expect((await reloadMember(alex.id)).telegramUserId).toBe(USER);
+      expect(await reloadMember(sam.id)).toMatchObject({
+        telegramUserId: null,
+        telegramLinkCode: hashToken(code),
+      });
+
+      // Once Alex has disconnected in the app, the same code works.
+      await unlinkMember(db, alex.id);
+      expect(await redeemMemberLinkCode(db, code, USER, { now: NOW })).toMatchObject({
+        status: 'linked',
+        memberId: sam.id,
+      });
+    });
+
+    it('refuses a Telegram user linked to a member of another household', async () => {
+      const [mine, theirs] = [await newHousehold(), await newHousehold()];
+      const victim = await newMember(theirs.id, 'Victim');
+      const attacker = await newMember(mine.id, 'Attacker');
+      await db.update(member).set({ telegramUserId: USER }).where(eq(member.id, victim.id));
+      const { code } = await issueMemberLinkCode(db, attacker.id, { now: NOW });
+
+      expect(await redeemMemberLinkCode(db, code, USER, { now: NOW })).toEqual({
+        status: 'already_linked',
+        name: 'Victim',
+      });
+      expect((await findMemberByTelegramUserId(db, USER))?.id).toBe(victim.id);
+    });
+
+    it('lets a member link the Telegram user they already have', async () => {
+      const h = await newHousehold();
+      const alex = await newMember(h.id);
+      await db.update(member).set({ telegramUserId: USER }).where(eq(member.id, alex.id));
+      const { code } = await issueMemberLinkCode(db, alex.id, { now: NOW });
+
+      expect(await redeemMemberLinkCode(db, code, USER, { now: NOW })).toMatchObject({
+        status: 'linked',
+        memberId: alex.id,
+      });
+      expect(await reloadMember(alex.id)).toMatchObject({
+        telegramUserId: USER,
+        telegramLinkCode: null,
+      });
+    });
+
+    it('lets one Telegram user win when two members redeem codes at once', async () => {
+      const h = await newHousehold();
+      const [alex, sam] = [await newMember(h.id, 'Alex'), await newMember(h.id, 'Sam')];
+      const [codeA, codeB] = [
+        await issueMemberLinkCode(db, alex.id, { now: NOW }),
+        await issueMemberLinkCode(db, sam.id, { now: NOW }),
+      ];
+
+      const results = await Promise.all([
+        redeemMemberLinkCode(db, codeA.code, USER, { now: NOW }),
+        redeemMemberLinkCode(db, codeB.code, USER, { now: NOW }),
+      ]);
+
+      expect(results.map((r) => r.status).sort()).toEqual(['already_linked', 'linked']);
+      const [winner] = await db.select().from(member).where(eq(member.telegramUserId, USER));
+      expect(winner).toBeDefined();
     });
 
     it('re-links a member to a different Telegram user', async () => {
@@ -291,7 +383,7 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
         redeemMemberLinkCode(db, code, USER + 1, { now: NOW }),
       ]);
 
-      expect(results.filter((r) => r !== null)).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'linked')).toHaveLength(1);
     });
 
     it('unlinks the member and forgets a pending code', async () => {
@@ -311,45 +403,79 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
   });
 
   describe('telegramMessageNotifications', () => {
+    let n = 0;
+    const queue = async (householdId: string, values: Partial<NewNotification>) => {
+      n += 1;
+      const [row] = await db
+        .insert(notification)
+        .values({
+          householdId,
+          memberId: null,
+          channel: 'telegram_group',
+          dedupeKey: `t:${n}`,
+          nextAttemptAt: NOW,
+          telegramChatId: CHAT,
+          payload: {
+            type: 'reminder',
+            kind: 'due',
+            taskId: '00000000-0000-4000-8000-000000000001',
+            occurrenceId: '00000000-0000-4000-8000-000000000002',
+            taskTitle: 'Bins',
+            dueDate: '2026-07-10',
+            dueAt: null,
+            fireAt: NOW.toISOString(),
+            assigneeId: null,
+          },
+          ...values,
+        })
+        .returning();
+      return row?.id ?? '';
+    };
+
     it('returns the group rows of one message of one household, in delivery order', async () => {
       const h = await newHousehold();
       const other = await newHousehold();
-      let n = 0;
-      const queue = async (values: Partial<NewNotification>) => {
-        n += 1;
-        const [row] = await db
-          .insert(notification)
-          .values({
-            householdId: h.id,
-            memberId: null,
-            channel: 'telegram_group',
-            dedupeKey: `t:${n}`,
-            nextAttemptAt: NOW,
-            payload: {
-              type: 'reminder',
-              kind: 'due',
-              taskId: '00000000-0000-4000-8000-000000000001',
-              occurrenceId: '00000000-0000-4000-8000-000000000002',
-              taskTitle: 'Bins',
-              dueDate: '2026-07-10',
-              dueAt: null,
-              fireAt: NOW.toISOString(),
-              assigneeId: null,
-            },
-            ...values,
-          })
-          .returning();
-        return row?.id ?? '';
-      };
-      const second = await queue({ telegramMessageId: 7, nextAttemptAt: later(1000) });
-      const first = await queue({ telegramMessageId: 7 });
-      await queue({ telegramMessageId: 8 });
-      await queue({ telegramMessageId: null });
-      await queue({ householdId: other.id, telegramMessageId: 7 });
+      const second = await queue(h.id, { telegramMessageId: 7, nextAttemptAt: later(1000) });
+      const first = await queue(h.id, { telegramMessageId: 7 });
+      await queue(h.id, { telegramMessageId: 8 });
+      await queue(h.id, { telegramMessageId: null, telegramChatId: null });
+      await queue(other.id, { telegramMessageId: 7 });
 
-      const rows = await telegramMessageNotifications(db, h.id, 7);
+      const rows = await telegramMessageNotifications(db, h.id, CHAT, 7);
 
       expect(rows.map((r) => r.id)).toEqual([first, second]);
+    });
+
+    it('keeps the messages of two chats with the same id apart', async () => {
+      const h = await newHousehold();
+      const inOldGroup = await queue(h.id, { telegramChatId: -4_567, telegramMessageId: 7 });
+      const inNewGroup = await queue(h.id, { telegramChatId: CHAT, telegramMessageId: 7 });
+
+      const ids = async (chatId: number) =>
+        (await telegramMessageNotifications(db, h.id, chatId, 7)).map((r) => r.id);
+
+      expect(await ids(-4_567)).toEqual([inOldGroup]);
+      expect(await ids(CHAT)).toEqual([inNewGroup]);
+      expect(await ids(-1)).toEqual([]);
+    });
+
+    it('moves the messages of a group to its supergroup id when it migrates', async () => {
+      const h = await newHousehold();
+      const other = await newHousehold();
+      await db.update(household).set({ telegramGroupChatId: -4_567 }).where(eq(household.id, h.id));
+      const mine = await queue(h.id, { telegramChatId: -4_567, telegramMessageId: 7 });
+      const theirs = await queue(other.id, { telegramChatId: -4_567, telegramMessageId: 7 });
+
+      await migrateTelegramGroupChat(db, -4_567, CHAT);
+
+      expect((await telegramMessageNotifications(db, h.id, CHAT, 7)).map((r) => r.id)).toEqual([
+        mine,
+      ]);
+      expect(await telegramMessageNotifications(db, h.id, -4_567, 7)).toEqual([]);
+      // Another household's rows are not touched.
+      expect(
+        (await telegramMessageNotifications(db, other.id, -4_567, 7)).map((r) => r.id),
+      ).toEqual([theirs]);
     });
   });
 

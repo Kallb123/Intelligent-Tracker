@@ -196,7 +196,11 @@ member links their Telegram with `t.me/<bot>?start=<code>`; both codes come from
 `DELIVERY_INTERVAL_MS` (default 10 seconds) the bot sends the group reminders that are due as one
 message per household, with a mention for each assignee and ✅ Done / ▶️ Started / ⏰ Snooze / ⏭ Skip
 buttons. A press is attributed to the member behind the Telegram user, and the message is edited in
-place to show the result. Its tests use a mocked Telegram API (`pnpm exec vitest run --project @tracker/bot`
+place to show the result. Long titles and names are cut with "…" so a message always fits Telegram's
+4096 characters, and reminders that were due more than 24 hours ago (the bot was down) are given up
+instead of posted late. A Telegram account that is already connected to a member is never moved by
+someone else's link: it has to be disconnected in the app first, and a `/linkgroup` code is used up
+even when the group is refused. Its tests use a mocked Telegram API (`pnpm exec vitest run --project @tracker/bot`
 with `TEST_DATABASE_URL` set).
 
 The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps/api/openapi.json`

@@ -1,6 +1,7 @@
 import type { NotificationChannel } from '@tracker/shared';
-import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { Database, DbOrTransaction } from './client.js';
+import { MISSED_REMINDER_GRACE_MS } from './reminders.js';
 import { notification, type Notification } from './schema/index.js';
 
 /*
@@ -19,6 +20,10 @@ import { notification, type Notification } from './schema/index.js';
  * Where one message carries several notifications (the Telegram group gets all the reminders due
  * together as a single message), `deliverOutboxBatches` claims them a household at a time and
  * hands the handler the whole batch; success and failure then apply to every row of it.
+ *
+ * A deliverer that was down or idle comes back to a backlog, and posting hours-old reminders in a
+ * burst is worse than dropping them, so `giveUpStaleNotifications` fails the rows that are too
+ * old before the next delivery.
  */
 
 /** The first retry waits this long; each further failure doubles the wait. */
@@ -45,8 +50,12 @@ export function outboxBackoffMs(attempts: number): number {
   return Math.min(OUTBOX_RETRY_BASE_MS * 2 ** (Math.max(1, attempts) - 1), OUTBOX_RETRY_MAX_MS);
 }
 
-/** What a handler may report about the message it sent. */
-export type OutboxSent = { telegramMessageId?: number } | void;
+/**
+ * What a handler may report about the message it sent. A Telegram message is identified by its
+ * chat together with its id (ids are only unique within a chat), so a handler that sends one
+ * reports both.
+ */
+export type OutboxSent = { telegramChatId?: number; telegramMessageId?: number } | void;
 
 /** Delivers one notification; throws to have it retried. */
 export type OutboxHandler = (notification: Notification) => Promise<OutboxSent>;
@@ -85,7 +94,7 @@ function isPending(channels: readonly NotificationChannel[], now: Date): SQL | u
   );
 }
 
-/** Stamps rows as delivered, with the Telegram message id the handler reported, if any. */
+/** Stamps rows as delivered, with the Telegram chat and message id the handler reported, if any. */
 async function markSent(
   tx: DbOrTransaction,
   ids: string[],
@@ -97,6 +106,7 @@ async function markSent(
     .set({
       sentAt: now,
       lastError: null,
+      ...(sent?.telegramChatId !== undefined ? { telegramChatId: sent.telegramChatId } : {}),
       ...(sent?.telegramMessageId !== undefined
         ? { telegramMessageId: sent.telegramMessageId }
         : {}),
@@ -143,7 +153,7 @@ export interface DeliverOutboxOptions {
 /**
  * Delivers pending notifications (`sent_at` and `failed_at` unset, `next_attempt_at <= now`) on
  * the channels that have a handler, oldest first, up to `batchSize`. A handler that returns
- * stamps `sent_at` (and `telegram_message_id` if it gives one). A handler that throws adds an
+ * stamps `sent_at` (and `telegram_chat_id` and `telegram_message_id` if it gives them). A handler that throws adds an
  * attempt, records `last_error` and delays the next attempt by `outboxBackoffMs`; the
  * `maxAttempts`-th failure sets `failed_at` and gives up. Failures are returned, not thrown;
  * only database errors are thrown.
@@ -208,8 +218,8 @@ export interface DeliverOutboxBatchesOptions {
  *
  * The batch is claimed (`FOR UPDATE SKIP LOCKED`) in a transaction that stays open while the
  * handler runs, so concurrent callers never share a row. A handler that returns stamps `sent_at`
- * on every row (and the `telegram_message_id` it reports, which is what lets a button press
- * find the rows again). One that throws counts a failed attempt on every row, with the same
+ * on every row (and the `telegram_chat_id` and `telegram_message_id` it reports, which is what
+ * lets a button press find the rows again). One that throws counts a failed attempt on every row, with the same
  * backoff and give-up as `deliverOutbox`, and returns one `DeliveryFailure` per row. Batches
  * are delivered until nothing is pending or `maxBatches` were handled; a batch that failed is
  * not retried within the call, as its rows wait out their backoff.
@@ -264,6 +274,44 @@ export async function deliverOutboxBatches(
     if (done) break;
   }
   return result;
+}
+
+/**
+ * Gives up on the pending notifications of `channel` whose reminder was due more than
+ * `maxAgeMs` before `now` (default `MISSED_REMINDER_GRACE_MS`), so a channel whose deliverer was
+ * down or idle does not post hours-old reminders in a burst when it comes back. Such a row gets
+ * `failed_at` and a `last_error` saying why, and is never sent. Returns how many were given up.
+ *
+ * Age is measured from the reminder's own `payload.fireAt`, the same clock `queueDueReminders`
+ * uses to cancel reminders the worker missed, so a reminder is dropped at the same lateness
+ * whether the worker or the deliverer was the one that fell behind. `created_at` would instead
+ * restart the clock whenever the worker queued a reminder late, and `next_attempt_at` moves with
+ * every retry. A row mid-delivery by another process is waited for, then re-checked, so one
+ * that was just sent is left alone.
+ */
+export async function giveUpStaleNotifications(
+  db: DbOrTransaction,
+  options: { now: Date; channel: NotificationChannel; maxAgeMs?: number },
+): Promise<number> {
+  const { now, channel } = options;
+  const staleBefore = new Date(now.getTime() - (options.maxAgeMs ?? MISSED_REMINDER_GRACE_MS));
+  const given = await db
+    .update(notification)
+    .set({
+      failedAt: now,
+      lastError: `Not sent: the reminder was due before ${staleBefore.toISOString()}, too late to be useful`,
+    })
+    .where(
+      and(
+        // Not `isPending`: a stale row that is backing off after a failed send is given up too.
+        eq(notification.channel, channel),
+        isNull(notification.sentAt),
+        isNull(notification.failedAt),
+        sql`(${notification.payload}->>'fireAt')::timestamptz < ${staleBefore.toISOString()}::timestamptz`,
+      ),
+    )
+    .returning({ id: notification.id });
+  return given.length;
 }
 
 /** An in-app notification is deleted this long after the member read it. */

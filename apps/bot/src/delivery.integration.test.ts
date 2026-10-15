@@ -1,8 +1,8 @@
-import { notification, OUTBOX_RETRY_BASE_MS } from '@tracker/db';
+import { MISSED_REMINDER_GRACE_MS, notification, OUTBOX_RETRY_BASE_MS } from '@tracker/db';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
-import { deliverGroupMessages, startDeliveryLoop } from './delivery.js';
+import { deliverGroupMessages } from './delivery.js';
 import {
   adminUrl,
   CHAT_ID,
@@ -60,9 +60,10 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
       ['✅ 2', '▶️ 2', '⏰ 2', '⏭ 2'],
     ]);
 
-    // Both rows are stamped as sent, with the id Telegram gave the one message.
+    // Both rows are stamped as sent, with the chat and the id Telegram gave the one message.
     const rows = [await reload(first.id), await reload(second.id)];
     expect(rows.map((r) => r.sentAt)).toEqual([NOW, NOW]);
+    expect(rows.map((r) => r.telegramChatId)).toEqual([CHAT_ID, CHAT_ID]);
     expect(rows[0]?.telegramMessageId).toBeGreaterThan(0);
     expect(rows[1]?.telegramMessageId).toBe(rows[0]?.telegramMessageId);
 
@@ -136,6 +137,41 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
     expect(await reload(n.id)).toMatchObject({ sentAt: now, lastError: null });
   });
 
+  it('gives up on reminders that are too old to post instead of sending them in a burst', async () => {
+    const h = await newHousehold(test.db);
+    const stale = await queueGroupReminder(
+      test.db,
+      h.id,
+      await newOccurrence(test.db, h.id, 'Old news'),
+      { fireAt: new Date(NOW.getTime() - MISSED_REMINDER_GRACE_MS - 1000).toISOString() },
+    );
+    const fresh = await queueGroupReminder(
+      test.db,
+      h.id,
+      await newOccurrence(test.db, h.id, 'Bins'),
+      { fireAt: new Date(NOW.getTime() - MISSED_REMINDER_GRACE_MS + 1000).toISOString() },
+    );
+    const { bot, telegram, logger } = newTestBot(test.db);
+
+    const result = await deliverGroupMessages(
+      test.db,
+      bot.api,
+      botDeps(test.db, { now: () => NOW, logger }),
+    );
+
+    expect(result).toEqual({ delivered: 1, failures: [] });
+    expect(telegram.sentTexts).toHaveLength(1);
+    expect(telegram.sentTexts[0]).toContain('Bins');
+    expect(telegram.sentTexts[0]).not.toContain('Old news');
+    expect(await reload(stale.id)).toMatchObject({
+      sentAt: null,
+      failedAt: NOW,
+      lastError: expect.stringContaining('too late'),
+    });
+    expect((await reload(fresh.id)).sentAt).toEqual(NOW);
+    expect(logger.warnings).toEqual(['stale reminders not sent']);
+  });
+
   it('fails the delivery, without calling Telegram, when the group has been unlinked', async () => {
     const h = await newHousehold(test.db, { telegramGroupChatId: null });
     const n = await queueGroupReminder(
@@ -156,41 +192,5 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
       { notificationId: n.id, error: 'The household has no linked Telegram group' },
     ]);
     expect((await reload(n.id)).sentAt).toBeNull();
-  });
-
-  describe('the loop', () => {
-    it('delivers straight away and again on every interval until stopped', async () => {
-      const h = await newHousehold(test.db);
-      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Bins'));
-      const { bot, telegram } = newTestBot(test.db);
-      const loop = startDeliveryLoop(test.db, bot.api, botDeps(test.db, { now: () => NOW }), 20);
-
-      await vi.waitFor(() => expect(telegram.to('sendMessage')).toHaveLength(1));
-      // Queued while the loop is already running: picked up by a later run.
-      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Recycling'));
-      await vi.waitFor(() => expect(telegram.to('sendMessage')).toHaveLength(2));
-      await loop.stop();
-
-      const calls = telegram.calls.length;
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      expect(telegram.calls).toHaveLength(calls);
-    });
-
-    it('logs a run that fails and keeps going', async () => {
-      const { bot, logger } = newTestBot(test.db);
-      const deps = botDeps(test.db, { now: () => NOW, logger });
-      // A database error (as opposed to a failed send) escapes `deliverOutboxBatches`.
-      const broken = new Proxy(test.db, {
-        get: (target, prop, receiver) =>
-          prop === 'transaction'
-            ? () => Promise.reject(new Error('connection lost'))
-            : Reflect.get(target, prop, receiver),
-      });
-      const loop = startDeliveryLoop(broken, bot.api, { ...deps, db: broken }, 10);
-
-      await vi.waitFor(() => expect(logger.errors.length).toBeGreaterThanOrEqual(2));
-      await loop.stop();
-      expect(logger.errors[0]).toBe('delivery run failed');
-    });
   });
 });

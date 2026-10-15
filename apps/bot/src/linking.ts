@@ -42,7 +42,8 @@ export function registerLinking(bot: Bot, deps: BotDeps): void {
     if (!householdId) {
       await ctx.reply(
         'That code is not valid, has expired, or this group already belongs to another ' +
-          'household. Create a new code in the web app under Settings → Telegram and try again.',
+          'household. Either way it is used up now: create a new code in the web app under ' +
+          'Settings → Telegram and try again.',
       );
       return;
     }
@@ -60,12 +61,23 @@ export function registerLinking(bot: Bot, deps: BotDeps): void {
     // Only in a private chat; in a group `/start` is not ours to answer.
     if (ctx.chat.type !== 'private' || !ctx.from) return;
     const code = ctx.match.trim();
-    const linked = code ? await redeemMemberLinkCode(db, code, ctx.from.id, { now: now() }) : null;
-    if (linked) {
-      logger.info('member linked', { memberId: linked.memberId });
+    const result = code
+      ? await redeemMemberLinkCode(db, code, ctx.from.id, { now: now() })
+      : undefined;
+    if (result?.status === 'linked') {
+      logger.info('member linked', { memberId: result.memberId });
       await ctx.reply(
-        `You're linked as ${linked.name}. Reminders are posted in the house group; press ` +
+        `You're linked as ${result.name}. Reminders are posted in the house group; press ` +
           `their buttons there and I'll record it as you.`,
+      );
+      return;
+    }
+    if (result?.status === 'already_linked') {
+      // Not moved: anyone can send someone a link, so it must not take over an existing one.
+      await ctx.reply(
+        `This Telegram account is already connected to ${result.name}. To connect it to ` +
+          `someone else, first disconnect it in the web app${webAppHint(publicBaseUrl)} ` +
+          'under Account → Telegram, then open the link again.',
       );
       return;
     }

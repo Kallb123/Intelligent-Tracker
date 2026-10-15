@@ -56,44 +56,52 @@ export async function issueGroupLinkCode(
 
 /**
  * Redeems a group link code: the household's `telegram_group_chat_id` becomes `chatId` and the
- * code is spent. Returns the household's id, or null for an unknown or expired code.
+ * code is spent. Returns the household's id, or null for an unknown or expired code, or one
+ * refused because another household is already linked to that chat.
  *
- * A group belongs to one household (the bot looks the household up by chat), so the code is
- * refused, and left unspent, while another household is linked to that chat; unlink it there
- * first. Linking the household's own chat again is fine. One statement, so two racing
- * redemptions of the same code cannot both succeed. The unique `telegram_group_chat_id` is what
- * holds when two households' codes race for one chat: the loser's statement fails with a
- * unique violation, which is the same refusal.
+ * A group belongs to one household (the bot looks the household up by chat), so while another
+ * household is linked to the chat, linking is refused: unlink it there first. The code is spent
+ * by that refusal too, in the same statement, because it was just posted in plain text in the
+ * group and must not stay valid there. A code that is unknown or expired is refused without
+ * touching anything. Linking the household's own chat again is fine. One statement, so two
+ * racing redemptions of the same code cannot both succeed. The unique `telegram_group_chat_id`
+ * is what holds when two households' codes race for one chat: the loser's statement fails with
+ * a unique violation, which is the same refusal (and spends its code in a second statement).
+ * `db` must not be a transaction for that last case: a failed statement aborts one.
  */
 export async function redeemGroupLinkCode(
-  db: DbOrTransaction,
+  db: Database,
   code: string,
   chatId: number,
   options: { now: Date },
 ): Promise<string | null> {
+  const codeHash = hashToken(code);
+  const redeemable = and(
+    eq(household.telegramGroupLinkCode, codeHash),
+    gt(household.telegramGroupLinkExpiresAt, options.now),
+  );
   try {
-    const [linked] = await db
+    const [redeemed] = await db
       .update(household)
       .set({
-        telegramGroupChatId: chatId,
+        // A refused household keeps whatever group (or none) it had.
+        telegramGroupChatId: sql`case when exists (
+          select 1 from household other
+          where other.telegram_group_chat_id = ${chatId} and other.id <> household.id
+        ) then household.telegram_group_chat_id else ${chatId} end`,
         telegramGroupLinkCode: null,
         telegramGroupLinkExpiresAt: null,
       })
-      .where(
-        and(
-          eq(household.telegramGroupLinkCode, hashToken(code)),
-          gt(household.telegramGroupLinkExpiresAt, options.now),
-          sql`not exists (
-            select 1 from household other
-            where other.telegram_group_chat_id = ${chatId} and other.id <> household.id
-          )`,
-        ),
-      )
-      .returning({ id: household.id });
-    return linked?.id ?? null;
+      .where(redeemable)
+      .returning({ id: household.id, chatId: household.telegramGroupChatId });
+    return redeemed?.chatId === chatId ? redeemed.id : null;
   } catch (error) {
-    if (uniqueViolation(error) !== undefined) return null;
-    throw error;
+    if (uniqueViolation(error) === undefined) throw error;
+    await db
+      .update(household)
+      .set({ telegramGroupLinkCode: null, telegramGroupLinkExpiresAt: null })
+      .where(redeemable);
+    return null;
   }
 }
 
@@ -127,44 +135,75 @@ export async function issueMemberLinkCode(
   return { code, expiresAt };
 }
 
+/** What redeeming a member link code did. */
+export type MemberLinkResult =
+  | ({ status: 'linked' } & LinkedMember)
+  | {
+      /**
+       * The Telegram user is already linked to a different member (`name`, who may be in another
+       * household); nothing changed and the code is still valid.
+       */
+      status: 'already_linked';
+      name: string;
+    }
+  | { status: 'invalid' };
+
 /**
  * Redeems a member link code: the member's `telegram_user_id` becomes `telegramUserId` and the
- * code is spent. Returns the member, or null for an unknown or expired code.
+ * code is spent. The result says whether it `linked`, the code was `invalid` (unknown or
+ * expired), or the Telegram user is `already_linked` to a different member.
  *
- * A Telegram user is one member, and the column is unique, so a user linked to another member
- * is moved: the old link is cleared first. That is what someone wants who redeems a fresh code
- * after being linked to the wrong account. The member row is locked while this happens, so a
- * racing redemption of the same code cannot also succeed.
+ * A Telegram user is one member, and the column is unique, so a user who is linked elsewhere is
+ * refused instead of being moved, and the code is not spent. Moving them would let anyone who
+ * sends a victim a deep link steal their link, possibly from another household; to switch
+ * accounts the person disconnects the old one in the app first. Linking the same member again
+ * is fine. The member row is locked while this happens, so a racing redemption of the same code
+ * cannot also succeed; two racing codes for one Telegram user end in the unique violation,
+ * which is the same refusal.
  */
 export async function redeemMemberLinkCode(
   db: Database,
   code: string,
   telegramUserId: number,
   options: { now: Date },
-): Promise<LinkedMember | null> {
-  return db.transaction(async (tx) => {
-    const [target] = await tx
-      .select({ id: member.id, householdId: member.householdId, name: member.name })
-      .from(member)
-      .where(
-        and(
-          eq(member.telegramLinkCode, hashToken(code)),
-          gt(member.telegramLinkExpiresAt, options.now),
-        ),
-      )
-      .for('update');
-    if (!target) return null;
+): Promise<MemberLinkResult> {
+  try {
+    return await db.transaction(async (tx): Promise<MemberLinkResult> => {
+      const [target] = await tx
+        .select({ id: member.id, householdId: member.householdId, name: member.name })
+        .from(member)
+        .where(
+          and(
+            eq(member.telegramLinkCode, hashToken(code)),
+            gt(member.telegramLinkExpiresAt, options.now),
+          ),
+        )
+        .for('update');
+      if (!target) return { status: 'invalid' };
 
-    await tx
-      .update(member)
-      .set({ telegramUserId: null })
-      .where(and(eq(member.telegramUserId, telegramUserId), ne(member.id, target.id)));
-    await tx
-      .update(member)
-      .set({ telegramUserId, telegramLinkCode: null, telegramLinkExpiresAt: null })
-      .where(eq(member.id, target.id));
-    return { memberId: target.id, householdId: target.householdId, name: target.name };
-  });
+      const [current] = await tx
+        .select({ name: member.name })
+        .from(member)
+        .where(and(eq(member.telegramUserId, telegramUserId), ne(member.id, target.id)));
+      if (current) return { status: 'already_linked', name: current.name };
+
+      await tx
+        .update(member)
+        .set({ telegramUserId, telegramLinkCode: null, telegramLinkExpiresAt: null })
+        .where(eq(member.id, target.id));
+      return {
+        status: 'linked',
+        memberId: target.id,
+        householdId: target.householdId,
+        name: target.name,
+      };
+    });
+  } catch (error) {
+    if (uniqueViolation(error) === undefined) throw error;
+    const current = await findMemberByTelegramUserId(db, telegramUserId);
+    // Gone again already (unlinked in the meantime): nothing was changed, so ask them to retry.
+    return current ? { status: 'already_linked', name: current.name } : { status: 'invalid' };
+  }
 }
 
 /** Forgets the member's Telegram user (and any pending link code). */
@@ -199,28 +238,43 @@ export async function findHouseholdByTelegramChat(
 /**
  * Moves a linked group to a new chat id. Telegram gives a group a new id when it is upgraded to
  * a supergroup (and tells the bot with a migration update), after which the old id is dead.
- * Returns the household's id, or null when no household was linked to `oldChatId`.
+ * The group's history, and so the ids of its messages, carries over, so the notifications sent
+ * to the old chat are moved to the new one too and their buttons keep working. Returns the
+ * household's id, or null when no household was linked to `oldChatId`.
  */
 export async function migrateTelegramGroupChat(
-  db: DbOrTransaction,
+  db: Database,
   oldChatId: number,
   newChatId: number,
 ): Promise<string | null> {
-  const [migrated] = await db
-    .update(household)
-    .set({ telegramGroupChatId: newChatId })
-    .where(eq(household.telegramGroupChatId, oldChatId))
-    .returning({ id: household.id });
-  return migrated?.id ?? null;
+  return db.transaction(async (tx) => {
+    const [migrated] = await tx
+      .update(household)
+      .set({ telegramGroupChatId: newChatId })
+      .where(eq(household.telegramGroupChatId, oldChatId))
+      .returning({ id: household.id });
+    if (!migrated) return null;
+    await tx
+      .update(notification)
+      .set({ telegramChatId: newChatId })
+      .where(
+        and(eq(notification.householdId, migrated.id), eq(notification.telegramChatId, oldChatId)),
+      );
+    return migrated.id;
+  });
 }
 
 /**
  * The group notifications that were sent as one Telegram message, in the order they were
  * delivered, so the bot can render the message again after one of its buttons is pressed.
+ * Message ids are only unique within a chat, so the message is the chat and the id together;
+ * without the chat, the messages of two groups (the household was linked to another group, or
+ * to a supergroup that reuses ids) would merge.
  */
 export async function telegramMessageNotifications(
   db: DbOrTransaction,
   householdId: string,
+  telegramChatId: number,
   telegramMessageId: number,
 ): Promise<Notification[]> {
   return db
@@ -230,6 +284,7 @@ export async function telegramMessageNotifications(
       and(
         eq(notification.householdId, householdId),
         eq(notification.channel, 'telegram_group'),
+        eq(notification.telegramChatId, telegramChatId),
         eq(notification.telegramMessageId, telegramMessageId),
       ),
     )

@@ -2,10 +2,12 @@ import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDb, type Database, type DbHandle } from './client.js';
 import { recordHeartbeat } from './heartbeat.js';
+import { MISSED_REMINDER_GRACE_MS } from './reminders.js';
 import { runMigrations } from './migrate.js';
 import {
   deliverOutbox,
   deliverOutboxBatches,
+  giveUpStaleNotifications,
   OLD_NOTIFICATION_RETENTION_MS,
   outboxBackoffMs,
   pruneNotifications,
@@ -122,15 +124,24 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('stores the Telegram message id a handler returns', async () => {
+    it('stores the Telegram chat and message id a handler returns', async () => {
       const n = await queue({ channel: 'telegram_group', memberId: null });
 
       await deliverOutbox(db, {
         now: NOW,
-        handlers: { telegram_group: async () => ({ telegramMessageId: 4_294_967_296 }) },
+        handlers: {
+          telegram_group: async () => ({
+            telegramChatId: -1_001_234_567_890,
+            telegramMessageId: 4_294_967_296,
+          }),
+        },
       });
 
-      expect(await row(n.id)).toMatchObject({ sentAt: NOW, telegramMessageId: 4_294_967_296 });
+      expect(await row(n.id)).toMatchObject({
+        sentAt: NOW,
+        telegramChatId: -1_001_234_567_890,
+        telegramMessageId: 4_294_967_296,
+      });
     });
 
     it('only claims channels that have a handler', async () => {
@@ -346,6 +357,86 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
     });
   });
 
+  describe('giveUpStaleNotifications', () => {
+    const fireAt = (ms: number) => ({
+      payload: {
+        type: 'reminder' as const,
+        kind: 'due' as const,
+        taskId: '00000000-0000-4000-8000-000000000001',
+        occurrenceId: '00000000-0000-4000-8000-000000000002',
+        taskTitle: 'Bins',
+        dueDate: '2026-07-10',
+        dueAt: null,
+        fireAt: new Date(NOW.getTime() - ms).toISOString(),
+        assigneeId: null,
+      },
+    });
+    const queueGroup = (values: Partial<NewNotification> = {}) =>
+      queue({ channel: 'telegram_group', memberId: null, ...values });
+
+    it('fails pending rows whose reminder was due too long ago, and says why', async () => {
+      const stale = await queueGroup(fireAt(MISSED_REMINDER_GRACE_MS + 1000));
+
+      const count = await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' });
+
+      expect(count).toBe(1);
+      expect(await row(stale.id)).toMatchObject({
+        sentAt: null,
+        failedAt: NOW,
+        lastError: expect.stringContaining('too late'),
+      });
+      // It is never claimed afterwards.
+      const handler = vi.fn<OutboxBatchHandler>(async () => {});
+      await deliverOutboxBatches(db, { now: NOW, channel: 'telegram_group', handler });
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('keeps a reminder exactly at the limit, and uses maxAgeMs when given', async () => {
+      const edge = await queueGroup(fireAt(MISSED_REMINDER_GRACE_MS));
+      const recent = await queueGroup(fireAt(60_000));
+
+      expect(await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' })).toBe(0);
+      expect(
+        await giveUpStaleNotifications(db, {
+          now: NOW,
+          channel: 'telegram_group',
+          maxAgeMs: 30_000,
+        }),
+      ).toBe(2);
+      expect((await row(edge.id)).failedAt).toEqual(NOW);
+      expect((await row(recent.id)).failedAt).toEqual(NOW);
+    });
+
+    it('goes by when the reminder was due, not by when it was queued or last tried', async () => {
+      const lateQueued = await queueGroup({
+        ...fireAt(MISSED_REMINDER_GRACE_MS + 1000),
+        createdAt: NOW,
+        nextAttemptAt: at('2026-07-10T18:30:00Z'),
+        attempts: 2,
+      });
+
+      await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' });
+
+      // Still backing off, but already too old to be worth sending.
+      expect((await row(lateQueued.id)).failedAt).toEqual(NOW);
+    });
+
+    it('leaves other channels, sent rows and rows already given up alone', async () => {
+      const old = fireAt(MISSED_REMINDER_GRACE_MS * 2);
+      const inApp = await queue(old);
+      const sent = await queueGroup({ ...old, sentAt: at('2026-07-09T00:00:00Z') });
+      const failedAt = at('2026-07-09T00:00:00Z');
+      const failed = await queueGroup({ ...old, failedAt, lastError: 'earlier' });
+
+      const count = await giveUpStaleNotifications(db, { now: NOW, channel: 'telegram_group' });
+
+      expect(count).toBe(0);
+      expect(await row(inApp.id)).toMatchObject({ failedAt: null, sentAt: null });
+      expect((await row(sent.id)).failedAt).toBeNull();
+      expect(await row(failed.id)).toMatchObject({ failedAt, lastError: 'earlier' });
+    });
+  });
+
   describe('deliverOutboxBatches', () => {
     const queueGroup = (values: Partial<NewNotification> = {}) =>
       queue({ channel: 'telegram_group', memberId: null, ...values });
@@ -359,7 +450,10 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
     it('hands every pending row of a household to the handler as one batch', async () => {
       const a = await queueGroup();
       const b = await queueGroup();
-      const handler = vi.fn<OutboxBatchHandler>(async () => ({ telegramMessageId: 4_294_967_296 }));
+      const handler = vi.fn<OutboxBatchHandler>(async () => ({
+        telegramChatId: -1_001_234_567_890,
+        telegramMessageId: 4_294_967_296,
+      }));
 
       const result = await deliverOutboxBatches(db, {
         now: NOW,
@@ -375,6 +469,7 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
           sentAt: NOW,
           lastError: null,
           attempts: 0,
+          telegramChatId: -1_001_234_567_890,
           telegramMessageId: 4_294_967_296,
         });
       }
@@ -392,7 +487,7 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
       let messageId = 100;
       const handler: OutboxBatchHandler = async (rows) => {
         batches.push(ids(rows));
-        return { telegramMessageId: (messageId += 1) };
+        return { telegramChatId: -5, telegramMessageId: (messageId += 1) };
       };
 
       const result = await deliverOutboxBatches(db, {
@@ -403,7 +498,7 @@ describe.skipIf(!adminUrl)('outbox and heartbeat (integration)', () => {
 
       expect(result.delivered).toBe(3);
       expect(batches).toEqual([[theirs.id], [mine1.id, mine2.id]]);
-      expect((await row(theirs.id)).telegramMessageId).toBe(101);
+      expect(await row(theirs.id)).toMatchObject({ telegramChatId: -5, telegramMessageId: 101 });
       expect((await row(mine1.id)).telegramMessageId).toBe(102);
       expect((await row(mine2.id)).telegramMessageId).toBe(102);
     });

@@ -70,6 +70,7 @@ export function registerActions(bot: Bot, deps: BotDeps): void {
       const notifications = await telegramMessageNotifications(
         db,
         household.id,
+        message.chat.id,
         message.message_id,
       );
       if (notifications.length === 0) {

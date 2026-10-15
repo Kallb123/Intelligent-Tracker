@@ -1,8 +1,9 @@
 import { createDb } from '@tracker/db';
+import { startTicker } from '@tracker/shared';
 import { writeFileSync } from 'node:fs';
 import { BOT_ALLOWED_UPDATES, botDeps, createBot } from './bot.js';
 import { configFromEnv } from './config.js';
-import { startDeliveryLoop } from './delivery.js';
+import { deliverGroupMessages } from './delivery.js';
 import { startupMessage } from './index.js';
 import { createLogger, errorFields } from './logger.js';
 
@@ -30,7 +31,7 @@ const bot = dbHandle && token ? createBot(dbHandle.db, { token, ...botOptions })
 if (!token) logger.info('TELEGRAM_BOT_TOKEN is not set; idling');
 else if (!dbHandle) logger.warn('DATABASE_URL is not set; idling');
 
-let delivery: ReturnType<typeof startDeliveryLoop> | undefined;
+let delivery: ReturnType<typeof startTicker> | undefined;
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   logger.info('shutting down', { signal });
@@ -53,12 +54,14 @@ if (bot && dbHandle) {
     process.exit(1);
   }
   logger.info('bot started', { username: bot.botInfo.username });
-  delivery = startDeliveryLoop(
-    dbHandle.db,
-    bot.api,
-    botDeps(dbHandle.db, botOptions),
-    config.deliveryIntervalMs,
-  );
+  const deps = botDeps(dbHandle.db, botOptions);
+  const { db } = dbHandle;
+  delivery = startTicker({
+    intervalMs: config.deliveryIntervalMs,
+    // A failed run (e.g. migrations not applied yet) is logged and retried on the next one.
+    onError: (error) => logger.error('delivery run failed', errorFields(error)),
+    run: async () => void (await deliverGroupMessages(db, bot.api, deps)),
+  });
   // Long polling. Updates that arrived while the bot was down are kept (not dropped), so a
   // button pressed during a restart is still handled. Resolves when `bot.stop()` is called.
   bot.start({ allowed_updates: [...BOT_ALLOWED_UPDATES] }).catch((error: unknown) => {

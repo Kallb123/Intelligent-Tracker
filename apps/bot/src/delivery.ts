@@ -1,13 +1,13 @@
 import {
   deliverOutboxBatches,
   findHouseholdById,
+  giveUpStaleNotifications,
   type Database,
   type DeliverOutboxResult,
   type OutboxBatchHandler,
 } from '@tracker/db';
 import type { Api } from 'grammy';
 import type { BotDeps } from './deps.js';
-import { errorFields } from './logger.js';
 import { buildGroupMessage, messageOptions } from './message.js';
 
 /*
@@ -15,6 +15,10 @@ import { buildGroupMessage, messageOptions } from './message.js';
  * the worker never claims: this bot owns it). Everything that is pending for a household goes
  * out as one message, however many reminders fell due together, so the group gets one ping and
  * one set of buttons per slot instead of a message per task.
+ *
+ * A reminder that is long overdue by the time the bot gets to it (it was down or idle) is not
+ * posted: when the bot comes back it would dump hours of stale reminders in the group in a burst.
+ * Those rows are given up on instead; see `giveUpStaleNotifications`.
  *
  * Delivery is at-least-once: if the process dies between Telegram accepting the message and the
  * database recording it, the next run sends it again. A failed send (or a household whose group
@@ -37,19 +41,27 @@ export function groupMessageHandler(db: Database, api: Api, deps: BotDeps): Outb
       message.text,
       messageOptions(message),
     );
-    return { telegramMessageId: sent.message_id };
+    // The chat Telegram reports, not the one asked for: that is what a button press carries.
+    return { telegramChatId: sent.chat.id, telegramMessageId: sent.message_id };
   };
 }
 
-/** Delivers everything that is due now and logs what happened. */
+/**
+ * Gives up on reminders that are too old to post, then delivers everything that is due now, and
+ * logs what happened.
+ */
 export async function deliverGroupMessages(
   db: Database,
   api: Api,
   deps: BotDeps,
 ): Promise<DeliverOutboxResult> {
+  const now = deps.now();
+  const channel = 'telegram_group';
+  const stale = await giveUpStaleNotifications(db, { now, channel });
+  if (stale > 0) deps.logger.warn('stale reminders not sent', { count: stale });
   const result = await deliverOutboxBatches(db, {
-    now: deps.now(),
-    channel: 'telegram_group',
+    now,
+    channel,
     handler: groupMessageHandler(db, api, deps),
   });
   if (result.delivered > 0) deps.logger.info('reminders delivered', { count: result.delivered });
@@ -57,47 +69,4 @@ export async function deliverGroupMessages(
     deps.logger.warn('reminder delivery failed', { ...failure });
   }
   return result;
-}
-
-export interface DeliveryLoop {
-  /** Stops scheduling and resolves once any run in progress has finished. */
-  stop(): Promise<void>;
-}
-
-/**
- * Delivers right away and then `intervalMs` after each run finishes (a timeout chain, not an
- * interval), so runs never overlap however long one takes, and a failed run is logged and tried
- * again on the next one.
- */
-export function startDeliveryLoop(
-  db: Database,
-  api: Api,
-  deps: BotDeps,
-  intervalMs: number,
-): DeliveryLoop {
-  let stopped = false;
-  let timer: NodeJS.Timeout | undefined;
-  let inFlight: Promise<void> = Promise.resolve();
-
-  const run = (): void => {
-    timer = undefined;
-    inFlight = (async () => {
-      try {
-        await deliverGroupMessages(db, api, deps);
-      } catch (error) {
-        deps.logger.error('delivery run failed', errorFields(error));
-      }
-      if (!stopped) timer = setTimeout(run, intervalMs);
-    })();
-  };
-  run();
-
-  return {
-    async stop() {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      timer = undefined;
-      await inFlight;
-    },
-  };
 }
