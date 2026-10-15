@@ -60,11 +60,15 @@ export {
   type RunMigrationsOptions,
 } from './migrate.js';
 export {
+  findHouseholdById,
   findHouseholdByTelegramChat,
   findMemberByTelegramUserId,
+  findMembersByIds,
   issueGroupLinkCode,
   issueMemberLinkCode,
   migrateTelegramGroupChat,
+  OCCURRENCE_ACTOR_KINDS,
+  occurrenceStates,
   redeemGroupLinkCode,
   redeemMemberLinkCode,
   TELEGRAM_LINK_CODE_TTL_MS,
@@ -72,6 +76,8 @@ export {
   unlinkGroup,
   unlinkMember,
   type LinkedMember,
+  type OccurrenceActorKind,
+  type OccurrenceState,
   type TelegramLinkCode,
 } from './telegram.js';
 export { generateToken, hashToken } from './tokens.js';

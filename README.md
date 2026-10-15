@@ -20,7 +20,7 @@ Runs locally with Docker Compose, with a Vue web UI.
 apps/
   api/        Fastify HTTP API: auth, tasks, occurrences, OpenAPI document
   worker/     scheduler tick: materialises occurrences, plans and queues reminders, delivers in-app notifications
-  bot/        Telegram bot (idles with a heartbeat)
+  bot/        Telegram bot (grammY, long polling): links the house group and members, delivers reminders with buttons
   web/        Vue 3 SPA (Vite, Pinia, Vue Router, PrimeVue) with a typed API client
 packages/
   core/       pure domain logic: recurrence, rotation, reminder planning
@@ -186,8 +186,18 @@ that time. It goes to the occurrence's current assignee, or to every
 household member when it has none. After the transaction commits it delivers the outbox (retries
 with exponential backoff, gives up after 8 attempts), deletes notifications past their retention
 (in-app ones read over 30 days ago, and delivered or failed ones over 90 days old; pending ones
-never) at most once an hour, and records the worker's `service_heartbeat`. Telegram delivery
-arrives with the bot.
+never) at most once an hour, and records the worker's `service_heartbeat`. It also queues one
+`telegram_group` notification per due reminder for a household with a linked group; the bot delivers those.
+
+The Telegram bot (`apps/bot`, grammY, long polling) needs `TELEGRAM_BOT_TOKEN` and `DATABASE_URL`;
+without either it idles. Leave BotFather's group privacy mode on: the bot only reacts to commands
+and button presses. An admin links the house group by sending `/linkgroup <code>` in it, and each
+member links their Telegram with `t.me/<bot>?start=<code>`; both codes come from the web app. Every
+`DELIVERY_INTERVAL_MS` (default 10 seconds) the bot sends the group reminders that are due as one
+message per household, with a mention for each assignee and ✅ Done / ▶️ Started / ⏰ Snooze / ⏭ Skip
+buttons. A press is attributed to the member behind the Telegram user, and the message is edited in
+place to show the result. Its tests use a mocked Telegram API (`pnpm exec vitest run --project @tracker/bot`
+with `TEST_DATABASE_URL` set).
 
 The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps/api/openapi.json`
 (the web app's typed client is generated from it). After changing a route, run `pnpm openapi`;

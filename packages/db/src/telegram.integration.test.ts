@@ -3,13 +3,24 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDb, type Database, type DbHandle } from './client.js';
 import { uniqueViolation } from './errors.js';
 import { runMigrations } from './migrate.js';
-import { household, member, notification, type NewNotification } from './schema/index.js';
 import {
+  activity,
+  household,
+  member,
+  notification,
+  occurrence,
+  task,
+  type NewNotification,
+} from './schema/index.js';
+import {
+  findHouseholdById,
   findHouseholdByTelegramChat,
   findMemberByTelegramUserId,
+  findMembersByIds,
   issueGroupLinkCode,
   issueMemberLinkCode,
   migrateTelegramGroupChat,
+  occurrenceStates,
   redeemGroupLinkCode,
   redeemMemberLinkCode,
   TELEGRAM_LINK_CODE_TTL_MS,
@@ -339,6 +350,115 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
       const rows = await telegramMessageNotifications(db, h.id, 7);
 
       expect(rows.map((r) => r.id)).toEqual([first, second]);
+    });
+  });
+
+  describe('findHouseholdById and findMembersByIds', () => {
+    it('find the household, and only the household members asked for', async () => {
+      const h = await newHousehold();
+      const other = await newHousehold();
+      const alex = await newMember(h.id, 'Alex');
+      const sam = await newMember(h.id, 'Sam');
+      const stranger = await newMember(other.id, 'Stranger');
+
+      expect((await findHouseholdById(db, h.id))?.id).toBe(h.id);
+      expect(await findHouseholdById(db, '00000000-0000-4000-8000-000000000000')).toBeNull();
+      const found = await findMembersByIds(db, h.id, [alex.id, stranger.id]);
+      expect(found.map((m) => m.id)).toEqual([alex.id]);
+      expect((await findMembersByIds(db, h.id, [sam.id, alex.id])).map((m) => m.id).sort()).toEqual(
+        [alex.id, sam.id].sort(),
+      );
+      expect(await findMembersByIds(db, h.id, [])).toEqual([]);
+    });
+  });
+
+  describe('occurrenceStates', () => {
+    async function newOccurrence(householdId: string) {
+      const [t] = await db
+        .insert(task)
+        .values({ householdId, title: 'Bins', scheduleKind: 'once', dueDate: '2026-07-10' })
+        .returning();
+      const [o] = await db
+        .insert(occurrence)
+        .values({ taskId: t?.id ?? '', dueDate: '2026-07-10', status: 'active' })
+        .returning();
+      if (!t || !o) throw new Error('insert failed');
+      return { task: t, occurrence: o };
+    }
+
+    const log = async (
+      householdId: string,
+      occ: Awaited<ReturnType<typeof newOccurrence>>,
+      memberId: string | null,
+      kind: string,
+      createdAt: Date,
+    ) => {
+      await db.insert(activity).values({
+        householdId,
+        memberId,
+        taskId: occ.task.id,
+        occurrenceId: occ.occurrence.id,
+        kind,
+        createdAt,
+      });
+    };
+
+    it('gives the status and, per kind of action, the name of the member who did it last', async () => {
+      const h = await newHousehold();
+      const alex = await newMember(h.id, 'Alex');
+      const sam = await newMember(h.id, 'Sam');
+      const occ = await newOccurrence(h.id);
+      const untouched = await newOccurrence(h.id);
+      await log(h.id, occ, alex.id, 'occurrence.snoozed', later(1000));
+      await log(h.id, occ, sam.id, 'occurrence.snoozed', later(2000));
+      await log(h.id, occ, alex.id, 'occurrence.started', later(3000));
+      // Not an action on the occurrence's state.
+      await log(h.id, occ, sam.id, 'task.updated', later(4000));
+      await db
+        .update(occurrence)
+        .set({ status: 'started', snoozedUntil: later(9000) })
+        .where(eq(occurrence.id, occ.occurrence.id));
+
+      const states = await occurrenceStates(db, h.id, [occ.occurrence.id, untouched.occurrence.id]);
+
+      expect(states.find((s) => s.occurrenceId === occ.occurrence.id)).toEqual({
+        occurrenceId: occ.occurrence.id,
+        status: 'started',
+        snoozedUntil: later(9000),
+        actors: { snoozed: 'Sam', started: 'Alex' },
+      });
+      expect(states.find((s) => s.occurrenceId === untouched.occurrence.id)).toEqual({
+        occurrenceId: untouched.occurrence.id,
+        status: 'active',
+        snoozedUntil: null,
+        actors: {},
+      });
+    });
+
+    it('has a null name when the member is gone, and skips other households and unknown ids', async () => {
+      const h = await newHousehold();
+      const other = await newHousehold();
+      const alex = await newMember(h.id, 'Alex');
+      const occ = await newOccurrence(h.id);
+      const foreign = await newOccurrence(other.id);
+      await log(h.id, occ, alex.id, 'occurrence.completed', later(1000));
+      await db.delete(member).where(eq(member.id, alex.id));
+
+      const states = await occurrenceStates(db, h.id, [
+        occ.occurrence.id,
+        foreign.occurrence.id,
+        '00000000-0000-4000-8000-000000000000',
+      ]);
+
+      expect(states).toEqual([
+        {
+          occurrenceId: occ.occurrence.id,
+          status: 'active',
+          snoozedUntil: null,
+          actors: { completed: null },
+        },
+      ]);
+      expect(await occurrenceStates(db, h.id, [])).toEqual([]);
     });
   });
 });

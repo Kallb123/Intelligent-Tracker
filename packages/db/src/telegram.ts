@@ -1,7 +1,8 @@
-import { and, asc, eq, gt, ne, sql } from 'drizzle-orm';
+import type { OccurrenceStatus } from '@tracker/shared';
+import { and, asc, desc, eq, gt, inArray, ne, sql } from 'drizzle-orm';
 import type { Database, DbOrTransaction } from './client.js';
 import { uniqueViolation } from './errors.js';
-import { household, member, notification } from './schema/index.js';
+import { activity, household, member, notification, occurrence, task } from './schema/index.js';
 import type { Household, Member, Notification } from './schema/index.js';
 import { generateToken, hashToken } from './tokens.js';
 
@@ -233,4 +234,98 @@ export async function telegramMessageNotifications(
       ),
     )
     .orderBy(asc(notification.nextAttemptAt), asc(notification.id));
+}
+
+/** The household with this id, or null. */
+export async function findHouseholdById(
+  db: DbOrTransaction,
+  householdId: string,
+): Promise<Household | null> {
+  const [found] = await db.select().from(household).where(eq(household.id, householdId));
+  return found ?? null;
+}
+
+/** The household's members among `ids` (ids of other households, or unknown ones, are skipped). */
+export async function findMembersByIds(
+  db: DbOrTransaction,
+  householdId: string,
+  ids: string[],
+): Promise<Member[]> {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(member)
+    .where(and(eq(member.householdId, householdId), inArray(member.id, ids)));
+}
+
+/** The occurrence actions the activity log attributes to a member (see `occurrence-actions.ts`). */
+export const OCCURRENCE_ACTOR_KINDS = ['completed', 'skipped', 'started', 'snoozed'] as const;
+
+export type OccurrenceActorKind = (typeof OCCURRENCE_ACTOR_KINDS)[number];
+
+/** An occurrence as a Telegram group message shows it: where it stands and who got it there. */
+export interface OccurrenceState {
+  occurrenceId: string;
+  status: OccurrenceStatus;
+  snoozedUntil: Date | null;
+  /**
+   * The name of the member who last did each kind of action to it; null when that member has
+   * since been deleted. A kind that was never done is absent.
+   */
+  actors: Partial<Record<OccurrenceActorKind, string | null>>;
+}
+
+/**
+ * The current state of these occurrences of the household, for rendering a group message again
+ * after a button press. Occurrences that no longer exist (or belong to another household) are
+ * left out.
+ *
+ * The actor is kept per kind of action, not only for the latest one, because what a line says
+ * depends on the occurrence's state now: a started occurrence that was snoozed and has woken up
+ * again is "started by" whoever started it, not by whoever snoozed it.
+ */
+export async function occurrenceStates(
+  db: DbOrTransaction,
+  householdId: string,
+  occurrenceIds: string[],
+): Promise<OccurrenceState[]> {
+  if (occurrenceIds.length === 0) return [];
+  const rows = await db
+    .select({
+      occurrenceId: occurrence.id,
+      status: occurrence.status,
+      snoozedUntil: occurrence.snoozedUntil,
+    })
+    .from(occurrence)
+    .innerJoin(task, eq(task.id, occurrence.taskId))
+    .where(and(eq(task.householdId, householdId), inArray(occurrence.id, occurrenceIds)));
+
+  const latest = await db
+    .selectDistinctOn([activity.occurrenceId, activity.kind], {
+      occurrenceId: activity.occurrenceId,
+      kind: activity.kind,
+      name: member.name,
+    })
+    .from(activity)
+    .leftJoin(member, eq(member.id, activity.memberId))
+    .where(
+      and(
+        eq(activity.householdId, householdId),
+        inArray(activity.occurrenceId, occurrenceIds),
+        inArray(
+          activity.kind,
+          OCCURRENCE_ACTOR_KINDS.map((kind) => `occurrence.${kind}`),
+        ),
+      ),
+    )
+    .orderBy(activity.occurrenceId, activity.kind, desc(activity.createdAt), desc(activity.id));
+
+  return rows.map((row) => {
+    const actors: OccurrenceState['actors'] = {};
+    for (const entry of latest) {
+      if (entry.occurrenceId !== row.occurrenceId) continue;
+      actors[entry.kind.slice('occurrence.'.length) as OccurrenceActorKind] = entry.name;
+    }
+    return { ...row, actors };
+  });
 }
