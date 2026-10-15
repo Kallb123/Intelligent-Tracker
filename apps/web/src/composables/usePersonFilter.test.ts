@@ -16,6 +16,7 @@ const member = (id: string, name: string) => ({
   role: 'member' as const,
   pending: false,
   awayUntil: null,
+  telegramLinked: false,
 });
 
 let mounted: ReturnType<typeof mount> | undefined;

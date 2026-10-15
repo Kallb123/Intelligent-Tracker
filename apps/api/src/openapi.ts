@@ -33,6 +33,10 @@ export function registerOpenApi(app: FastifyInstance): void {
         { name: 'Tasks', description: 'Task definitions (the recurring series).' },
         { name: 'Occurrences', description: 'Dated instances of tasks, and acting on them.' },
         { name: 'Notifications', description: 'In-app notifications (the bell).' },
+        {
+          name: 'Telegram',
+          description: 'Linking the house group and members to the Telegram bot.',
+        },
       ],
       components: {
         securitySchemes: {

@@ -292,6 +292,7 @@ describe('MembersPage', () => {
       role: 'admin',
       pending: false,
       awayUntil: null,
+      telegramLinked: true,
     },
     {
       id: '33333333-3333-4333-8333-333333333333',
@@ -301,6 +302,7 @@ describe('MembersPage', () => {
       role: 'member',
       pending: true,
       awayUntil: null,
+      telegramLinked: false,
     },
     {
       id: '44444444-4444-4444-8444-444444444444',
@@ -310,6 +312,7 @@ describe('MembersPage', () => {
       role: 'member',
       pending: false,
       awayUntil: null,
+      telegramLinked: false,
     },
   ];
   const JO = members[2]?.id ?? '';
@@ -552,6 +555,17 @@ describe('MembersPage', () => {
     expect(rowOf(wrapper, 'Alex')?.get('.member-tags').text()).not.toContain('Away');
   });
 
+  it('shows who has linked Telegram, and nothing for a pending invite', async () => {
+    const { wrapper } = await open(
+      { [ME]: json(session()), 'GET /api/members': json({ members }), ...noTasks },
+      '/people',
+    );
+
+    expect(rowOf(wrapper, 'Alex')?.get('.member-tags').text()).toContain('Telegram linked');
+    expect(rowOf(wrapper, 'Jo')?.get('.member-tags').text()).toContain('No Telegram');
+    expect(rowOf(wrapper, 'Sam')?.get('.member-tags').text()).not.toContain('Telegram');
+  });
+
   it('shows a warning when the rotations cannot be loaded', async () => {
     const { wrapper } = await open(
       {
@@ -637,10 +651,14 @@ describe('MembersPage', () => {
   });
 });
 
+const TELEGRAM = 'GET /api/telegram';
+const notLinked = { botUsername: 'tracker_bot', groupLinked: false, memberLinked: false };
+
 describe('AccountPage', () => {
   it('changes the password', async () => {
     const server = fakeServer({
       [ME]: json(session()),
+      [TELEGRAM]: json(notLinked),
       'POST /api/auth/password': json({ ok: true }),
     });
     const { wrapper } = await mountApp(server, '/account');
@@ -664,6 +682,7 @@ describe('AccountPage', () => {
     const { wrapper, pinia } = await open(
       {
         [ME]: json(session()),
+        [TELEGRAM]: json(notLinked),
         'POST /api/auth/password': apiError(
           400,
           'wrong_password',
@@ -679,6 +698,182 @@ describe('AccountPage', () => {
     expect(wrapper.find('[role="alert"]').text()).toBe('Your current password is incorrect');
     expect(pinia.state.value['session']).toBeDefined();
     expect(wrapper.find('h1').text()).toBe('Account');
+  });
+});
+
+describe('Telegram on the AccountPage', () => {
+  const expiresAt = '2026-10-15T13:00:00.000Z';
+  const buttonLabelled = (wrapper: VueWrapper, label: string) =>
+    wrapper.findAll('button').find((b) => b.text() === label);
+
+  it('shows the link status and offers to connect', async () => {
+    const { wrapper } = await open(
+      { [ME]: json(session()), [TELEGRAM]: json(notLinked) },
+      '/account',
+    );
+
+    const panel = wrapper.get('[aria-labelledby="telegram-heading"]');
+    expect(panel.text()).toContain('Not connected');
+    expect(buttonLabelled(wrapper, 'Connect Telegram')).toBeDefined();
+    expect(buttonLabelled(wrapper, 'Disconnect')).toBeUndefined();
+  });
+
+  it('connects: shows the deep link to open, then notices the bot linked the account', async () => {
+    const server = fakeServer({
+      [ME]: json(session({ role: 'member' })),
+      [TELEGRAM]: json(notLinked),
+      'POST /api/telegram/link': json({
+        code: 'abc123',
+        expiresAt,
+        url: 'https://t.me/tracker_bot?start=abc123',
+      }),
+    });
+    const { wrapper } = await mountApp(server, '/account');
+    mounted = wrapper;
+
+    await buttonLabelled(wrapper, 'Connect Telegram')?.trigger('click');
+    await flushPromises();
+
+    const open = wrapper.get('a[href="https://t.me/tracker_bot?start=abc123"]');
+    expect(open.text()).toBe('Open Telegram');
+    expect(open.attributes('target')).toBe('_blank');
+    expect(open.attributes('rel')).toContain('noopener');
+    expect(wrapper.get('.link-box').text()).toContain('Works once');
+
+    server.handlers[TELEGRAM] = json({ ...notLinked, memberLinked: true });
+    await buttonLabelled(wrapper, 'Refresh status')?.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('.link-box').exists()).toBe(false);
+    expect(wrapper.get('[aria-labelledby="telegram-heading"]').text()).toContain('Connected');
+    expect(buttonLabelled(wrapper, 'Disconnect')).toBeDefined();
+  });
+
+  it('shows the message to send the bot when no bot username is configured', async () => {
+    const { wrapper } = await open(
+      {
+        [ME]: json(session()),
+        [TELEGRAM]: json({ ...notLinked, botUsername: null }),
+        'POST /api/telegram/link': json({ code: 'abc123', expiresAt, url: null }),
+      },
+      '/account',
+    );
+
+    await buttonLabelled(wrapper, 'Connect Telegram')?.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('a[href^="https://t.me"]').exists()).toBe(false);
+    expect((wrapper.get('.link-box input').element as HTMLInputElement).value).toBe(
+      '/start abc123',
+    );
+  });
+
+  it('disconnects a linked account', async () => {
+    const server = fakeServer({
+      [ME]: json(session()),
+      [TELEGRAM]: json({ ...notLinked, memberLinked: true }),
+      'DELETE /api/telegram/link': new Response(null, { status: 204 }),
+    });
+    const { wrapper } = await mountApp(server, '/account');
+    mounted = wrapper;
+    expect(wrapper.get('[aria-labelledby="telegram-heading"]').text()).toContain('Connected');
+
+    server.handlers[TELEGRAM] = json(notLinked);
+    await buttonLabelled(wrapper, 'Disconnect')?.trigger('click');
+    await flushPromises();
+
+    expect(server.callsTo('DELETE /api/telegram/link')).toHaveLength(1);
+    expect(server.callsTo('DELETE /api/telegram/link')[0]?.headers.get('x-csrf-token')).toBe(
+      'csrf-abc',
+    );
+    expect(wrapper.get('[aria-labelledby="telegram-heading"]').text()).toContain('Not connected');
+  });
+
+  it('shows the api message when connecting fails', async () => {
+    const { wrapper } = await open(
+      {
+        [ME]: json(session()),
+        [TELEGRAM]: json(notLinked),
+        'POST /api/telegram/link': apiError(500, 'internal', 'Something went wrong'),
+      },
+      '/account',
+    );
+
+    await buttonLabelled(wrapper, 'Connect Telegram')?.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('Something went wrong');
+    expect(wrapper.find('.link-box').exists()).toBe(false);
+  });
+
+  describe('house group', () => {
+    it('is only offered to admins', async () => {
+      const { wrapper } = await open(
+        { [ME]: json(session({ role: 'member' })), [TELEGRAM]: json(notLinked) },
+        '/account',
+      );
+
+      expect(wrapper.find('[aria-labelledby="telegram-group-heading"]').exists()).toBe(false);
+      expect(wrapper.text()).not.toContain('Link house group');
+    });
+
+    it('shows the /linkgroup command to send in the group', async () => {
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json(notLinked),
+        'POST /api/telegram/group-link': json({
+          code: 'grp456',
+          expiresAt,
+          command: '/linkgroup grp456',
+        }),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+      const group = () => wrapper.get('[aria-labelledby="telegram-group-heading"]');
+      expect(group().text()).toContain('Not linked');
+
+      await buttonLabelled(wrapper, 'Link house group')?.trigger('click');
+      await flushPromises();
+
+      const box = wrapper.get('.link-box');
+      expect(box.text()).toContain('Add the bot to the house group');
+      expect((box.get('input').element as HTMLInputElement).value).toBe('/linkgroup grp456');
+
+      server.handlers[TELEGRAM] = json({ ...notLinked, groupLinked: true });
+      await buttonLabelled(wrapper, 'Refresh status')?.trigger('click');
+      await flushPromises();
+
+      expect(wrapper.find('.link-box').exists()).toBe(false);
+      expect(group().text()).toContain('Linked');
+    });
+
+    it('asks for confirmation before unlinking the group', async () => {
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json({ ...notLinked, groupLinked: true }),
+        'DELETE /api/telegram/group-link': new Response(null, { status: 204 }),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+
+      await buttonLabelled(wrapper, 'Unlink group')?.trigger('click');
+      expect(server.callsTo('DELETE /api/telegram/group-link')).toHaveLength(0);
+      expect(wrapper.text()).toContain('Stop sending reminders to the house group?');
+
+      await buttonLabelled(wrapper, 'Keep linked')?.trigger('click');
+      expect(wrapper.text()).not.toContain('Stop sending reminders');
+
+      await buttonLabelled(wrapper, 'Unlink group')?.trigger('click');
+      server.handlers[TELEGRAM] = json(notLinked);
+      await buttonLabelled(wrapper, 'Unlink group')?.trigger('click');
+      await flushPromises();
+
+      expect(server.callsTo('DELETE /api/telegram/group-link')).toHaveLength(1);
+      expect(wrapper.get('[aria-labelledby="telegram-group-heading"]').text()).toContain(
+        'Not linked',
+      );
+      expect(wrapper.text()).not.toContain('Stop sending reminders');
+    });
   });
 });
 

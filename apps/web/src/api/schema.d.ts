@@ -124,6 +124,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                             household: {
                                 /** Format: uuid */
@@ -189,6 +190,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                             household: {
                                 /** Format: uuid */
@@ -283,6 +285,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                             household: {
                                 /** Format: uuid */
@@ -386,6 +389,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             }[];
                         };
                     };
@@ -453,6 +457,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                         };
                     };
@@ -547,6 +552,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                             invite: {
                                 token: string;
@@ -702,6 +708,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                             household: {
                                 /** Format: uuid */
@@ -796,6 +803,7 @@ export interface paths {
                                 pending: boolean;
                                 /** Format: date */
                                 awayUntil: string | null;
+                                telegramLinked: boolean;
                             };
                             household: {
                                 /** Format: uuid */
@@ -2341,6 +2349,279 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telegram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Telegram link status
+         * @description `botUsername` is null when the deployment has not configured it, in which case the web app shows the code to send to the bot instead of a link.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            botUsername: string | null;
+                            groupLinked: boolean;
+                            memberLinked: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telegram/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get a code to connect my Telegram account
+         * @description Valid for an hour and replaces any earlier code. Opening `url` starts a chat with the bot that links the account; without a configured bot username, send `/start <code>` to the bot instead.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            code: string;
+                            /** Format: date-time */
+                            expiresAt: string;
+                            url: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        /**
+         * Disconnect my Telegram account
+         * @description Also cancels a code that has not been used yet.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Disconnected */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telegram/group-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get a code to link the house group (admin)
+         * @description Valid for an hour and replaces any earlier code. An admin adds the bot to the house group and sends `command` there.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            code: string;
+                            /** Format: date-time */
+                            expiresAt: string;
+                            command: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        /**
+         * Unlink the house group (admin)
+         * @description Also cancels a code that has not been used yet.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Unlinked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;

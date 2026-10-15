@@ -5,7 +5,7 @@ import type { ApiContext } from '../context.js';
 
 /**
  * The only shape in which a member leaves the api. It is a whitelist: the password hash, iCal
- * token, Telegram link code and the like must never be added here.
+ * token, Telegram user id and link code and the like must never be added here.
  */
 export function toMemberDto(m: Member): MemberDto {
   return {
@@ -16,6 +16,7 @@ export function toMemberDto(m: Member): MemberDto {
     role: m.role,
     pending: m.passwordHash === null,
     awayUntil: m.awayUntil,
+    telegramLinked: m.telegramUserId !== null,
   };
 }
 

@@ -257,6 +257,12 @@ async function resetPassword(target: MemberDto): Promise<void> {
         <div class="member-tags">
           <Tag :value="m.role === 'admin' ? 'Admin' : 'Member'" severity="secondary" />
           <Tag v-if="m.pending" value="Pending" severity="warn" />
+          <Tag
+            v-if="!m.pending"
+            :value="m.telegramLinked ? 'Telegram linked' : 'No Telegram'"
+            :icon="m.telegramLinked ? 'pi pi-telegram' : undefined"
+            :severity="m.telegramLinked ? 'success' : 'secondary'"
+          />
           <Tag v-if="describeAway(m, today)" :value="describeAway(m, today)" severity="info" />
         </div>
         <Button

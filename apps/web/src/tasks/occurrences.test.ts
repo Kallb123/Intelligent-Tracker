@@ -39,6 +39,7 @@ const member = (id: string, name: string): MemberDto => ({
   role: 'member',
   pending: false,
   awayUntil: null,
+  telegramLinked: false,
 });
 
 describe('dueDateOf', () => {

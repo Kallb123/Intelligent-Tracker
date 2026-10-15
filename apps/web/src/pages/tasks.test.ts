@@ -25,6 +25,7 @@ const alex: MemberDto = {
   role: 'admin',
   pending: false,
   awayUntil: null,
+  telegramLinked: false,
 };
 const sam: MemberDto = { ...alex, id: SAM, name: 'Sam', username: 'sam', role: 'member' };
 

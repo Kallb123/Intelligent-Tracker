@@ -10,6 +10,7 @@ const member = (id: string, name: string, awayUntil: string | null = null) => ({
   role: 'member' as const,
   pending: false,
   awayUntil,
+  telegramLinked: false,
 });
 
 describe('members store', () => {

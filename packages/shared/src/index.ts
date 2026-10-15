@@ -22,4 +22,5 @@ export * from './calendar-date.js';
 export * from './notifications.js';
 export * from './reminder-text.js';
 export * from './tasks.js';
+export * from './telegram.js';
 export * from './wall-time.js';
