@@ -1,4 +1,4 @@
-import { RecurrenceError } from '@tracker/core';
+import { RecurrenceError } from './recurrence/errors.js';
 import { describe, expect, it } from 'vitest';
 import {
   buildRecurrence,

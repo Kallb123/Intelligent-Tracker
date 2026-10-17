@@ -1,11 +1,10 @@
-import { previewDates, scheduleFromTask } from '@tracker/core';
+import { parseRecurrence, previewDates, scheduleFromTask } from '@tracker/core';
 import {
   templateDefaultsSchema,
   templateScheduleFields,
   type Template,
   type TemplateBody,
 } from '@tracker/shared';
-import { parseRecurrence } from './recurrence-form.js';
 import { taskBody, type TaskForm } from './task-form.js';
 
 /** Apply only after confirmation; keep the task's title, people and chosen expiry/collection date. */

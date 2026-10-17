@@ -1,10 +1,14 @@
 import {
+  buildRecurrence,
+  defaultRecurrence,
   dueKey,
+  parseRecurrence,
   previewDates,
   onWorkingDay,
   RecurrenceError,
   scheduleFromTask,
   type Due,
+  type RecurrenceState,
   type TaskScheduleFields,
 } from '@tracker/core';
 import {
@@ -17,12 +21,6 @@ import {
   type TaskDto,
 } from '@tracker/shared';
 import type { TaskInput } from '../api/types.js';
-import {
-  buildRecurrence,
-  defaultRecurrence,
-  parseRecurrence,
-  type RecurrenceState,
-} from './recurrence-form.js';
 
 /**
  * The task editor's form state, and the mapping between it and the api's task shape. Kept apart

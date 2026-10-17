@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { describeSchedule } from '@tracker/core';
 import type { TaskDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
@@ -13,7 +14,6 @@ import SelectField from '../components/SelectField.vue';
 import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
-import { describeSchedule } from '../tasks/describe.js';
 import { describeAssignees, nextUpName } from '../tasks/rotation.js';
 
 /** All tasks: every task definition, with search and person / category / tag filters. */

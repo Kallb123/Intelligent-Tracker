@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { localToday, RecurrenceError } from '@tracker/core';
+import { defaultRecurrence, localToday, RecurrenceError } from '@tracker/core';
 import { taskBodySchema, type MemberDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
@@ -16,7 +16,6 @@ import TemplatePicker from '../components/TemplatePicker.vue';
 import SelectField from '../components/SelectField.vue';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
-import { defaultRecurrence } from '../tasks/recurrence-form.js';
 import { memberLabel, moveItem } from '../tasks/rotation.js';
 import {
   formatDue,

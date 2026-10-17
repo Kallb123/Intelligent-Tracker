@@ -5,3 +5,6 @@ export * from './rotation/index.js';
 export * from './reminders/index.js';
 export * from './templates.js';
 export * from './working-days.js';
+export * from './recurrence-form.js';
+export * from './describe.js';
+export * from './quick-add/index.js';
