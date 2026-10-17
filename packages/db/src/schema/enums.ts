@@ -1,5 +1,10 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
-import { NOTIFICATION_CHANNELS, REMINDER_KINDS, REMINDER_STATUSES } from '@tracker/shared';
+import {
+  DIGEST_KINDS,
+  NOTIFICATION_CHANNELS,
+  REMINDER_KINDS,
+  REMINDER_STATUSES,
+} from '@tracker/shared';
 
 export const memberRole = pgEnum('member_role', ['admin', 'member']);
 
@@ -38,3 +43,5 @@ export const reminderKind = pgEnum('reminder_kind', REMINDER_KINDS);
 export const reminderStatus = pgEnum('reminder_status', REMINDER_STATUSES);
 
 export const notificationChannel = pgEnum('notification_channel', NOTIFICATION_CHANNELS);
+
+export const digestKind = pgEnum('digest_kind', DIGEST_KINDS);

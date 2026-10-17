@@ -6,7 +6,7 @@ describe('holiday digest', () => {
     expect(
       renderDigest({
         today: '2026-08-31',
-        jobs: [],
+        items: [],
         holidays: [
           { region: 'england-and-wales', date: '2026-08-31', title: 'Summer bank holiday' },
         ],

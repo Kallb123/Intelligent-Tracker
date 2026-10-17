@@ -97,6 +97,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
         'task',
         'task_assignee',
         'task_milestone',
+        'telegram_digest',
         'template',
       ]);
 
@@ -105,6 +106,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
       expect(enums.map((e) => e.typname)).toEqual([
         'assignment_mode',
         'bank_holiday_region',
+        'digest_kind',
         'member_role',
         'notification_channel',
         'occurrence_status',

@@ -625,6 +625,51 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       expect(overdue).toMatchObject({ overdueDays: 2 });
     });
 
+    it('carries the task`s effort in the payload, when it has one', async () => {
+      await setup({ effortMinutes: 20 });
+      await replanReminders(db, { now: NOW });
+      await queueDueReminders(db, { now: DUE_NOW });
+      expect((await notifications())[0]?.payload).toMatchObject({ effortMinutes: 20 });
+
+      await db.delete(notification);
+      await db.delete(household);
+      await setup();
+      await replanReminders(db, { now: NOW });
+      await queueDueReminders(db, { now: DUE_NOW });
+      expect((await notifications())[0]?.payload).not.toHaveProperty('effortMinutes');
+    });
+
+    describe('escalated overdue reminders', () => {
+      /** The overdue payloads queued over the days after the 20 July due, one tick a day. */
+      async function overduePayloads(taskValues: Partial<NewTask>) {
+        await setup({ leadTimeDays: null, ...taskValues });
+        await replanReminders(db, { now: at('2026-07-21T09:00:00Z') });
+        for (const day of [21, 22, 23, 24]) {
+          await queueDueReminders(db, { now: at(`2026-07-${day}T18:30:00Z`) });
+        }
+        return (await notifications())
+          .map((n) => n.payload)
+          .filter((p) => p.kind === 'overdue')
+          .map((p) => ({ days: p.overdueDays, escalated: p.escalated }));
+      }
+
+      it('marks a persistent task`s reminders from the third day overdue', async () => {
+        expect(await overduePayloads({ reminderProfile: 'persistent' })).toEqual([
+          { days: 1, escalated: undefined },
+          { days: 2, escalated: undefined },
+          { days: 3, escalated: true },
+          { days: 4, escalated: true },
+        ]);
+      });
+
+      it('never marks a standard task`s', async () => {
+        expect(await overduePayloads({ reminderProfile: 'standard' })).toEqual([
+          { days: 1, escalated: undefined },
+          { days: 4, escalated: undefined },
+        ]);
+      });
+    });
+
     it('queues each reminder once however often it runs', async () => {
       await setup();
       await replanReminders(db, { now: NOW });

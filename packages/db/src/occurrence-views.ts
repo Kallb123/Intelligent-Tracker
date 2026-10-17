@@ -1,7 +1,8 @@
 import { addLocalDays, localToday, startOfLocalDay } from '@tracker/core';
-import { dueInstant, occurrence } from '@tracker/db';
-import type { OccurrenceView } from '@tracker/shared';
-import { and, gt, gte, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { OPEN_OCCURRENCE_STATUSES, type OccurrenceView } from '@tracker/shared';
+import { and, eq, gt, gte, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { dueInstant } from './due.js';
+import { occurrence, task } from './schema/index.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,8 +20,29 @@ function pastDue(now: Date, today: string): SQL | undefined {
 }
 
 /**
- * The `where` condition of an occurrence list view (on top of "open, not snoozed, not
- * archived", which the route adds):
+ * The base of every occurrence list: open occurrences of the household's own non-archived tasks
+ * that are not snoozed past `now`. A view's condition (`viewCondition`) is added on top. Needs
+ * `occurrence` joined to `task`.
+ */
+export function listableOccurrences(householdId: string, now: Date): SQL | undefined {
+  return and(
+    eq(task.householdId, householdId),
+    isNull(task.archivedAt),
+    inArray(occurrence.status, [...OPEN_OCCURRENCE_STATUSES]),
+    or(isNull(occurrence.snoozedUntil), lte(occurrence.snoozedUntil, now)),
+  );
+}
+
+/** Not started yet (`start_at` is still ahead) but starting within the next `days` days. */
+export function startingWithin(now: Date, days: number): SQL | undefined {
+  return and(
+    gt(occurrence.startAt, now),
+    lte(occurrence.startAt, new Date(now.getTime() + days * DAY_MS)),
+  );
+}
+
+/**
+ * The `where` condition of an occurrence list view (on top of `listableOccurrences`):
  * - `today`: due before tomorrow starts (so overdue ones too), already within its lead time,
  *   or undated;
  * - `overdue`: past its due;
@@ -48,10 +70,7 @@ export function viewCondition(view: OccurrenceView, options: ViewOptions): SQL |
           gte(occurrence.dueAt, startOfLocalDay(tomorrow, timezone)),
           lt(occurrence.dueAt, startOfLocalDay(addLocalDays(today, days + 1), timezone)),
         ),
-        and(
-          gt(occurrence.startAt, now),
-          lte(occurrence.startAt, new Date(now.getTime() + days * DAY_MS)),
-        ),
+        startingWithin(now, days),
       );
   }
 }

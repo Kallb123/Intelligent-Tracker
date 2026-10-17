@@ -4,6 +4,7 @@ import {
   issueMemberLinkCode,
   unlinkGroup,
   unlinkMember,
+  one,
 } from '@tracker/db';
 import {
   groupLinkResponseSchema,
@@ -17,7 +18,6 @@ import { z } from 'zod';
 import { authOf } from '../auth/guards.js';
 import type { ApiContext } from '../context.js';
 import { errorResponseSchema } from '../errors.js';
-import { one } from '../rows.js';
 
 /**
  * Linking Telegram to the app (docs/PLAN.md 5.1). All need a session; the group ones need an

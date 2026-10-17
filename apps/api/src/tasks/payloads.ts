@@ -1,6 +1,7 @@
 import { localToday } from '@tracker/core';
 import {
   dueOrder,
+  isPastDue,
   household,
   occurrence,
   task,
@@ -175,9 +176,6 @@ export interface OverdueClock {
 export function toOccurrenceDto(row: OccurrenceRow, clock: OverdueClock): OccurrenceDto {
   const o = row.occurrence;
   const open = o.status === 'upcoming' || o.status === 'active' || o.status === 'started';
-  const pastDue =
-    (o.dueAt !== null && o.dueAt < clock.now) ||
-    (o.dueDate !== null && o.dueDate < localToday(clock.now, clock.timezone));
   return {
     id: o.id,
     taskId: o.taskId,
@@ -190,7 +188,7 @@ export function toOccurrenceDto(row: OccurrenceRow, clock: OverdueClock): Occurr
     completedAt: o.completedAt?.toISOString() ?? null,
     completedBy: o.completedBy,
     snoozedUntil: o.snoozedUntil?.toISOString() ?? null,
-    overdue: open && pastDue,
+    overdue: open && isPastDue(o, clock.now, localToday(clock.now, clock.timezone)),
   };
 }
 

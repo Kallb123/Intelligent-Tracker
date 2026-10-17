@@ -97,6 +97,21 @@ const MAX_DAYS = 3650;
 /** Standard-profile overdue reminders repeat this often; persistent ones are daily. */
 const STANDARD_OVERDUE_INTERVAL_DAYS = 3;
 
+/**
+ * An overdue reminder of a `persistent` task that is this many days or more past due is
+ * escalated: the group message says it louder (see `isEscalated`).
+ */
+export const ESCALATE_AFTER_DAYS = 3;
+
+/**
+ * Whether an overdue reminder is an escalation ("still not done after N days"). Only the
+ * `persistent` profile asks for the louder message (plan 4.3); `standard` keeps its plain,
+ * every-3-days reminders. One rule, used where the reminder is queued.
+ */
+export function isEscalated(profile: ReminderProfile, overdueDays: number): boolean {
+  return profile === 'persistent' && overdueDays >= ESCALATE_AFTER_DAYS;
+}
+
 /** Nudge positions as fractions of the window between the start day and the due day. */
 const NUDGE_FRACTIONS: Record<ReminderProfile, readonly number[]> = {
   silent: [],

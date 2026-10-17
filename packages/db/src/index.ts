@@ -11,7 +11,14 @@ export {
   type MaterialiseTaskResult,
 } from './materialise.js';
 export { uniqueViolation } from './errors.js';
-export { dueInstant, dueOrder } from './due.js';
+export { dueInstant, dueOrder, isPastDue } from './due.js';
+export {
+  listableOccurrences,
+  startingWithin,
+  viewCondition,
+  viewOrder,
+  type ViewOptions,
+} from './occurrence-views.js';
 export { recordHeartbeat, WORKER_SERVICE } from './heartbeat.js';
 export {
   DEFAULT_OUTBOX_BATCH_SIZE,
@@ -53,6 +60,9 @@ export {
   type OccurrenceActionInput,
   type OccurrenceActionResult,
 } from './occurrence-actions.js';
+export { createTask, replaceTaskLists, type TaskValues } from './tasks.js';
+export { setMemberAway } from './members.js';
+export { one } from './rows.js';
 export { consumeRotationTurn, replanRotation, replanRotationsForMember } from './rotation.js';
 export {
   MIGRATION_LOCK_KEY,
@@ -83,6 +93,15 @@ export {
   type OccurrenceState,
   type TelegramLinkCode,
 } from './telegram.js';
+export {
+  claimDigest,
+  DIGEST_LOG_RETENTION_MS,
+  linkedHouseholds,
+  pruneDigests,
+  recordDigestMessage,
+  releaseDigest,
+  type DigestKey,
+} from './telegram-digests.js';
 export { generateToken, hashToken } from './tokens.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';

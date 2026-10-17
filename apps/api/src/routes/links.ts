@@ -1,6 +1,6 @@
 import { linkInfoSchema, sessionInfoSchema, setPasswordBodySchema } from '@tracker/shared';
 import { eq } from 'drizzle-orm';
-import { member } from '@tracker/db';
+import { member, one } from '@tracker/db';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -13,7 +13,6 @@ import {
 } from '../auth/password-tokens.js';
 import { startSession } from '../auth/sessions.js';
 import type { ApiContext } from '../context.js';
-import { one } from '../rows.js';
 
 /**
  * Public, one-time links that let a member choose a password. Both kinds work the same way and

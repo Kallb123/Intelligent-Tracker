@@ -1,12 +1,13 @@
 import {
   applyOccurrenceAction,
+  listableOccurrences,
   occurrence,
   OccurrenceActionError,
-  task,
+  viewCondition,
+  viewOrder,
   type OccurrenceAction,
 } from '@tracker/db';
 import {
-  OPEN_OCCURRENCE_STATUSES,
   occurrenceCompletionResponseSchema,
   occurrenceListQuerySchema,
   occurrenceResponseSchema,
@@ -14,14 +15,13 @@ import {
   snoozeBodySchema,
   type OccurrenceDto,
 } from '@tracker/shared';
-import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { authOf } from '../auth/guards.js';
 import type { ApiContext } from '../context.js';
 import { AppError, conflict, errorResponseSchema, notFound } from '../errors.js';
-import { viewCondition, viewOrder } from '../tasks/occurrence-views.js';
 import {
   householdSettings,
   loadOccurrenceDtos,
@@ -205,10 +205,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
       const rows = await selectOccurrences(ctx.db)
         .where(
           and(
-            eq(task.householdId, householdId),
-            isNull(task.archivedAt),
-            inArray(occurrence.status, [...OPEN_OCCURRENCE_STATUSES]),
-            or(isNull(occurrence.snoozedUntil), lte(occurrence.snoozedUntil, now)),
+            listableOccurrences(householdId, now),
             memberId ? eq(occurrence.assigneeId, memberId) : undefined,
             taskId ? eq(occurrence.taskId, taskId) : undefined,
             viewCondition(view, options),

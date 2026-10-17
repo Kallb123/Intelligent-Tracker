@@ -1,13 +1,14 @@
 import {
   activity,
   clearFutureOpenOccurrences,
+  createTask,
   materialiseTask,
   member,
+  one,
   reassignOpenOccurrences,
   rematerialiseTask,
+  replaceTaskLists,
   task,
-  taskAssignee,
-  taskMilestone,
 } from '@tracker/db';
 import { remapCursor } from '@tracker/core';
 import {
@@ -26,7 +27,6 @@ import { z } from 'zod';
 import { authOf } from '../auth/guards.js';
 import type { ApiContext } from '../context.js';
 import { AppError, errorResponseSchema, notFound } from '../errors.js';
-import { one } from '../rows.js';
 import {
   assertValidSchedule,
   changedFields,
@@ -81,36 +81,6 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
   function nextCursor(before: TaskFieldValues, after: TaskFieldValues, cursor: number): number {
     if (before.assignmentMode !== 'rotation' || after.assignmentMode !== 'rotation') return 0;
     return remapCursor(before.assigneeIds, cursor, after.assigneeIds);
-  }
-
-  /** Replaces the task's assignee and milestone rows with the given lists. */
-  async function replaceLists(
-    tx: Tx,
-    taskId: string,
-    lists: { assignees?: string[]; milestones?: TaskFieldValues['milestones'] },
-  ): Promise<void> {
-    const { assignees, milestones } = lists;
-    if (assignees) {
-      await tx.delete(taskAssignee).where(eq(taskAssignee.taskId, taskId));
-      if (assignees.length > 0) {
-        await tx
-          .insert(taskAssignee)
-          .values(assignees.map((memberId, position) => ({ taskId, memberId, position })));
-      }
-    }
-    if (milestones) {
-      await tx.delete(taskMilestone).where(eq(taskMilestone.taskId, taskId));
-      if (milestones.length > 0) {
-        await tx.insert(taskMilestone).values(
-          milestones.map((m, position) => ({
-            taskId,
-            title: m.title,
-            offsetDaysBeforeDue: m.offsetDaysBeforeDue,
-            position,
-          })),
-        );
-      }
-    }
   }
 
   r.get(
@@ -169,24 +139,14 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
       const created = await withScheduleErrors(() =>
         ctx.db.transaction(async (tx) => {
           await assertAssignees(tx, me.householdId, fields.assigneeIds);
-          const row = one(
-            await tx
-              .insert(task)
-              .values({ ...taskColumns(fields), householdId: me.householdId, createdBy: me.id })
-              .returning(),
-          );
-          await replaceLists(tx, row.id, {
-            assignees: fields.assigneeIds,
-            milestones: fields.milestones,
-          });
-          await tx.insert(activity).values({
+          const row = await createTask(tx, {
             householdId: me.householdId,
-            memberId: me.id,
-            taskId: row.id,
-            kind: 'task.created',
-            data: { title: row.title },
+            createdBy: me.id,
+            values: taskColumns(fields),
+            assigneeIds: fields.assigneeIds,
+            milestones: fields.milestones,
+            now: ctx.config.clock(),
           });
-          await materialiseTask(tx, row.id, { now: ctx.config.clock() });
           return loadTaskDto(tx, me.householdId, row.id);
         }),
       );
@@ -289,7 +249,7 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
                 : {}),
             })
             .where(eq(task.id, row.id));
-          await replaceLists(tx, row.id, {
+          await replaceTaskLists(tx, row.id, {
             ...(changed.includes('assigneeIds') ? { assignees: fields.assigneeIds } : {}),
             ...(changed.includes('milestones') ? { milestones: fields.milestones } : {}),
           });

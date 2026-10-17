@@ -51,7 +51,10 @@ export function describeReminder(payload: ReminderPayload, timeZone: string): st
     case 'overdue': {
       const days = payload.overdueDays;
       if (days === undefined) return `${title} is overdue`;
-      return `${title} is ${days} ${days === 1 ? 'day' : 'days'} overdue`;
+      const count = `${days} ${days === 1 ? 'day' : 'days'}`;
+      return payload.escalated
+        ? `Still not done after ${count}: ${title}`
+        : `${title} is ${count} overdue`;
     }
   }
 }

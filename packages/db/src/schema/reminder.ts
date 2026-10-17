@@ -3,17 +3,19 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   check,
+  date,
   index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { createdAt, updatedAt } from './columns.js';
-import { notificationChannel, reminderKind, reminderStatus } from './enums.js';
+import { digestKind, notificationChannel, reminderKind, reminderStatus } from './enums.js';
 import { household, member } from './household.js';
 import { occurrence } from './task.js';
 
@@ -108,6 +110,29 @@ export const notification = pgTable(
   ],
 );
 
+/**
+ * Which scheduled Telegram digests were sent to a household's group on which local date. A row is
+ * the claim to send that digest (inserted before sending, so two bot replicas or a retried tick
+ * cannot both send it: the primary key lets one win); the chat and message id are stamped once
+ * it is sent. Rows are only a log of the recent past and are pruned (`pruneDigests`).
+ */
+export const telegramDigest = pgTable(
+  'telegram_digest',
+  {
+    householdId: uuid('household_id')
+      .notNull()
+      .references(() => household.id, { onDelete: 'cascade' }),
+    kind: digestKind('kind').notNull(),
+    // The household-local date the digest is for.
+    localDate: date('local_date', { mode: 'string' }).notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull(),
+    // bigint: see household.telegram_group_chat_id.
+    telegramChatId: bigint('telegram_chat_id', { mode: 'number' }),
+    telegramMessageId: integer('telegram_message_id'),
+  },
+  (t) => [primaryKey({ columns: [t.householdId, t.kind, t.localDate] })],
+);
+
 /** One row per worker-like service, touched every tick; `/api/health` reports when it is stale. */
 export const serviceHeartbeat = pgTable('service_heartbeat', {
   service: text('service').primaryKey(),
@@ -118,4 +143,5 @@ export type Reminder = typeof reminder.$inferSelect;
 export type NewReminder = typeof reminder.$inferInsert;
 export type Notification = typeof notification.$inferSelect;
 export type NewNotification = typeof notification.$inferInsert;
+export type TelegramDigest = typeof telegramDigest.$inferSelect;
 export type ServiceHeartbeat = typeof serviceHeartbeat.$inferSelect;

@@ -1,4 +1,5 @@
 import {
+  isEscalated,
   localToday,
   planReminders,
   RecurrenceError,
@@ -250,6 +251,12 @@ export async function queueDueReminders(
       assigneeId: occ.assigneeId,
       ...(rem.data.milestoneTitle !== undefined ? { milestoneTitle: rem.data.milestoneTitle } : {}),
       ...(rem.data.overdueDays !== undefined ? { overdueDays: rem.data.overdueDays } : {}),
+      ...(t.effortMinutes !== null ? { effortMinutes: t.effortMinutes } : {}),
+      ...(rem.kind === 'overdue' &&
+      rem.data.overdueDays !== undefined &&
+      isEscalated(t.reminderProfile, rem.data.overdueDays)
+        ? { escalated: true as const }
+        : {}),
     };
     const recipients = occ.assigneeId
       ? [occ.assigneeId]
