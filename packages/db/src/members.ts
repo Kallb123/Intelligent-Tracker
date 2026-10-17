@@ -1,8 +1,17 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
 import { one } from './rows.js';
 import { replanRotationsForMember } from './rotation.js';
 import { activity, member, type Member } from './schema/index.js';
+
+/** The household's members, by name. */
+export async function listMembers(db: DbOrTransaction, householdId: string): Promise<Member[]> {
+  return db
+    .select()
+    .from(member)
+    .where(eq(member.householdId, householdId))
+    .orderBy(asc(member.name), asc(member.id));
+}
 
 /**
  * Sets (or with `null` clears) the date a member is away until, inclusive, and re-plans the open

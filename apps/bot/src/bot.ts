@@ -6,6 +6,7 @@ import { registerCommands } from './commands.js';
 import type { BotDeps } from './deps.js';
 import { registerLinking } from './linking.js';
 import { errorFields, silentLogger } from './logger.js';
+import { registerQuickAdd } from './quick-add.js';
 
 /**
  * The update types the bot handles, so Telegram does not send it any other. Commands arrive as
@@ -50,6 +51,8 @@ export function createBot(db: Database, options: CreateBotOptions): Bot {
     deps.logger.error('update failed', { updateId: ctx.update.update_id, ...errorFields(error) }),
   );
   registerLinking(bot, deps);
+  // Before the reminder buttons' handler, which treats any other button data as out of date.
+  registerQuickAdd(bot, deps);
   registerActions(bot, deps);
   registerCommands(bot, deps);
   return bot;

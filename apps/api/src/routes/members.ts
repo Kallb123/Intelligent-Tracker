@@ -1,4 +1,4 @@
-import { member, one, session, setMemberAway } from '@tracker/db';
+import { listMembers, member, one, session, setMemberAway } from '@tracker/db';
 import {
   createInviteBodySchema,
   createInviteResponseSchema,
@@ -7,7 +7,7 @@ import {
   setAwayBodySchema,
   memberResponseSchema,
 } from '@tracker/shared';
-import { asc, and, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -55,11 +55,7 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
       },
     },
     async (request) => {
-      const rows = await ctx.db
-        .select()
-        .from(member)
-        .where(eq(member.householdId, authOf(request).member.householdId))
-        .orderBy(asc(member.name));
+      const rows = await listMembers(ctx.db, authOf(request).member.householdId);
       return { members: rows.map(toMemberDto) };
     },
   );

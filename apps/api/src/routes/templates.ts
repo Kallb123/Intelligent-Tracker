@@ -1,14 +1,13 @@
-import { cachedBankHolidays, household, template, one } from '@tracker/db';
+import { cachedBankHolidays, household, listTemplates, template, one } from '@tracker/db';
 import { scheduleFromTask } from '@tracker/core';
 import {
   bankHolidaysResponseSchema,
-  UK_TEMPLATES,
   templateBodySchema,
   templateResponseSchema,
   templateScheduleFields,
   templatesResponseSchema,
 } from '@tracker/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -52,12 +51,7 @@ export function registerTemplateRoutes(app: FastifyInstance, ctx: ApiContext): v
       },
     },
     async (request) => {
-      const rows = await ctx.db
-        .select()
-        .from(template)
-        .where(eq(template.householdId, authOf(request).member.householdId))
-        .orderBy(asc(template.title), asc(template.id));
-      return { templates: [...UK_TEMPLATES, ...rows.map((row) => ({ ...row, builtIn: false }))] };
+      return { templates: await listTemplates(ctx.db, authOf(request).member.householdId) };
     },
   );
   r.post(

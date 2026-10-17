@@ -1,3 +1,4 @@
+import type { QuickAddTask } from '@tracker/core';
 import type { ReminderPayload } from '@tracker/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -133,6 +134,29 @@ export const telegramDigest = pgTable(
   (t) => [primaryKey({ columns: [t.householdId, t.kind, t.localDate] })],
 );
 
+/**
+ * A task the Telegram `/add` understood and is waiting for a button press to save: the parsed
+ * fields behind the confirmation card. Buttons carry at most 64 bytes, so they carry this row's
+ * id. Only its author may save or cancel it; a draft is deleted when it is saved, cancelled or
+ * has expired (`pruneQuickAddDrafts`). The card's chat and message id are stamped once it is sent.
+ */
+export const quickAddDraft = pgTable('quick_add_draft', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id')
+    .notNull()
+    .references(() => household.id, { onDelete: 'cascade' }),
+  // The member who typed it.
+  memberId: uuid('member_id')
+    .notNull()
+    .references(() => member.id, { onDelete: 'cascade' }),
+  // Checked against `taskBodySchema` again when it is saved.
+  task: jsonb('task').$type<QuickAddTask>().notNull(),
+  // bigint: see household.telegram_group_chat_id.
+  telegramChatId: bigint('telegram_chat_id', { mode: 'number' }),
+  telegramMessageId: integer('telegram_message_id'),
+  createdAt: createdAt(),
+});
+
 /** One row per worker-like service, touched every tick; `/api/health` reports when it is stale. */
 export const serviceHeartbeat = pgTable('service_heartbeat', {
   service: text('service').primaryKey(),
@@ -144,4 +168,5 @@ export type NewReminder = typeof reminder.$inferInsert;
 export type Notification = typeof notification.$inferSelect;
 export type NewNotification = typeof notification.$inferInsert;
 export type TelegramDigest = typeof telegramDigest.$inferSelect;
+export type QuickAddDraft = typeof quickAddDraft.$inferSelect;
 export type ServiceHeartbeat = typeof serviceHeartbeat.$inferSelect;

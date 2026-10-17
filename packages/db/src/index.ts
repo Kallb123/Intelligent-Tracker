@@ -61,7 +61,9 @@ export {
   type OccurrenceActionResult,
 } from './occurrence-actions.js';
 export { createTask, replaceTaskLists, type TaskValues } from './tasks.js';
-export { setMemberAway } from './members.js';
+export { normaliseBody, taskColumns, type TaskFieldValues } from './task-fields.js';
+export { listTemplates } from './templates.js';
+export { listMembers, setMemberAway } from './members.js';
 export { one } from './rows.js';
 export { consumeRotationTurn, replanRotation, replanRotationsForMember } from './rotation.js';
 export {
@@ -102,6 +104,14 @@ export {
   releaseDigest,
   type DigestKey,
 } from './telegram-digests.js';
+export {
+  createQuickAddDraft,
+  findQuickAddDraft,
+  pruneQuickAddDrafts,
+  QUICK_ADD_DRAFT_TTL_MS,
+  recordQuickAddCard,
+  takeQuickAddDraft,
+} from './telegram-quick-add.js';
 export { generateToken, hashToken } from './tokens.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';

@@ -1,4 +1,4 @@
-import { bankHoliday, member, occurrence, task } from '@tracker/db';
+import { bankHoliday, member, quickAddDraft, task } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_COMMANDS } from './commands.js';
@@ -221,69 +221,36 @@ describe.skipIf(!adminUrl)('group commands (integration)', () => {
   });
 
   describe('/add', () => {
-    it('adds an undated one-off job for the sender and links to the editor', async () => {
-      const { h, alex, bot, telegram } = await setup({ publicBaseUrl: 'https://tracker.example' });
+    const USAGE =
+      'Send /add and the job, for example: /add Car insurance renews 1/11 every year, sort it a month before';
 
-      await bot.handleUpdate(send('/add   Buy   bin bags '));
-
-      const [created] = await test.db.select().from(task).where(eq(task.householdId, h.id));
-      expect(created).toMatchObject({
-        title: 'Buy bin bags',
-        scheduleKind: 'once',
-        allDay: true,
-        dueDate: null,
-        dueAt: null,
-        assignmentMode: 'fixed',
-        reminderProfile: h.defaultReminderProfile,
-        createdBy: alex.id,
-      });
-      const occurrences = await test.db
-        .select()
-        .from(occurrence)
-        .where(eq(occurrence.taskId, created?.id as string));
-      expect(occurrences).toMatchObject([{ status: 'active', assigneeId: alex.id }]);
-      expect(telegram.sentTexts).toEqual([
-        `Added "Buy bin bags" for Alex. Set a date in the app: https://tracker.example/tasks/${created?.id}`,
-      ]);
-      expect(telegram.to('sendMessage')[0]).toMatchObject({
-        link_preview_options: { is_disabled: true },
-      });
-
-      // It is on today's list straight away.
-      await bot.handleUpdate(send('/today'));
-      expect(telegram.sentTexts[1]).toContain('• Buy bin bags — Alex');
-    });
-
-    it('defuses an @ in the echo of the title and of the name, not in the title itself', async () => {
+    it('replies with a confirmation card for the sender, and adds nothing yet', async () => {
       const { h, alex, bot, telegram } = await setup();
-      await test.db.update(member).set({ name: '@alex' }).where(eq(member.id, alex.id));
-      await bot.handleUpdate(send('/add Ask @bob'));
 
-      const [created] = await test.db.select().from(task).where(eq(task.householdId, h.id));
-      expect(created?.title).toBe('Ask @bob');
-      expect(telegram.sentTexts[0]).toBe('Added "Ask @\u200bbob" for @\u200balex.');
+      await bot.handleUpdate(send('/add   Buy   bin bags every Tuesday '));
+
+      expect(await test.db.select().from(task).where(eq(task.householdId, h.id))).toEqual([]);
+      expect(telegram.sentTexts).toEqual([
+        [
+          'Add this job?',
+          '',
+          'Buy bin bags',
+          'When: Tue 3 Nov',
+          'Repeats: Every week on Tuesday',
+          'For: Alex',
+        ].join('\n'),
+      ]);
+      const [draft] = await test.db.select().from(quickAddDraft);
+      expect(draft).toMatchObject({ householdId: h.id, memberId: alex.id });
     });
 
-    it('cuts a long title to the 200 characters the app allows, and needs no address', async () => {
-      const { h, bot, telegram } = await setup();
-      await bot.handleUpdate(send(`/add ${'x'.repeat(300)}`));
-
-      const [created] = await test.db.select().from(task).where(eq(task.householdId, h.id));
-      expect(created?.title).toHaveLength(200);
-      expect(created?.title.endsWith('…')).toBe(true);
-      expect(telegram.sentTexts[0]).toBe(`Added "${created?.title}" for Alex.`);
-    });
-
-    it('explains how to use it, and adds nothing, without a title', async () => {
-      const { h, bot, telegram } = await setup();
+    it('explains how to use it, and keeps no draft, without a title', async () => {
+      const { bot, telegram } = await setup();
       await bot.handleUpdate(send('/add'));
       await bot.handleUpdate(send('/add    '));
 
-      expect(telegram.sentTexts).toEqual([
-        'Send /add and the job, for example: /add Buy bin bags',
-        'Send /add and the job, for example: /add Buy bin bags',
-      ]);
-      expect(await test.db.select().from(task).where(eq(task.householdId, h.id))).toEqual([]);
+      expect(telegram.sentTexts).toEqual([USAGE, USAGE]);
+      expect(await test.db.select().from(quickAddDraft)).toEqual([]);
     });
   });
 

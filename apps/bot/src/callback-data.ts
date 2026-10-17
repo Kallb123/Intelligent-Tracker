@@ -5,6 +5,10 @@ import { SNOOZE_OPTION_KEYS, type SnoozeOptionKey } from '@tracker/core';
  * the data is `<action>:<occurrence uuid>` (the longest, a snooze choice, is `n:tomorrow:<uuid>`
  * at 47 bytes). It is all the bot keeps about a button: who pressed it comes from the update, and
  * which message it was on from the callback query.
+ *
+ * The two buttons on a `/add` confirmation card are the exception: they carry a quick-add draft's
+ * id (`qs:<uuid>` to save it, `qc:<uuid>` to cancel it, 39 bytes), and are told apart from the
+ * occurrence buttons by `QUICK_ADD_CALLBACK`.
  */
 
 /** A button press: what to do, to which occurrence. */
@@ -48,4 +52,28 @@ export function decodeCallback(data: string): CallbackAction | undefined {
     return key ? { type: 'snooze', key, occurrenceId } : undefined;
   }
   return undefined;
+}
+
+/** A press on a `/add` confirmation card: what to do, to which draft. */
+export interface QuickAddCallback {
+  type: 'quickAddSave' | 'quickAddCancel';
+  draftId: string;
+}
+
+const QUICK_ADD_CODES = { qs: 'quickAddSave', qc: 'quickAddCancel' } as const;
+
+/** Matches the data of the quick-add buttons (well formed or not), for routing a press to them. */
+export const QUICK_ADD_CALLBACK = /^q[sc]:/;
+
+export function encodeQuickAddCallback({ type, draftId }: QuickAddCallback): string {
+  return `${type === 'quickAddSave' ? 'qs' : 'qc'}:${draftId}`;
+}
+
+/** The quick-add action a button's data stands for, or undefined for data this bot did not produce. */
+export function decodeQuickAddCallback(data: string): QuickAddCallback | undefined {
+  const [code, draftId, ...rest] = data.split(':');
+  const type = QUICK_ADD_CODES[code as keyof typeof QUICK_ADD_CODES];
+  return type && draftId !== undefined && rest.length === 0 && UUID.test(draftId)
+    ? { type, draftId }
+    : undefined;
 }
