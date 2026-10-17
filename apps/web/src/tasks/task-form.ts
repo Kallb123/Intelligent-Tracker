@@ -18,7 +18,7 @@ import {
   type AssignmentMode,
   type ReminderProfile,
   type ReminderSlot,
-  type TaskDto,
+  type TaskBody,
 } from '@tracker/shared';
 import type { TaskInput } from '../api/types.js';
 
@@ -96,8 +96,11 @@ export function newTaskForm(today: string, memberId: string): TaskForm {
   };
 }
 
-/** The form for editing a stored task; its RRULE is read back into the builder where possible. */
-export function formFromTask(task: TaskDto, timeZone: string): TaskForm {
+/**
+ * The form for editing a stored task (a `TaskDto` is a `TaskBody`), or for a task about to be
+ * created, such as a quick-add draft. Its RRULE is read back into the builder where possible.
+ */
+export function formFromTask(task: TaskBody, timeZone: string): TaskForm {
   const wall = task.dueAt ? instantToWall(task.dueAt, timeZone) : undefined;
   return {
     title: task.title,
@@ -105,16 +108,20 @@ export function formFromTask(task: TaskDto, timeZone: string): TaskForm {
     category: task.category ?? '',
     tags: task.tags.join(', '),
     priority: task.priority,
-    effortMinutes: task.effortMinutes,
+    effortMinutes: task.effortMinutes ?? null,
     allDay: task.allDay,
     dueDate: wall?.date ?? task.dueDate ?? '',
     dueTime: wall?.time ?? '09:00',
-    recurrence: parseRecurrence(task),
+    recurrence: parseRecurrence({
+      scheduleKind: task.scheduleKind,
+      rrule: task.rrule ?? null,
+      intervalAfterCompletionDays: task.intervalAfterCompletionDays ?? null,
+    }),
     workingDaysOnly: task.workingDaysOnly,
     remindOffsetDays: task.remindOffsetDays,
-    leadTimeDays: task.leadTimeDays,
+    leadTimeDays: task.leadTimeDays ?? null,
     milestones: task.milestones.map((m) => ({ title: m.title, days: m.offsetDaysBeforeDue })),
-    reminderProfile: task.reminderProfile,
+    reminderProfile: task.reminderProfile ?? '',
     reminderSlot: task.reminderSlot,
     reminderCustomTime: task.reminderCustomTime ?? '19:00',
     assignmentMode: task.assignmentMode,
