@@ -1,6 +1,6 @@
 import { addLocalDays } from '@tracker/core';
 import { type Agenda, type AgendaItem } from '@tracker/db';
-import { formatDayHeading, instantToWall } from '@tracker/shared';
+import { daysBetween, formatDayHeading, instantToWall } from '@tracker/shared';
 import { MAX_NAME_LENGTH, TELEGRAM_MESSAGE_LIMIT, truncate } from './render.js';
 
 /*
@@ -15,7 +15,8 @@ import { MAX_NAME_LENGTH, TELEGRAM_MESSAGE_LIMIT, truncate } from './render.js';
  *
  * The whole message stays within Telegram's limit. When the jobs do not fit, the last ones are
  * left out for "…and N more — see the app", so the overdue ones, which come first, are the last
- * to go. The bank holiday lines under the jobs are always kept.
+ * to go. Only jobs are ever left out (and counted): the bank holiday lines, under the jobs in
+ * the morning digest and in their day's block in the week, are always kept.
  */
 
 /** A task title is cut to this in a line. */
@@ -23,23 +24,16 @@ const MAX_TITLE_LENGTH = 120;
 /** A bank holiday's name is cut to this. */
 const MAX_HOLIDAY_LENGTH = 60;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 const more = (count: number): string => `…and ${count} more — see the app`;
 
 /** Text from a person, cut to `max` and with its "@"s defused (see above). */
-function plain(text: string, max: number): string {
+export function plain(text: string, max: number): string {
   return truncate(text, max).replace(/@/g, '@​');
 }
 
 /** The household-local date an item is due on, or null when it is undated. */
 function dueDateOf(item: AgendaItem, timeZone: string): string | null {
   return item.dueAt ? instantToWall(item.dueAt, timeZone).date : item.dueDate;
-}
-
-/** Whole days from `from` to `to`, both `YYYY-MM-DD`. */
-function daysBetween(from: string, to: string): number {
-  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
 }
 
 interface Context {
@@ -78,43 +72,63 @@ function itemLine(item: AgendaItem, when: string): string {
   return `• ${plain(item.title, MAX_TITLE_LENGTH)} — ${who}${when ? ` (${when})` : ''}`;
 }
 
-/** A line of the body: a job (counted when left out), a note, or the frame around them. */
+/** A line of a section: a job (counted when left out) or a note (never left out). */
 interface Row {
   text: string;
-  kind: 'item' | 'note' | 'frame';
+  kind: 'item' | 'note';
 }
 
 const jobRow = (text: string): Row => ({ text, kind: 'item' });
 const noteRow = (text: string): Row => ({ text, kind: 'note' });
-const frameRow = (text: string): Row => ({ text, kind: 'frame' });
 
-/** A titled section: a blank line, the title, then its rows. Nothing when it has no rows. */
-function section(title: string, rows: Row[]): Row[] {
-  return rows.length === 0 ? [] : [frameRow(''), frameRow(title), ...rows];
+/** A titled block of the body: a blank line, the title, then its rows. */
+interface Section {
+  title: string;
+  rows: Row[];
 }
+
+/** The section, or no section at all when it has no rows. */
+const section = (title: string, rows: Row[]): Section[] => (rows.length ? [{ title, rows }] : []);
 
 const holidayNote = (title: string): string =>
   `${plain(title, MAX_HOLIDAY_LENGTH)}. Bin collection may be a day late.`;
 
-/**
- * Joins the heading, the body rows and the footer lines, leaving out the last body rows when the
- * whole would not fit in a message.
- */
-function compose(heading: string, body: Row[], footer: string[]): string {
-  const foot = footer.length ? ['', ...footer] : [];
-  const join = (rows: string[]): string => [heading, ...rows].join('\n');
-  const all = body.map((row) => row.text);
-  const whole = join([...all, ...foot]);
-  if (whole.length <= TELEGRAM_MESSAGE_LIMIT) return whole;
+/** `sections` without their last `count` jobs (notes stay, and so does a section left with one). */
+function withoutLastJobs(sections: Section[], count: number): Section[] {
+  let left = count;
+  const kept = sections.map(({ title, rows }) => ({ title, rows: [...rows] }));
+  for (const { rows } of kept.toReversed()) {
+    for (let i = rows.length - 1; i >= 0 && left > 0; i -= 1) {
+      if (rows[i]?.kind === 'item') {
+        rows.splice(i, 1);
+        left -= 1;
+      }
+    }
+  }
+  return kept.filter(({ rows }) => rows.length > 0);
+}
 
-  // The room left for the body, once the footer and the longest possible "…and N more" are in.
-  const room = TELEGRAM_MESSAGE_LIMIT - join([...foot, '', more(body.length)]).length;
-  let keep = 0;
-  while (keep < body.length && join(all.slice(0, keep + 1)).length <= room) keep += 1;
-  // Never end on a section title or a blank line.
-  while (keep > 0 && body[keep - 1]?.kind === 'frame') keep -= 1;
-  const left = body.slice(keep).filter((row) => row.kind === 'item').length;
-  return join([...all.slice(0, keep), ...(left ? ['', more(left)] : []), ...foot]);
+/**
+ * Joins the heading, the sections and the footer lines, leaving out the last jobs, as many as it
+ * takes, when the whole would not fit in a message.
+ */
+function compose(heading: string, sections: Section[], footer: string[]): string {
+  const jobs = sections.reduce(
+    (n, { rows }) => n + rows.filter((r) => r.kind === 'item').length,
+    0,
+  );
+  const render = (shown: Section[], left: number): string =>
+    [
+      heading,
+      ...shown.flatMap(({ title, rows }) => ['', title, ...rows.map((row) => row.text)]),
+      ...(left ? ['', more(left)] : []),
+      ...(footer.length ? ['', ...footer] : []),
+    ].join('\n');
+  let text = render(sections, 0);
+  for (let left = 1; left <= jobs && text.length > TELEGRAM_MESSAGE_LIMIT; left += 1) {
+    text = render(withoutLastJobs(sections, left), left);
+  }
+  return text;
 }
 
 /**

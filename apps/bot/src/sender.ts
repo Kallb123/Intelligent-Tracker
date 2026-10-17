@@ -5,6 +5,9 @@ import {
   type Member,
 } from '@tracker/db';
 
+/** Send options for a plain message: no link preview, so a link in a title cannot expand. */
+export const NO_PREVIEW = { link_preview_options: { is_disabled: true } } as const;
+
 /** What to tell a Telegram user who is not connected to a member; `then` says what to do next. */
 export function linkFirst(then: string): string {
   return (

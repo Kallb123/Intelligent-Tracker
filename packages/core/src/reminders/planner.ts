@@ -1,5 +1,6 @@
 import type { IANAZone } from 'luxon';
 import {
+  daysBetween,
   REMINDER_KINDS,
   type OccurrenceStatus,
   type ReminderKind,
@@ -323,8 +324,7 @@ function overdueReminders(
   const interval = profile === 'persistent' ? 1 : STANDARD_OVERDUE_INTERVAL_DAYS;
   // Skip the days that are certainly past: start at the first reminder, on the grid of 1 + n x
   // interval days from the due day, that is not before the day before `now`'s local day.
-  const sinceDue =
-    (parseLocalDate(localDateOf(clock.zone, input.now)) - parseLocalDate(dueDay)) / MS_PER_DAY;
+  const sinceDue = daysBetween(dueDay, localDateOf(clock.zone, input.now));
   const first = 1 + Math.ceil((sinceDue - 2) / interval) * interval;
   const reminders: PlannedReminder[] = [];
   for (let overdueDays = Math.max(1, first); ; overdueDays += interval) {
@@ -381,7 +381,7 @@ function applyHold(
     const moved = { ...reminder, fireAt: heldAt };
     if (reminder.kind !== 'overdue') return moved;
     // An overdue reminder moved to the hold says how overdue it is by then.
-    const pastDue = (parseLocalDate(holdDay) - parseLocalDate(dueDay)) / MS_PER_DAY;
+    const pastDue = daysBetween(dueDay, holdDay);
     return { ...moved, overdueDays: pastDue };
   });
 }

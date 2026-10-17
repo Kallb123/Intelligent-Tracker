@@ -4,6 +4,7 @@ import { and, asc, eq, gte, lte, or } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
 import { isPastDue } from './due.js';
 import {
+  DAY_MS,
   listableOccurrences,
   startingWithin,
   viewCondition,
@@ -120,7 +121,7 @@ export async function loadAgenda(
       )
       .orderBy(asc(bankHoliday.date)),
   ]);
-  const soon = new Date(now.getTime() + STARTING_SOON_DAYS * 24 * 60 * 60 * 1000);
+  const soon = new Date(now.getTime() + STARTING_SOON_DAYS * DAY_MS);
   const items = rows.map((row) => ({
     ...row,
     overdue: isPastDue(row, now, today),

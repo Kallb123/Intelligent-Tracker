@@ -6178,6 +6178,12 @@
                                 "enum": [
                                   true
                                 ]
+                              },
+                              "tonight": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
                               }
                             },
                             "required": [

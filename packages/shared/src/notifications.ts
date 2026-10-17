@@ -56,6 +56,12 @@ export const reminderPayloadSchema = z.object({
   effortMinutes: z.number().int().positive().nullable().optional(),
   /** Kind `overdue` only: still overdue after several days on a `persistent` task; louder. */
   escalated: z.literal(true).optional(),
+  /**
+   * The reminder fired at the household's evening slot, as it was when queued, which makes the
+   * Telegram message that carries it "Tonight's jobs". Frozen in the payload so that changing
+   * the slot later does not change a message already sent. Optional: older ones lack it.
+   */
+  tonight: z.literal(true).optional(),
 });
 
 export type ReminderPayload = z.infer<typeof reminderPayloadSchema>;

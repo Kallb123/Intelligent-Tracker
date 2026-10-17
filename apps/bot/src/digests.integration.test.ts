@@ -1,5 +1,6 @@
 import { occurrence, task, telegramDigest } from '@tracker/db';
 import { eq } from 'drizzle-orm';
+import { HttpError } from 'grammy';
 import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
 import { deliverDigests } from './digests.js';
@@ -83,18 +84,57 @@ describe.skipIf(!adminUrl)('scheduled digests (integration)', () => {
     expect(await claims()).toEqual([]);
   });
 
-  it('gives the claim back when the send fails, and sends on the next run', async () => {
+  it.each([
+    [429, 'Too Many Requests'],
+    [502, 'Bad Gateway'],
+  ])(
+    'gives the claim back when Telegram answers %i, and sends on the next run',
+    async (error_code, description) => {
+      const harness = await setup();
+      harness.telegram.failNext('sendMessage', { error_code, description });
+
+      expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
+
+      expect(harness.logger.warnings).toEqual(['digest not sent, will retry']);
+      expect(await claims()).toEqual([]);
+
+      expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 10_000))).toBe(1);
+      expect(harness.telegram.to('sendMessage')).toHaveLength(2);
+      expect(await claims()).toHaveLength(1);
+    },
+  );
+
+  it('keeps the claim and gives up for the day when Telegram refuses for good', async () => {
     const harness = await setup();
-    harness.telegram.failNext('sendMessage', { error_code: 502, description: 'Bad Gateway' });
+    harness.telegram.failNext('sendMessage', {
+      error_code: 403,
+      description: 'Forbidden: bot was kicked from the supergroup chat',
+    });
 
     expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
 
-    expect(harness.logger.warnings).toEqual(['digest not sent']);
-    expect(await claims()).toEqual([]);
+    expect(harness.logger.warnings).toEqual(['digest refused, giving up for today']);
+    expect(await claims()).toMatchObject([{ kind: 'morning', telegramMessageId: null }]);
+    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 10_000))).toBe(0);
+    expect(harness.telegram.to('sendMessage')).toHaveLength(1);
 
-    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 10_000))).toBe(1);
-    expect(harness.telegram.to('sendMessage')).toHaveLength(2);
-    expect(await claims()).toHaveLength(1);
+    // The next morning it is tried again.
+    expect(await deliver(harness, new Date('2026-11-03T08:00:00Z'))).toBe(1);
+  });
+
+  it('keeps the claim when the request fails without an answer, as Telegram may have the message', async () => {
+    const harness = await setup();
+    harness.telegram.failNext(
+      'sendMessage',
+      new HttpError('Network request for sendMessage failed!', new Error('timeout')),
+    );
+
+    expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
+
+    expect(harness.logger.warnings).toEqual(['digest may not have been sent, not retrying']);
+    expect(await claims()).toMatchObject([{ kind: 'morning', telegramMessageId: null }]);
+    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 10_000))).toBe(0);
+    expect(harness.telegram.to('sendMessage')).toHaveLength(1);
   });
 
   it('stays quiet when there is nothing on, and does not look again that day', async () => {

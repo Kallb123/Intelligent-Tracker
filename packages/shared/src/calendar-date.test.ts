@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCalendarDate, formatDayHeading, parseUkDate } from './calendar-date.js';
+import { daysBetween, formatCalendarDate, formatDayHeading, parseUkDate } from './calendar-date.js';
 
 describe('formatCalendarDate', () => {
   it('reads a bare date as a calendar date, whatever zone the browser is in', () => {
@@ -89,5 +89,23 @@ describe('parseUkDate', () => {
     '5 11',
   ])('rejects %j', (text) => {
     expect(parseUkDate(text, today)).toBeNull();
+  });
+});
+
+describe('daysBetween', () => {
+  it('counts the whole days from one date to another', () => {
+    expect(daysBetween('2026-10-12', '2026-10-12')).toBe(0);
+    expect(daysBetween('2026-10-12', '2026-10-13')).toBe(1);
+    expect(daysBetween('2026-12-30', '2027-01-04')).toBe(5);
+  });
+
+  it('is negative when the second date is earlier', () => {
+    expect(daysBetween('2026-10-13', '2026-10-12')).toBe(-1);
+  });
+
+  it('is not thrown off by a daylight-saving change or a leap day', () => {
+    expect(daysBetween('2026-03-28', '2026-03-30')).toBe(2);
+    expect(daysBetween('2026-10-24', '2026-10-26')).toBe(2);
+    expect(daysBetween('2028-02-28', '2028-03-01')).toBe(2);
   });
 });

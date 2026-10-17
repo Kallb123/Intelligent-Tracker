@@ -639,6 +639,23 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       expect((await notifications())[0]?.payload).not.toHaveProperty('effortMinutes');
     });
 
+    it('marks a reminder fired at the household`s evening slot as tonight, and no other', async () => {
+      await setup();
+      await replanReminders(db, { now: NOW });
+      await queueDueReminders(db, { now: DUE_NOW });
+      // 19:00 BST is the default evening slot.
+      expect((await notifications())[0]?.payload).toMatchObject({ tonight: true });
+
+      await db.delete(notification);
+      await db.delete(household);
+      await setup({ reminderSlot: 'custom_time', reminderCustomTime: '12:00' });
+      await replanReminders(db, { now: NOW });
+      await queueDueReminders(db, { now: at('2026-07-10T11:00:30Z') });
+      const [other] = await notifications();
+      expect(other?.payload).toMatchObject({ kind: 'heads_up' });
+      expect(other?.payload).not.toHaveProperty('tonight');
+    });
+
     describe('escalated overdue reminders', () => {
       /** The overdue payloads queued over the days after the 20 July due, one tick a day. */
       async function overduePayloads(taskValues: Partial<NewTask>) {

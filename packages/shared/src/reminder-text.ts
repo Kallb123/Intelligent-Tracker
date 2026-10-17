@@ -1,4 +1,4 @@
-import { formatCalendarDate } from './calendar-date.js';
+import { daysBetween, formatCalendarDate } from './calendar-date.js';
 import type { ReminderPayload } from './notifications.js';
 import { instantToWall } from './wall-time.js';
 
@@ -12,8 +12,6 @@ function dueWhen(payload: ReminderPayload, timeZone: string): string {
   return payload.dueDate ? formatCalendarDate(payload.dueDate) : '';
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 /**
  * When a `due` reminder says the occurrence is due, relative to the day the reminder fires (in the
  * household's zone): "today", "tomorrow" (a timed due is reminded the evening before when its slot
@@ -24,10 +22,7 @@ function dueDay(payload: ReminderPayload, timeZone: string): string {
   const timed = payload.dueAt ? instantToWall(payload.dueAt, timeZone) : undefined;
   const date = payload.dueDate ?? timed?.date;
   if (!date) return '';
-  const daysAway =
-    (Date.parse(`${date}T00:00:00Z`) -
-      Date.parse(`${instantToWall(payload.fireAt, timeZone).date}T00:00:00Z`)) /
-    MS_PER_DAY;
+  const daysAway = daysBetween(instantToWall(payload.fireAt, timeZone).date, date);
   const day = daysAway === 0 ? 'today' : daysAway === 1 ? 'tomorrow' : formatCalendarDate(date);
   return timed ? `${day} at ${timed.time}` : day;
 }

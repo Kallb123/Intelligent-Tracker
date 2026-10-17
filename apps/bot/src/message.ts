@@ -6,8 +6,8 @@ import {
   type Household,
   type Notification,
 } from '@tracker/db';
-import { instantToWall, type ReminderPayload } from '@tracker/shared';
 import { renderMessage, snoozeChoices, type RenderedMessage, type RenderLine } from './render.js';
+import { NO_PREVIEW } from './sender.js';
 
 /**
  * Renders the group message that carries `notifications`, from the state of the database now:
@@ -46,7 +46,7 @@ export async function buildGroupMessage(
 
   return renderMessage({
     lines,
-    tonightsJobs: isEveningBatch(payloads[0], household),
+    tonightsJobs: payloads.some((p) => p.tonight),
     states: new Map(states.map((s) => [s.occurrenceId, s])),
     timeZone: household.timezone,
     now,
@@ -67,22 +67,11 @@ export async function buildGroupMessage(
   });
 }
 
-/**
- * Whether the reminders fired at the household's evening slot, which makes the message its
- * "Tonight's jobs". They were queued as one batch for one slot, so the first says it for all.
- */
-function isEveningBatch(first: ReminderPayload | undefined, household: Household): boolean {
-  return (
-    first !== undefined &&
-    instantToWall(first.fireAt, household.timezone).time === household.eveningSlot.slice(0, 5)
-  );
-}
-
 /** The options that send or edit a message as rendered: HTML, no link preview, its keyboard. */
 export function messageOptions({ keyboard }: RenderedMessage) {
   return {
     parse_mode: 'HTML',
-    link_preview_options: { is_disabled: true },
+    ...NO_PREVIEW,
     reply_markup: { inline_keyboard: keyboard },
   } as const;
 }

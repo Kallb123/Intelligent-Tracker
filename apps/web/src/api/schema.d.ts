@@ -2648,6 +2648,8 @@ export interface paths {
                                     effortMinutes?: number | null;
                                     /** @enum {boolean} */
                                     escalated?: true;
+                                    /** @enum {boolean} */
+                                    tonight?: true;
                                 };
                             }[];
                             unreadCount: number;

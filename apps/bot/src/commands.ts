@@ -10,9 +10,9 @@ import {
 import { formatDayHeading, parseUkDate } from '@tracker/shared';
 import type { Bot, Context } from 'grammy';
 import type { BotDeps } from './deps.js';
-import { renderMorningDigest, renderWeekAhead } from './digest.js';
-import { truncate } from './render.js';
-import { linkFirst, memberInHousehold } from './sender.js';
+import { plain, renderMorningDigest, renderWeekAhead } from './digest.js';
+import { MAX_NAME_LENGTH, truncate } from './render.js';
+import { linkFirst, memberInHousehold, NO_PREVIEW } from './sender.js';
 
 /*
  * The slash commands for the house group: what is on (/today, /week, /mine, /digest) and the two
@@ -40,8 +40,6 @@ const MAX_TITLE_LENGTH = 200;
 
 /** Words after `/away` that clear the away date. */
 const AWAY_OFF = ['off', 'back', 'clear', 'none'];
-
-const NO_PREVIEW = { link_preview_options: { is_disabled: true } } as const;
 
 /** What a command handler gets: the household of the group, and the update. */
 type Handler = (ctx: Context, household: Household, args: string) => Promise<void>;
@@ -71,7 +69,10 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
   // /today and /digest show the same thing; /digest is the name of what the group gets at 08:00.
   const today: Handler = async (ctx, household) => {
     const agenda = await loadAgenda(db, household, { now: now(), view: 'today' });
-    await ctx.reply(renderMorningDigest(agenda, household.timezone) ?? 'Nothing on today.');
+    await ctx.reply(
+      renderMorningDigest(agenda, household.timezone) ?? 'Nothing on today.',
+      NO_PREVIEW,
+    );
   };
   command('today', today);
   command('digest', today);
@@ -80,6 +81,7 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     const agenda = await loadAgenda(db, household, { now: now(), view: 'week' });
     await ctx.reply(
       renderWeekAhead(agenda, household.timezone) ?? 'Nothing on in the next 7 days.',
+      NO_PREVIEW,
     );
   });
 
@@ -88,8 +90,12 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     if (!me) return;
     const agenda = await loadAgenda(db, household, { now: now(), view: 'week', memberId: me.id });
     await ctx.reply(
-      renderWeekAhead(agenda, household.timezone, `📅 ${truncate(me.name, 40)}: next 7 days`) ??
-        `Nothing on for you in the next 7 days, ${me.name}.`,
+      renderWeekAhead(
+        agenda,
+        household.timezone,
+        `📅 ${plain(me.name, MAX_NAME_LENGTH)}: next 7 days`,
+      ) ?? `Nothing on for you in the next 7 days, ${plain(me.name, MAX_NAME_LENGTH)}.`,
+      NO_PREVIEW,
     );
   });
 
@@ -110,25 +116,27 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     const clearing = AWAY_OFF.includes(args.toLowerCase());
     const until = clearing ? null : parseUkDate(args, today);
     if (!clearing && until === null) {
-      await ctx.reply(`I could not read "${truncate(args, 40)}" as a date. ${usage}`);
+      await ctx.reply(`I could not read "${plain(args, 40)}" as a date. ${usage}`);
       return;
     }
     if (until !== null && until < today) {
       await ctx.reply(`${formatDayHeading(until, today, true)} has already passed. ${usage}`);
       return;
     }
-    await setMemberAway(db, {
-      householdId: household.id,
-      actorId: me.id,
-      memberId: me.id,
-      awayUntil: until,
-      now: at,
-    });
+    await db.transaction((tx) =>
+      setMemberAway(tx, {
+        householdId: household.id,
+        actorId: me.id,
+        memberId: me.id,
+        awayUntil: until,
+        now: at,
+      }),
+    );
     await ctx.reply(
       until
-        ? `Got it, ${me.name}: you are away until ${formatDayHeading(until, today, true)}. ` +
+        ? `Got it, ${plain(me.name, MAX_NAME_LENGTH)}: you are away until ${formatDayHeading(until, today, true)}. ` +
             'Rotating jobs skip you until then.'
-        : `Welcome back, ${me.name}. You are no longer marked as away.`,
+        : `Welcome back, ${plain(me.name, MAX_NAME_LENGTH)}. You are no longer marked as away.`,
     );
   });
 
@@ -160,7 +168,7 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
       }),
     );
     await ctx.reply(
-      `Added "${title}" for ${me.name}.` +
+      `Added "${plain(title, MAX_TITLE_LENGTH)}" for ${plain(me.name, MAX_NAME_LENGTH)}.` +
         (publicBaseUrl ? ` Set a date in the app: ${publicBaseUrl}/tasks/${created.id}` : ''),
       NO_PREVIEW,
     );

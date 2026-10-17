@@ -1,4 +1,9 @@
-import { MISSED_REMINDER_GRACE_MS, notification, OUTBOX_RETRY_BASE_MS } from '@tracker/db';
+import {
+  household,
+  MISSED_REMINDER_GRACE_MS,
+  notification,
+  OUTBOX_RETRY_BASE_MS,
+} from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
@@ -209,6 +214,7 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
           await newOccurrence(db, h.id, title, { assigneeId: alex.id }),
           {
             fireAt: EVENING,
+            tonight: true,
             effortMinutes,
             ...(escalated ? { kind: 'overdue', overdueDays: 4, escalated: true } : {}),
           },
@@ -273,6 +279,44 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
 
         4. <a href="tg://user?id=1001">Alex</a>: Unknown effort is due today"
       `);
+    });
+
+    it('keeps the heading and the order when the evening slot is changed after sending', async () => {
+      const h = await queueEvening();
+      const { bot, telegram } = newTestBot(test.db);
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+      const keyboard = (
+        telegram.to('sendMessage')[0]?.['reply_markup'] as {
+          inline_keyboard: { callback_data: string }[][];
+        }
+      ).inline_keyboard;
+
+      await test.db.update(household).set({ eveningSlot: '20:30' }).where(eq(household.id, h.id));
+      await bot.handleUpdate(
+        pressUpdate({
+          chatId: CHAT_ID,
+          messageId: 1001,
+          fromId: 1001,
+          data: keyboard[0]?.[0]?.callback_data as string,
+        }),
+      );
+
+      const lines = (telegram.to('editMessageText')[0]?.['text'] as string).split('\n\n');
+      expect(lines[0]).toBe("🌙 <b>Tonight's jobs</b>");
+      expect(lines[1]).toContain('Take out the recycling');
+      expect(lines[4]).toContain('Unknown effort');
+    });
+
+    it('sends no heading for an evening-time reminder queued without the mark', async () => {
+      const h = await newHousehold(test.db);
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Bins'), {
+        fireAt: EVENING,
+      });
+      const { bot, telegram } = newTestBot(test.db);
+
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+      expect(telegram.sentTexts).toEqual(['Anyone 🙋: Bins is due today']);
     });
 
     it('sends no heading for reminders at any other time', async () => {

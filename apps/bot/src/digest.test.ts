@@ -236,4 +236,39 @@ describe('renderWeekAhead', () => {
     // Never ends on a day title with nothing under it.
     expect(text.split('\n').at(-3)).toMatch(/^•/);
   });
+
+  it('only ever leaves out jobs: the bank holidays stay, and every missing job is counted', () => {
+    const jobs = Array.from({ length: 50 }, (_, i) =>
+      job(`Job ${i} ${'x'.repeat(110)}`, { dueDate: `2026-11-0${(i % 6) + 2}` }),
+    );
+    // The last day of the week has only a bank holiday; the one on the 7th comes after its jobs.
+    const text = renderWeekAhead(
+      agenda(jobs, [holiday('2026-11-07', 'Test holiday'), holiday('2026-11-08', 'Last holiday')]),
+      ZONE,
+    ) as string;
+
+    expect(text.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+    const shown = text.split('\n').filter((l) => l.startsWith('• ')).length;
+    expect(shown).toBeLessThan(50);
+    expect(text).toContain(`…and ${50 - shown} more — see the app`);
+    expect(text).toContain('Sat 7 Nov\n');
+    expect(text).toContain('Bank holiday: Test holiday. Bin collection');
+    expect(text).toContain('Sun 8 Nov\nBank holiday: Last holiday. Bin collection');
+  });
+
+  it('drops a day block that has lost all its jobs and has no bank holiday', () => {
+    // Overdue jobs come first, so they are the last to go; the later day's job is cut first.
+    const overdue = Array.from({ length: 30 }, (_, i) =>
+      job(`Late ${i} ${'x'.repeat(110)}`, { overdue: true, dueDate: '2026-10-30' }),
+    );
+    const text = renderWeekAhead(
+      agenda([...overdue, job('Wednesday job', { dueDate: '2026-11-04' })]),
+      ZONE,
+    ) as string;
+
+    expect(text.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+    expect(text).not.toContain('Wed 4 Nov');
+    expect(text).not.toContain('Wednesday job');
+    expect(text).toMatch(/…and \d+ more — see the app$/);
+  });
 });

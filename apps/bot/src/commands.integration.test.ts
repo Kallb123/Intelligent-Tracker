@@ -1,6 +1,6 @@
 import { bankHoliday, member, occurrence, task } from '@tracker/db';
 import { eq } from 'drizzle-orm';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_COMMANDS } from './commands.js';
 import {
   adminUrl,
@@ -106,6 +106,18 @@ describe.skipIf(!adminUrl)('group commands (integration)', () => {
       ]);
     });
 
+    it('sends none of the lists with a link preview', async () => {
+      const { bot, telegram } = await setup();
+      for (const command of ['/today', '/digest', '/week', '/mine']) {
+        await bot.handleUpdate(send(command));
+      }
+      const sent = telegram.to('sendMessage');
+      expect(sent).toHaveLength(4);
+      for (const payload of sent) {
+        expect(payload).toMatchObject({ link_preview_options: { is_disabled: true } });
+      }
+    });
+
     it('/week says so when there is nothing on', async () => {
       const { bot, telegram } = await setup();
       await bot.handleUpdate(send('/week'));
@@ -125,6 +137,19 @@ describe.skipIf(!adminUrl)('group commands (integration)', () => {
       expect(telegram.sentTexts).toEqual([
         '📅 Alex: next 7 days\n\nMon 2 Nov\n• Alex job — Alex',
         '📅 Sam: next 7 days\n\nMon 2 Nov\n• Sam job — Sam',
+      ]);
+    });
+
+    it('/mine defuses an @ in the sender’s name, in the heading and when there is nothing on', async () => {
+      const { h, bot, telegram } = await setup();
+      const sam = await newMember(test.db, h.id, '@everyone Sam', 1002);
+      await bot.handleUpdate(send('/mine', { fromId: 1002 }));
+      await newOccurrence(test.db, h.id, 'Sam job', { assigneeId: sam.id });
+      await bot.handleUpdate(send('/mine', { fromId: 1002 }));
+
+      expect(telegram.sentTexts).toEqual([
+        'Nothing on for you in the next 7 days, @\u200beveryone Sam.',
+        expect.stringMatching(/^📅 @\u200beveryone Sam: next 7 days\n/),
       ]);
     });
 
@@ -165,6 +190,13 @@ describe.skipIf(!adminUrl)('group commands (integration)', () => {
       expect(telegram.sentTexts.at(-1)).toBe(
         'Welcome back, Alex. You are no longer marked as away.',
       );
+    });
+
+    it('sets and replans in one transaction', async () => {
+      const { bot } = await setup();
+      const transaction = vi.spyOn(test.db, 'transaction');
+      await bot.handleUpdate(send('/away 24/12'));
+      expect(transaction).toHaveBeenCalledTimes(1);
     });
 
     it('shows that you are not away, and accepts today', async () => {
@@ -220,6 +252,16 @@ describe.skipIf(!adminUrl)('group commands (integration)', () => {
       // It is on today's list straight away.
       await bot.handleUpdate(send('/today'));
       expect(telegram.sentTexts[1]).toContain('• Buy bin bags — Alex');
+    });
+
+    it('defuses an @ in the echo of the title and of the name, not in the title itself', async () => {
+      const { h, alex, bot, telegram } = await setup();
+      await test.db.update(member).set({ name: '@alex' }).where(eq(member.id, alex.id));
+      await bot.handleUpdate(send('/add Ask @bob'));
+
+      const [created] = await test.db.select().from(task).where(eq(task.householdId, h.id));
+      expect(created?.title).toBe('Ask @bob');
+      expect(telegram.sentTexts[0]).toBe('Added "Ask @\u200bbob" for @\u200balex.');
     });
 
     it('cuts a long title to the 200 characters the app allows, and needs no address', async () => {

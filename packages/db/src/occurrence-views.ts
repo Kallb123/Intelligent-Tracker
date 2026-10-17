@@ -4,7 +4,7 @@ import { and, eq, gt, gte, inArray, isNull, lt, lte, or, sql, type SQL } from 'd
 import { dueInstant } from './due.js';
 import { occurrence, task } from './schema/index.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface ViewOptions {
   now: Date;

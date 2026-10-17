@@ -48,6 +48,14 @@ export function formatDayHeading(date: string, today?: string, alwaysYear = fals
     : day;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Whole days from the calendar date `from` to `to` (negative when `to` is earlier), `YYYY-MM-DD`. */
+export function daysBetween(from: string, to: string): number {
+  // Both are read as UTC midnights, so a daylight-saving change cannot add or lose an hour.
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / MS_PER_DAY);
+}
+
 /** `DD/MM`, `D/M`, `DD/MM/YY` or `DD/MM/YYYY`, with `/`, `-` or `.` between the parts. */
 const UK_DATE = /^(\d{1,2})([/.-])(\d{1,2})(?:\2(\d{2}|\d{4}))?$/;
 
