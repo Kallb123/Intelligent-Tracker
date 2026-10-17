@@ -1,6 +1,5 @@
 import { localToday } from '@tracker/core';
 import {
-  createTask,
   findHouseholdByTelegramChat,
   loadAgenda,
   setMemberAway,
@@ -11,7 +10,8 @@ import { formatDayHeading, parseUkDate } from '@tracker/shared';
 import type { Bot, Context } from 'grammy';
 import type { BotDeps } from './deps.js';
 import { plain, renderMorningDigest, renderWeekAhead } from './digest.js';
-import { MAX_NAME_LENGTH, truncate } from './render.js';
+import { sendQuickAddCard } from './quick-add.js';
+import { MAX_NAME_LENGTH } from './render.js';
 import { linkFirst, memberInHousehold, replyPlain } from './sender.js';
 
 /*
@@ -32,11 +32,8 @@ export const BOT_COMMANDS = [
   { command: 'mine', description: 'Your jobs in the next 7 days' },
   { command: 'digest', description: "Post this morning's digest" },
   { command: 'away', description: 'Set when you are away until: /away 24/12, or /away off' },
-  { command: 'add', description: 'Add a job for yourself: /add Buy bin bags' },
+  { command: 'add', description: 'Add a job: /add MOT due 14/03, remind me a month before' },
 ] as const;
-
-/** The most characters a task title may have; the api's limit. */
-const MAX_TITLE_LENGTH = 200;
 
 /** Words after `/away` that clear the away date. */
 const AWAY_OFF = ['off', 'back', 'clear', 'none'];
@@ -45,7 +42,7 @@ const AWAY_OFF = ['off', 'back', 'clear', 'none'];
 type Handler = (ctx: Context, household: Household, args: string) => Promise<void>;
 
 export function registerCommands(bot: Bot, deps: BotDeps): void {
-  const { db, now, publicBaseUrl } = deps;
+  const { db, now } = deps;
 
   /** Registers `/name` for the household's group only (see the note at the top). */
   const command = (name: (typeof BOT_COMMANDS)[number]['command'], handler: Handler): void => {
@@ -139,37 +136,17 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     );
   });
 
-  // A bare one-off job for the sender. Understanding "MOT due 14/03, remind me a month before"
-  // and confirming it with a card is the rule-based quick-add of PR 17; until then the date is
-  // set in the app.
+  // Understanding the text and asking for a Save is `quick-add.ts`.
   command('add', async (ctx, household, args) => {
     const me = await senderOf(ctx, household);
     if (!me) return;
     if (args === '') {
-      await replyPlain(ctx, 'Send /add and the job, for example: /add Buy bin bags');
+      await replyPlain(
+        ctx,
+        'Send /add and the job, for example: /add Car insurance renews 1/11 every year, sort it a month before',
+      );
       return;
     }
-    const title = truncate(args.replace(/\s+/g, ' '), MAX_TITLE_LENGTH);
-    const created = await db.transaction((tx) =>
-      createTask(tx, {
-        householdId: household.id,
-        createdBy: me.id,
-        values: {
-          title,
-          scheduleKind: 'once',
-          allDay: true,
-          assignmentMode: 'fixed',
-          reminderProfile: household.defaultReminderProfile,
-        },
-        assigneeIds: [me.id],
-        milestones: [],
-        now: now(),
-      }),
-    );
-    await replyPlain(
-      ctx,
-      `Added "${plain(title, MAX_TITLE_LENGTH)}" for ${plain(me.name, MAX_NAME_LENGTH)}.` +
-        (publicBaseUrl ? ` Set a date in the app: ${publicBaseUrl}/tasks/${created.id}` : ''),
-    );
+    await sendQuickAddCard(ctx, deps, household, me, args.replace(/\s+/g, ' '));
   });
 }

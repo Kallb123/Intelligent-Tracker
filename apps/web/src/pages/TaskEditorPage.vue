@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { localToday, RecurrenceError } from '@tracker/core';
+import { defaultRecurrence, localToday, RecurrenceError } from '@tracker/core';
 import { taskBodySchema, type MemberDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
@@ -16,7 +16,7 @@ import TemplatePicker from '../components/TemplatePicker.vue';
 import SelectField from '../components/SelectField.vue';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
-import { defaultRecurrence } from '../tasks/recurrence-form.js';
+import { useTaskDraftStore } from '../stores/task-draft.js';
 import { memberLabel, moveItem } from '../tasks/rotation.js';
 import {
   formatDue,
@@ -39,6 +39,7 @@ const props = defineProps<{ id?: string }>();
 
 const session = useSessionStore();
 const membersStore = useMembersStore();
+const drafts = useTaskDraftStore();
 const router = useRouter();
 
 const timeZone = computed(() => session.timeZone);
@@ -70,7 +71,8 @@ onMounted(async () => {
 
 function startNew(): void {
   const today = localToday(new Date(), timeZone.value);
-  form.value = newTaskForm(today, session.member?.id ?? '');
+  // A draft is waiting when the quick-add sent us here with "Edit details".
+  form.value = drafts.take() ?? newTaskForm(today, session.member?.id ?? '');
   archived.value = false;
   nextUpId.value = null;
 }

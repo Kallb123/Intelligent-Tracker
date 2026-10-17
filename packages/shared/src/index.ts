@@ -23,6 +23,7 @@ export * from './notifications.js';
 export * from './reminder-text.js';
 export * from './tasks.js';
 export * from './telegram.js';
+export * from './text.js';
 export * from './ticker.js';
 export * from './wall-time.js';
 export * from './templates.js';

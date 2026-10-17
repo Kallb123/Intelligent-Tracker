@@ -1,4 +1,6 @@
-import { RecurrenceError, rrules, WEEKDAY_CODES, type WeekdayCode } from '@tracker/core';
+import { RecurrenceError } from './recurrence/errors.js';
+import { rrules } from './recurrence/builders.js';
+import { WEEKDAY_CODES, type WeekdayCode } from './recurrence/rrule-parse.js';
 
 /**
  * The state behind the editor's recurrence builder, and the two-way mapping between it and what a

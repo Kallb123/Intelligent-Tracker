@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import Checkbox from 'primevue/checkbox';
 import InputText from 'primevue/inputtext';
-import { WEEKDAY_CODES } from '@tracker/core';
 import {
   MONTH_NAMES,
   NTH_OPTIONS,
   REPEAT_KINDS,
   REPEAT_LABELS,
+  WEEKDAY_CODES,
   WEEKDAY_NAMES,
   type RecurrenceState,
-} from '../tasks/recurrence-form.js';
+} from '@tracker/core';
 import FormField from './FormField.vue';
 import NumberInput from './NumberInput.vue';
 import SelectField from './SelectField.vue';

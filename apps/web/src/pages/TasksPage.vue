@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { describeSchedule } from '@tracker/core';
 import type { TaskDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
@@ -9,14 +10,14 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError, getApi } from '../api/index.js';
 import PersonFilter from '../components/PersonFilter.vue';
+import QuickAddBar from '../components/QuickAddBar.vue';
 import SelectField from '../components/SelectField.vue';
 import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
-import { describeSchedule } from '../tasks/describe.js';
 import { describeAssignees, nextUpName } from '../tasks/rotation.js';
 
-/** All tasks: every task definition, with search and person / category / tag filters. */
+/** All tasks: every task definition, with search, person / category / tag filters and quick-add. */
 const session = useSessionStore();
 const membersStore = useMembersStore();
 const router = useRouter();
@@ -94,6 +95,8 @@ const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
       <h1>All tasks</h1>
       <Button label="New task" icon="pi pi-plus" @click="router.push({ name: 'task-new' })" />
     </header>
+
+    <QuickAddBar @saved="load" />
 
     <form class="panel filters" role="search" aria-label="Filter tasks" @submit.prevent>
       <div class="field">

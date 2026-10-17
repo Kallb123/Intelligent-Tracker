@@ -618,7 +618,45 @@ fieldset.field legend {
   flex-wrap: wrap;
 }
 
+/* Quick-add bar */
+
+.quick-add-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.quick-add-row .p-inputtext {
+  flex: 1;
+  min-width: 0;
+}
+
+.quick-add .p-message,
+.quick-add-preview {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
+.quick-add-typed {
+  overflow-wrap: anywhere;
+}
+
+.quick-add-typed mark {
+  padding: 0 0.15rem;
+  color: inherit;
+  background: color-mix(in srgb, var(--p-primary-color) 25%, transparent);
+  border-radius: 0.25rem;
+}
+
+.quick-add-actions {
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
 @media (max-width: 40rem) {
+  .quick-add-row {
+    flex-direction: column;
+  }
+
   .milestone-row {
     grid-template-columns: 1fr;
   }

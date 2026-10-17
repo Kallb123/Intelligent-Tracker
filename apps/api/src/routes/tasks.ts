@@ -4,11 +4,14 @@ import {
   createTask,
   materialiseTask,
   member,
+  normaliseBody,
   one,
   reassignOpenOccurrences,
   rematerialiseTask,
   replaceTaskLists,
   task,
+  taskColumns,
+  type TaskFieldValues,
 } from '@tracker/db';
 import { remapCursor } from '@tracker/core';
 import {
@@ -31,10 +34,7 @@ import {
   assertValidSchedule,
   changedFields,
   fieldsOfDto,
-  normaliseBody,
-  taskColumns,
   withScheduleErrors,
-  type TaskFieldValues,
 } from '../tasks/fields.js';
 import { householdSettings, loadTaskDto, loadTaskDtos } from '../tasks/payloads.js';
 

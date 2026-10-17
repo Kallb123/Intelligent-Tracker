@@ -69,3 +69,25 @@ test('create a weekly task and complete it', async ({ page }) => {
   await page.goto('/upcoming');
   await expect(page.getByRole('listitem').filter({ hasText: title }).first()).toBeVisible();
 });
+
+test('quick-add a weekly task from Today and find it in All tasks', async ({ page }) => {
+  // Letters only, so the parser cannot read the unique part of the title as a date.
+  const unique = Array.from(String(Date.now()), (digit) => 'qwertyuiop'[Number(digit)]).join('');
+  const title = `Water the plants ${unique}`;
+
+  await openAsAdmin(page);
+
+  await page.getByLabel('Quick add a task').fill(`${title} every Friday`);
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+
+  // The preview shows what was understood; nothing is saved until Save.
+  const preview = page.getByRole('region', { name: 'Task preview' });
+  await expect(preview.getByRole('heading', { name: title })).toBeVisible();
+  await expect(preview).toContainText('Every week on Friday');
+  await preview.getByRole('button', { name: 'Save' }).click();
+  await expect(preview).toHaveCount(0);
+
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+  const taskRow = page.getByRole('listitem').filter({ hasText: title });
+  await expect(taskRow).toContainText('Every week on Friday');
+});

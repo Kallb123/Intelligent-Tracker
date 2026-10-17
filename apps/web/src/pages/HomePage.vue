@@ -3,10 +3,11 @@ import { localToday } from '@tracker/core';
 import { formatDayHeading, type OccurrenceDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
-import { computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import OccurrenceItem from '../components/OccurrenceItem.vue';
 import PersonFilter from '../components/PersonFilter.vue';
+import QuickAddBar from '../components/QuickAddBar.vue';
 import { useOccurrenceList } from '../composables/useOccurrenceList.js';
 import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { useMembersStore } from '../stores/members.js';
@@ -15,10 +16,13 @@ import { describeDue, describePrepStart, groupByAssignee } from '../tasks/occurr
 
 /**
  * Today: what is overdue, then what is due today (or already in its prep window, or undated),
- * grouped by person, each with one-click Complete, Start and Snooze.
+ * grouped by person, each with one-click Complete, Start and Snooze, and the quick-add bar.
+ * `/?quickAdd=<text>` (the "Edit in app" link of the Telegram card) opens the bar's preview for
+ * that text; the parameter is then dropped from the address so a reload does not reopen it.
  */
 const session = useSessionStore();
 const membersStore = useMembersStore();
+const route = useRoute();
 const router = useRouter();
 
 const { person, ready } = usePersonFilter();
@@ -28,6 +32,17 @@ const list = useOccurrenceList(() => ({
   wait: !ready.value,
 }));
 onMounted(() => void membersStore.load());
+
+const quickAddText = ref('');
+watch(
+  () => route.query['quickAdd'],
+  (value) => {
+    if (route.name !== 'home' || value === undefined) return;
+    if (typeof value === 'string') quickAddText.value = value;
+    void router.replace({ query: { ...route.query, quickAdd: undefined } });
+  },
+  { immediate: true },
+);
 
 const today = computed(() => localToday(new Date(), session.timeZone));
 const heading = computed(() => formatDayHeading(today.value, undefined, true));
@@ -54,6 +69,8 @@ const extra = (o: OccurrenceDto) => describePrepStart(o, today.value, session.ti
       </div>
       <Button label="New task" icon="pi pi-plus" @click="router.push({ name: 'task-new' })" />
     </header>
+
+    <QuickAddBar :prefill="quickAddText" @saved="list.load" />
 
     <form class="panel filters" role="search" aria-label="Filter today" @submit.prevent>
       <PersonFilter id="filter-person" v-model="person" />

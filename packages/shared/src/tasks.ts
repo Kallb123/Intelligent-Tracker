@@ -35,12 +35,15 @@ export const calendarDateSchema = z.iso.date();
 /** An ISO 8601 date-time with a `Z` or numeric UTC offset, such as `2026-07-01T09:30:00+01:00`. */
 const instantSchema = z.iso.datetime({ offset: true });
 
+/** The longest task title the api accepts, in UTF-16 code units. */
+export const MAX_TITLE_LENGTH = 200;
+
 const MAX_ASSIGNEES = 20;
 const MAX_MILESTONES = 20;
 const MAX_DAYS = 3650;
 
 export const milestoneInputSchema = z.object({
-  title: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
   offsetDaysBeforeDue: z.number().int().min(0).max(MAX_DAYS),
 });
 
@@ -50,7 +53,7 @@ export const milestoneInputSchema = z.object({
  * Nullable fields also accept `null`, so a task read from the api can be sent back unchanged.
  */
 const taskFieldsObject = z.object({
-  title: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
   notes: z.string().max(10_000),
   category: z.string().trim().min(1).max(60).nullish(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20),

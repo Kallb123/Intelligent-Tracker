@@ -61,6 +61,12 @@ BST/GMT changes), handles all-day vs timed dues and "N days after completion" ta
 which occurrences to materialise ahead of time. See `packages/core/src/recurrence/index.ts` for the API.
 The reminder planner (`src/reminders`) is a pure `planReminders` function that turns one occurrence, its task and the
 household settings into the heads-up, milestone, nudge, due and overdue reminders to send (see its doc comment for the rules).
+The quick-add parser (`src/quick-add`) turns a line such as "Car insurance renews 1/11 every year, sort it a
+month before" into a task: `chrono.en.GB` dates (day-first), a small recurrence grammar ("every other Tuesday",
+"last Friday of the month", "every 6 weeks after done"), lead-time and "night before" phrases, `@Sam` / "for Sam"
+assignees and template matching for anything left unsaid. Words it does not understand stay in the title.
+`src/quick-add/corpus.test.ts` holds the UK-phrased examples it must keep parsing. The web app's quick-add bar
+(Today and All tasks) and the bot's `/add` both show its result as a preview to confirm before saving.
 
 `pnpm build` bundles each backend app into `apps/<name>/dist/main.js` (esbuild) and builds the SPA
 with Vite. Outside Docker you can run `pnpm --filter @tracker/api dev` (tsx watch) and
@@ -212,7 +218,11 @@ in any other group it stays silent):
 | `/mine`        | Your own jobs for the next 7 days (you must have connected Telegram)                      |
 | `/digest`      | The morning digest on demand (the same text as `/today`)                                  |
 | `/away <date>` | Away until that date, as `24/12` or `24/12/2026`; `/away off` clears it, `/away` shows it |
-| `/add <title>` | Adds an undated one-off job for you; set its date in the web app                          |
+| `/add <text>`  | Quick-add a job, e.g. `/add MOT due 14/03, remind me a month before`; confirm with Save   |
+
+`/add` runs the rule-based quick-add parser (below) and replies with a confirmation card showing
+what it understood, with ✅ Save, ✏️ Edit in app (opens the web app's quick-add preview) and ✖️ Cancel.
+Nothing is saved until the member who sent it taps Save; an unsaved card goes out of date after a day.
 
 The bot posts a morning digest at the household's morning slot every day and a "week ahead" at the
 evening slot on Sundays (each at most once a day, and only when there is something on; a digest

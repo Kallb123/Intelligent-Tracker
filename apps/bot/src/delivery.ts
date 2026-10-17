@@ -2,6 +2,7 @@ import {
   deliverOutboxBatches,
   findHouseholdById,
   giveUpStaleNotifications,
+  pruneQuickAddDrafts,
   type Database,
   type DeliverOutboxResult,
   type OutboxBatchHandler,
@@ -74,7 +75,8 @@ export async function deliverGroupMessages(
 }
 
 /**
- * One delivery tick: the scheduled digests, then the reminders. Digests go first: the morning
+ * One delivery tick: the scheduled digests, then the reminders, then a sweep of the `/add` cards
+ * that were never answered. Digests go first: the morning
  * digest comes before the morning reminders, and the Sunday week ahead before that evening's
  * "Tonight's jobs". A digest failure that reaches here (say the database was unreachable for
  * the list of households) is logged and does not stop the reminders, which matter more.
@@ -86,4 +88,9 @@ export async function runDeliveryTick(db: Database, api: Api, deps: BotDeps): Pr
     deps.logger.error('digest run failed', errorFields(error));
   }
   await deliverGroupMessages(db, api, deps);
+  try {
+    await pruneQuickAddDrafts(db, { now: deps.now() });
+  } catch (error) {
+    deps.logger.warn('quick-add drafts not pruned', errorFields(error));
+  }
 }

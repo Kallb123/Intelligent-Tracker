@@ -1,7 +1,7 @@
+import { defaultRecurrence } from '@tracker/core';
 import type { TaskDto } from '@tracker/shared';
 import { taskBodySchema } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
-import { defaultRecurrence } from './recurrence-form.js';
 import {
   formatDue,
   formFromTask,
