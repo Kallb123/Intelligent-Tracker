@@ -393,6 +393,7 @@ function planInputs(context: PlanContext): Omit<PlanRemindersInput, 'now'> {
       completedMilestoneIds: completedMilestoneIds(occ.milestoneProgress).sort(),
     },
     task: {
+      remindOffsetDays: t.remindOffsetDays,
       leadTimeDays: t.leadTimeDays,
       reminderProfile: t.reminderProfile,
       reminderSlot: t.reminderSlot,

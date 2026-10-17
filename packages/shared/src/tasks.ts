@@ -68,6 +68,8 @@ const taskFieldsObject = z.object({
   rrule: z.string().max(500).nullish(),
   /** Required for `after_completion` tasks, forbidden otherwise. */
   intervalAfterCompletionDays: z.number().int().min(1).max(MAX_DAYS).nullish(),
+  workingDaysOnly: z.boolean(),
+  remindOffsetDays: z.number().int().min(-MAX_DAYS).max(0),
   leadTimeDays: z.number().int().min(0).max(MAX_DAYS).nullish(),
   /** Defaults to the household's default reminder profile, applied by the api. */
   reminderProfile: reminderProfileSchema,
@@ -156,6 +158,8 @@ export function taskFieldsIssues(fields: TaskCrossFieldInput): TaskFieldIssue[] 
 /** Body of `POST /api/tasks`. */
 export const taskBodySchema = taskFieldsObject
   .extend({
+    workingDaysOnly: taskFieldsObject.shape.workingDaysOnly.default(false),
+    remindOffsetDays: taskFieldsObject.shape.remindOffsetDays.default(0),
     notes: taskFieldsObject.shape.notes.default(''),
     tags: taskFieldsObject.shape.tags.default([]),
     priority: taskFieldsObject.shape.priority.default(0),
@@ -180,14 +184,19 @@ export const taskBodySchema = taskFieldsObject
 export const taskPatchSchema = taskFieldsObject.extend({ archived: z.boolean() }).partial();
 
 /** The fields of `taskPatchSchema` that change when a task is rescheduled. */
-export const TASK_SCHEDULE_FIELDS = [
+export const TASK_RECURRENCE_FIELDS = [
   'scheduleKind',
   'allDay',
   'dueDate',
   'dueAt',
   'rrule',
   'intervalAfterCompletionDays',
+] as const;
+
+export const TASK_SCHEDULE_FIELDS = [
+  ...TASK_RECURRENCE_FIELDS,
   'leadTimeDays',
+  'workingDaysOnly',
 ] as const;
 
 export const taskListQuerySchema = z.object({
@@ -220,6 +229,8 @@ export const taskSchema = z.object({
   dueAt: z.iso.datetime().nullable(),
   rrule: z.string().nullable(),
   intervalAfterCompletionDays: z.number().int().nullable(),
+  workingDaysOnly: z.boolean(),
+  remindOffsetDays: z.number().int(),
   leadTimeDays: z.number().int().nullable(),
   reminderProfile: reminderProfileSchema,
   assignmentMode: assignmentModeSchema,

@@ -5,6 +5,7 @@ export {
   materialiseAll,
   materialiseTask,
   reassignOpenOccurrences,
+  rematerialiseTask,
   type MaterialiseAllResult,
   type MaterialiseFailure,
   type MaterialiseTaskResult,
@@ -86,3 +87,5 @@ export { generateToken, hashToken } from './tokens.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';
 export * from './seed/index.js';
+export * from './bank-holidays.js';
+export * from './digest.js';

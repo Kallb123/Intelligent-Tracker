@@ -1,17 +1,34 @@
 import {
   localToday,
+  dueFromKey,
+  dueLocalDate,
+  dueKey,
+  onWorkingDay,
   occurrencesToMaterialise,
   RecurrenceError,
   scheduleFromTask,
   startOfLocalDay,
+  startAtFor,
   type Due,
   type MaterialisedDue,
 } from '@tracker/core';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  arrayOverlaps,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
 import { dueInstant, dueOf } from './due.js';
 import { assigneeIdsOf, replanRotation } from './rotation.js';
-import { household, occurrence, task } from './schema/index.js';
+import { bankHoliday, household, occurrence, task } from './schema/index.js';
 import type { NewOccurrence, Task } from './schema/index.js';
 
 /*
@@ -138,11 +155,11 @@ async function hasOpenOccurrence(db: DbOrTransaction, taskId: string): Promise<b
 export async function materialiseTask(
   db: DbOrTransaction,
   taskId: string,
-  options: { now: Date },
+  options: { now: Date; additionalDues?: readonly Due[] },
 ): Promise<MaterialiseTaskResult> {
   const { now } = options;
   const [row] = await db
-    .select({ task, timezone: household.timezone })
+    .select({ task, timezone: household.timezone, region: household.bankHolidayRegion })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId))
@@ -165,8 +182,92 @@ export async function materialiseTask(
     timezone,
     lastCompleted,
   });
+  const kept = (options.additionalDues ?? []).map((due) => ({
+    due,
+    startAt: startAtFor(due, t.leadTimeDays, { timezone }),
+  }));
   const assigneeId = assigneeFor(t.assignmentMode, await assigneeIdsOf(db, t.id));
-  const rows = planned.map((p) => occurrenceRow(t.id, assigneeId, now, timezone, p));
+  const holidays = t.workingDaysOnly
+    ? new Set(
+        (
+          await db
+            .select({ date: bankHoliday.date })
+            .from(bankHoliday)
+            .where(eq(bankHoliday.region, row.region))
+        ).map((h) => h.date),
+      )
+    : new Set<string>();
+  const grouped = new Map<string, { planned: MaterialisedDue; sources: Set<string> }>();
+  const today = localToday(now, timezone);
+  const seen = new Set<string>();
+  for (const [p, notBefore] of [
+    // Kept dues first: a re-planned due is never shifted back into the past, where nobody saw it
+    // coming, and each source date belongs to one occurrence only.
+    ...kept.map((p) => [p, today] as const),
+    ...planned.map((p) => [p, undefined] as const),
+  ]) {
+    const source = dueKey(p.due);
+    if (seen.has(source)) continue;
+    seen.add(source);
+    const shifted = t.workingDaysOnly ? onWorkingDay(p, holidays, timezone, notBefore) : p;
+    const key = dueKey(shifted.due);
+    const group = grouped.get(key) ?? { planned: shifted, sources: new Set<string>() };
+    group.sources.add(source);
+    grouped.set(key, group);
+  }
+  // Only rows that already cover one of these dues, not the task's whole history.
+  const groups = [...grouped.values()];
+  const dues = groups.map((g) => g.planned.due);
+  const dueDates = dues.flatMap((due) => (due.allDay ? [due.date] : []));
+  const dueAts = dues.flatMap((due) => (due.allDay ? [] : [due.at]));
+  const existing = groups.length
+    ? await db
+        .select({
+          id: occurrence.id,
+          dueDate: occurrence.dueDate,
+          dueAt: occurrence.dueAt,
+          sourceDueKeys: occurrence.sourceDueKeys,
+        })
+        .from(occurrence)
+        .where(
+          and(
+            eq(occurrence.taskId, t.id),
+            or(
+              arrayOverlaps(
+                occurrence.sourceDueKeys,
+                groups.flatMap((g) => [...g.sources]),
+              ),
+              dueDates.length ? inArray(occurrence.dueDate, dueDates) : undefined,
+              dueAts.length ? inArray(occurrence.dueAt, dueAts) : undefined,
+            ),
+          ),
+        )
+    : [];
+  const covered = new Set(existing.flatMap((o) => o.sourceDueKeys));
+  const byDue = new Map(
+    existing.flatMap((o) => {
+      const due = dueOf(o);
+      return due ? [[dueKey(due), o] as const] : [];
+    }),
+  );
+  const rows: NewOccurrence[] = [];
+  for (const [key, group] of grouped) {
+    const sources = [...group.sources].filter((source) => !covered.has(source));
+    if (sources.length === 0) continue;
+    const stored = byDue.get(key);
+    if (stored) {
+      // A horizon may grow to include another source date that coalesces into an existing due.
+      await db
+        .update(occurrence)
+        .set({ sourceDueKeys: [...new Set([...stored.sourceDueKeys, ...sources])] })
+        .where(eq(occurrence.id, stored.id));
+    } else {
+      rows.push({
+        ...occurrenceRow(t.id, assigneeId, now, timezone, group.planned),
+        sourceDueKeys: sources,
+      });
+    }
+  }
   // An undated one-off task has nothing to plan but still needs its one occurrence.
   if (schedule.kind === 'once' && schedule.due === null) {
     rows.push(occurrenceRow(t.id, assigneeId, now, timezone, null));
@@ -267,36 +368,86 @@ export async function activateDue(db: DbOrTransaction, options: { now: Date }): 
 /**
  * Deletes the task's `upcoming` and `active` occurrences that are due today (household-local) or
  * later, or undated, so a changed schedule can be materialised afresh. Occurrences already
- * started, done or skipped, and overdue ones from before today, are kept. Returns the number
- * deleted.
+ * started, done or skipped, and overdue ones from before today, are kept. With `touchingDates`,
+ * only occurrences whose span from earliest source date to due includes one of those local
+ * dates are deleted (the ones a bank-holiday change can move). Returns the number deleted and
+ * the recurrence dates they covered.
  */
 export async function clearFutureOpenOccurrences(
   db: DbOrTransaction,
   taskId: string,
-  options: { now: Date },
-): Promise<{ deleted: number }> {
+  options: { now: Date; touchingDates?: ReadonlySet<string> },
+): Promise<{ deleted: number; sourceDueKeys: string[] }> {
   const [row] = await db
     .select({ timezone: household.timezone })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId));
-  if (!row) return { deleted: 0 };
-  const today = localToday(options.now, row.timezone);
-  const rows = await db
-    .delete(occurrence)
+  if (!row) return { deleted: 0, sourceDueKeys: [] };
+  const { timezone } = row;
+  const today = localToday(options.now, timezone);
+  const candidates = await db
+    .select({
+      id: occurrence.id,
+      sourceDueKeys: occurrence.sourceDueKeys,
+      dueDate: occurrence.dueDate,
+      dueAt: occurrence.dueAt,
+    })
+    .from(occurrence)
     .where(
       and(
         eq(occurrence.taskId, taskId),
         inArray(occurrence.status, OPEN_NOT_STARTED),
         or(
           gte(occurrence.dueDate, today),
-          gte(occurrence.dueAt, startOfLocalDay(today, row.timezone)),
+          gte(occurrence.dueAt, startOfLocalDay(today, timezone)),
           and(isNull(occurrence.dueDate), isNull(occurrence.dueAt)),
         ),
       ),
-    )
-    .returning({ id: occurrence.id });
-  return { deleted: rows.length };
+    );
+  const cleared = candidates.flatMap((o) => {
+    const due = dueOf(o);
+    const sourceDueKeys = o.sourceDueKeys.length ? o.sourceDueKeys : due ? [dueKey(due)] : [];
+    if (options.touchingDates) {
+      if (!due) return [];
+      const end = dueLocalDate(due, timezone);
+      const start =
+        sourceDueKeys.map((key) => dueLocalDate(dueFromKey(key), timezone)).sort()[0] ?? end;
+      if (![...options.touchingDates].some((date) => date >= start && date <= end)) return [];
+    }
+    return [{ id: o.id, sourceDueKeys }];
+  });
+  if (cleared.length) {
+    // Re-check the status, in case a caller did not lock the task before clearing.
+    await db.delete(occurrence).where(
+      and(
+        inArray(
+          occurrence.id,
+          cleared.map((o) => o.id),
+        ),
+        inArray(occurrence.status, OPEN_NOT_STARTED),
+      ),
+    );
+  }
+  return { deleted: cleared.length, sourceDueKeys: cleared.flatMap((o) => o.sourceDueKeys) };
+}
+
+/**
+ * Clears the task's future open occurrences (see `clearFutureOpenOccurrences`) and materialises
+ * it again. `keepDues` plans the cleared recurrence dates again, for changes that move dues
+ * without changing the recurrence (lead time, working days, bank holidays); without it only the
+ * task's current schedule decides.
+ */
+export async function rematerialiseTask(
+  db: DbOrTransaction,
+  taskId: string,
+  options: { now: Date; keepDues: boolean; touchingDates?: ReadonlySet<string> },
+): Promise<MaterialiseTaskResult> {
+  const cleared = await clearFutureOpenOccurrences(db, taskId, options);
+  return materialiseTask(db, taskId, {
+    now: options.now,
+    additionalDues: options.keepDues ? cleared.sourceDueKeys.map(dueFromKey) : [],
+  });
 }
 
 /**

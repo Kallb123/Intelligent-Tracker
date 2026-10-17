@@ -3,6 +3,7 @@ export { nextAfterCompletion, type NextAfterCompletionInput } from './after-comp
 export { rrules } from './builders.js';
 export { RecurrenceError, type RecurrenceErrorCode } from './errors.js';
 export { DEFAULT_EXPAND_LIMIT, expand, nextOccurrence, previewDates } from './expand.js';
+export { dueFromKey, dueKey } from './calendar.js';
 export type { ExpandOptions } from './expand.js';
 export {
   HORIZON_PADDING_DAYS,

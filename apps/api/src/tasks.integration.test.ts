@@ -139,6 +139,8 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
       expect(created).toEqual({
         id: expect.any(String),
         title: 'Put the bins out',
+        workingDaysOnly: false,
+        remindOffsetDays: 0,
         notes: '',
         category: null,
         tags: [],

@@ -23,6 +23,8 @@ export interface TaskFieldValues {
   dueAt: string | null;
   rrule: string | null;
   intervalAfterCompletionDays: number | null;
+  workingDaysOnly: boolean;
+  remindOffsetDays: number;
   leadTimeDays: number | null;
   reminderProfile: ReminderProfile;
   assignmentMode: TaskBody['assignmentMode'];
@@ -47,6 +49,8 @@ export function fieldsOfDto(dto: TaskDto): TaskFieldValues {
     dueAt: dto.dueAt,
     rrule: dto.rrule,
     intervalAfterCompletionDays: dto.intervalAfterCompletionDays,
+    workingDaysOnly: dto.workingDaysOnly,
+    remindOffsetDays: dto.remindOffsetDays,
     leadTimeDays: dto.leadTimeDays,
     reminderProfile: dto.reminderProfile,
     assignmentMode: dto.assignmentMode,
@@ -80,6 +84,8 @@ export function normaliseBody(body: TaskBody, defaultProfile: ReminderProfile): 
     dueAt: body.dueAt ?? null,
     rrule: body.rrule ?? null,
     intervalAfterCompletionDays: body.intervalAfterCompletionDays ?? null,
+    workingDaysOnly: body.workingDaysOnly,
+    remindOffsetDays: body.remindOffsetDays,
     leadTimeDays: body.leadTimeDays ?? null,
     reminderProfile: body.reminderProfile ?? defaultProfile,
     assignmentMode: body.assignmentMode,
@@ -107,6 +113,8 @@ export function taskColumns(
     dueAt: fields.dueAt === null ? null : new Date(fields.dueAt),
     rrule: fields.rrule,
     intervalAfterCompletionDays: fields.intervalAfterCompletionDays,
+    workingDaysOnly: fields.workingDaysOnly,
+    remindOffsetDays: fields.remindOffsetDays,
     leadTimeDays: fields.leadTimeDays,
     reminderProfile: fields.reminderProfile,
     assignmentMode: fields.assignmentMode,

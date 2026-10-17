@@ -1,6 +1,7 @@
 import type { Database } from '@tracker/db';
 import { Bot } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
+import { registerDigest } from './digest.js';
 import { registerActions } from './actions.js';
 import type { BotDeps } from './deps.js';
 import { registerLinking } from './linking.js';
@@ -50,5 +51,6 @@ export function createBot(db: Database, options: CreateBotOptions): Bot {
   );
   registerLinking(bot, deps);
   registerActions(bot, deps);
+  registerDigest(bot, deps);
   return bot;
 }

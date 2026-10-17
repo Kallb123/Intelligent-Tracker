@@ -12,6 +12,7 @@ import {
   assertValidInstant,
   fromWall,
   localDateOf,
+  localDateOfDue,
   MS_PER_DAY,
   parseLocalDate,
   resolveZone,
@@ -215,7 +216,7 @@ export function planReminders(input: PlanRemindersInput): PlannedReminder[] {
   };
   if (due === null || status === 'done' || status === 'skipped' || profile === 'silent') return [];
 
-  const dueDay = due.allDay ? due.date : localDateOf(zone, due.at);
+  const dueDay = localDateOfDue(zone, due);
   const planned = [
     ...prepWindowReminders(input, clock, dueDay),
     ...dueReminder(input, clock, due, dueDay),

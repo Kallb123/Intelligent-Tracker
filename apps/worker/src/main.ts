@@ -2,6 +2,7 @@ import { createDb } from '@tracker/db';
 import { startTicker } from '@tracker/shared';
 import { writeFileSync } from 'node:fs';
 import { APP_NAME, startupMessage } from './index.js';
+import { refreshBankHolidays } from './bank-holidays.js';
 import { createPruneSchedule } from './prune-schedule.js';
 import { runTick } from './tick.js';
 
@@ -46,6 +47,15 @@ const ticker = dbHandle
       onError: (error) => write('error', 'tick failed', errorFields(error)),
       run: async () => {
         const now = new Date();
+        try {
+          const sync = await refreshBankHolidays(dbHandle.db, now);
+          if (sync.error)
+            write('warn', 'bank holiday sync failed; using cached data', { error: sync.error });
+          for (const failure of sync.failures)
+            write('warn', 'bank holiday re-plan skipped a task', { ...failure });
+        } catch (error) {
+          write('warn', 'bank holiday sync failed', errorFields(error));
+        }
         const prune = pruning.due(now);
         const result = await runTick(dbHandle.db, {
           now,
