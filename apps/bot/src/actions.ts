@@ -2,7 +2,6 @@ import { snoozeUntil } from '@tracker/core';
 import {
   applyOccurrenceAction,
   findHouseholdByTelegramChat,
-  findMemberByTelegramUserId,
   OccurrenceActionError,
   telegramMessageNotifications,
   type Database,
@@ -15,6 +14,7 @@ import type { BotDeps } from './deps.js';
 import { errorFields } from './logger.js';
 import { buildGroupMessage, messageOptions } from './message.js';
 import { formatSnoozeUntil } from './render.js';
+import { linkFirst, memberInHousehold } from './sender.js';
 
 /*
  * Button presses on a reminder message in the house group. A press is only honoured in the
@@ -23,10 +23,6 @@ import { formatSnoozeUntil } from './render.js';
  * so it always shows where each occurrence really stands (also when someone else just changed
  * it, or it was changed in the web app).
  */
-
-const LINK_FIRST =
-  'Connect your Telegram first: in the web app, go to Account → Connect Telegram. ' +
-  'Then press the button again.';
 
 /** What a press does to the occurrence, and what to tell the presser (the toast). */
 interface Outcome {
@@ -65,9 +61,12 @@ export function registerActions(bot: Bot, deps: BotDeps): void {
         await ctx.answerCallbackQuery();
         return;
       }
-      const presser = await findMemberByTelegramUserId(db, ctx.from.id);
-      if (!presser || presser.householdId !== household.id) {
-        await ctx.answerCallbackQuery({ text: LINK_FIRST, show_alert: true });
+      const presser = await memberInHousehold(db, household, ctx.from.id);
+      if (!presser) {
+        await ctx.answerCallbackQuery({
+          text: linkFirst('press the button again'),
+          show_alert: true,
+        });
         return;
       }
       const notifications = await telegramMessageNotifications(
