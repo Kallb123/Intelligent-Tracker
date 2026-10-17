@@ -4,8 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { BOT_ALLOWED_UPDATES, botDeps, createBot } from './bot.js';
 import { BOT_COMMANDS } from './commands.js';
 import { configFromEnv } from './config.js';
-import { deliverGroupMessages } from './delivery.js';
-import { deliverDigests } from './digests.js';
+import { runDeliveryTick } from './delivery.js';
 import { startupMessage } from './index.js';
 import { createLogger, errorFields } from './logger.js';
 
@@ -66,12 +65,7 @@ if (bot && dbHandle) {
     intervalMs: config.deliveryIntervalMs,
     // A failed run (e.g. migrations not applied yet) is logged and retried on the next one.
     onError: (error) => logger.error('delivery run failed', errorFields(error)),
-    run: async () => {
-      // Digests first: the morning digest comes before the morning reminders, and the Sunday
-      // week ahead before that evening's "Tonight's jobs".
-      await deliverDigests(db, bot.api, deps);
-      await deliverGroupMessages(db, bot.api, deps);
-    },
+    run: () => runDeliveryTick(db, bot.api, deps),
   });
   // Long polling. Updates that arrived while the bot was down are kept (not dropped), so a
   // button pressed during a restart is still handled. Resolves when `bot.stop()` is called.

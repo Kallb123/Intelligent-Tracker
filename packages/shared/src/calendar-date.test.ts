@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { daysBetween, formatCalendarDate, formatDayHeading, parseUkDate } from './calendar-date.js';
+import {
+  daysBetween,
+  formatCalendarDate,
+  formatDayHeading,
+  MS_PER_DAY,
+  parseUkDate,
+} from './calendar-date.js';
 
 describe('formatCalendarDate', () => {
   it('reads a bare date as a calendar date, whatever zone the browser is in', () => {
@@ -107,5 +113,11 @@ describe('daysBetween', () => {
     expect(daysBetween('2026-03-28', '2026-03-30')).toBe(2);
     expect(daysBetween('2026-10-24', '2026-10-26')).toBe(2);
     expect(daysBetween('2028-02-28', '2028-03-01')).toBe(2);
+  });
+});
+
+describe('MS_PER_DAY', () => {
+  it('is the milliseconds in a day', () => {
+    expect(MS_PER_DAY).toBe(86_400_000);
   });
 });

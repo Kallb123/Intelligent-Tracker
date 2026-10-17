@@ -12,7 +12,7 @@ import type { Bot, Context } from 'grammy';
 import type { BotDeps } from './deps.js';
 import { plain, renderMorningDigest, renderWeekAhead } from './digest.js';
 import { MAX_NAME_LENGTH, truncate } from './render.js';
-import { linkFirst, memberInHousehold, NO_PREVIEW } from './sender.js';
+import { linkFirst, memberInHousehold, replyPlain } from './sender.js';
 
 /*
  * The slash commands for the house group: what is on (/today, /week, /mine, /digest) and the two
@@ -51,7 +51,7 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
   const command = (name: (typeof BOT_COMMANDS)[number]['command'], handler: Handler): void => {
     bot.command(name, async (ctx) => {
       if (ctx.chat.type === 'private') {
-        await ctx.reply(`I only answer in the house group. Send /${name} there.`);
+        await replyPlain(ctx, `I only answer in the house group. Send /${name} there.`);
         return;
       }
       const household = await findHouseholdByTelegramChat(db, ctx.chat.id);
@@ -62,26 +62,23 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
   /** The member behind the sender; says to connect Telegram first, and returns null, if none. */
   const senderOf = async (ctx: Context, household: Household): Promise<Member | null> => {
     const member = ctx.from ? await memberInHousehold(db, household, ctx.from.id) : null;
-    if (!member) await ctx.reply(linkFirst('send the command again'));
+    if (!member) await replyPlain(ctx, linkFirst('send the command again'));
     return member;
   };
 
   // /today and /digest show the same thing; /digest is the name of what the group gets at 08:00.
   const today: Handler = async (ctx, household) => {
     const agenda = await loadAgenda(db, household, { now: now(), view: 'today' });
-    await ctx.reply(
-      renderMorningDigest(agenda, household.timezone) ?? 'Nothing on today.',
-      NO_PREVIEW,
-    );
+    await replyPlain(ctx, renderMorningDigest(agenda, household.timezone) ?? 'Nothing on today.');
   };
   command('today', today);
   command('digest', today);
 
   command('week', async (ctx, household) => {
     const agenda = await loadAgenda(db, household, { now: now(), view: 'week' });
-    await ctx.reply(
+    await replyPlain(
+      ctx,
       renderWeekAhead(agenda, household.timezone) ?? 'Nothing on in the next 7 days.',
-      NO_PREVIEW,
     );
   });
 
@@ -89,13 +86,13 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     const me = await senderOf(ctx, household);
     if (!me) return;
     const agenda = await loadAgenda(db, household, { now: now(), view: 'week', memberId: me.id });
-    await ctx.reply(
+    await replyPlain(
+      ctx,
       renderWeekAhead(
         agenda,
         household.timezone,
         `📅 ${plain(me.name, MAX_NAME_LENGTH)}: next 7 days`,
       ) ?? `Nothing on for you in the next 7 days, ${plain(me.name, MAX_NAME_LENGTH)}.`,
-      NO_PREVIEW,
     );
   });
 
@@ -108,7 +105,8 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
       'Send /away 24/12 to be away until that date (including it), or /away off to be back.';
 
     if (args === '') {
-      await ctx.reply(
+      await replyPlain(
+        ctx,
         `${me.awayUntil ? `You are away until ${formatDayHeading(me.awayUntil, today, true)}.` : 'You are not marked as away.'} ${usage}`,
       );
       return;
@@ -116,11 +114,11 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     const clearing = AWAY_OFF.includes(args.toLowerCase());
     const until = clearing ? null : parseUkDate(args, today);
     if (!clearing && until === null) {
-      await ctx.reply(`I could not read "${plain(args, 40)}" as a date. ${usage}`);
+      await replyPlain(ctx, `I could not read "${plain(args, 40)}" as a date. ${usage}`);
       return;
     }
     if (until !== null && until < today) {
-      await ctx.reply(`${formatDayHeading(until, today, true)} has already passed. ${usage}`);
+      await replyPlain(ctx, `${formatDayHeading(until, today, true)} has already passed. ${usage}`);
       return;
     }
     await db.transaction((tx) =>
@@ -132,7 +130,8 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
         now: at,
       }),
     );
-    await ctx.reply(
+    await replyPlain(
+      ctx,
       until
         ? `Got it, ${plain(me.name, MAX_NAME_LENGTH)}: you are away until ${formatDayHeading(until, today, true)}. ` +
             'Rotating jobs skip you until then.'
@@ -147,7 +146,7 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     const me = await senderOf(ctx, household);
     if (!me) return;
     if (args === '') {
-      await ctx.reply('Send /add and the job, for example: /add Buy bin bags');
+      await replyPlain(ctx, 'Send /add and the job, for example: /add Buy bin bags');
       return;
     }
     const title = truncate(args.replace(/\s+/g, ' '), MAX_TITLE_LENGTH);
@@ -167,10 +166,10 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
         now: now(),
       }),
     );
-    await ctx.reply(
+    await replyPlain(
+      ctx,
       `Added "${plain(title, MAX_TITLE_LENGTH)}" for ${plain(me.name, MAX_NAME_LENGTH)}.` +
         (publicBaseUrl ? ` Set a date in the app: ${publicBaseUrl}/tasks/${created.id}` : ''),
-      NO_PREVIEW,
     );
   });
 }

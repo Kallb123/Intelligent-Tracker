@@ -29,9 +29,14 @@ function job(title: string, overrides: Partial<AgendaItem> = {}): AgendaItem {
   };
 }
 
-const agenda = (items: AgendaItem[], holidays: Agenda['holidays'] = []): Agenda => ({
+const agenda = (
+  items: AgendaItem[],
+  holidays: Agenda['holidays'] = [],
+  truncated = false,
+): Agenda => ({
   today: TODAY,
   items,
+  truncated,
   holidays,
 });
 
@@ -137,6 +142,14 @@ describe('renderMorningDigest', () => {
     expect(text).not.toMatch(/@(?!\u200b)/);
   });
 
+  it('says there is more when the agenda was cut short', () => {
+    const text = renderMorningDigest(agenda([job('Put the bins out')], [], true), ZONE);
+
+    expect(text).toBe(
+      '☀️ Mon 2 Nov\n\nToday\n• Put the bins out — Alex\n\n…and more — see the app',
+    );
+  });
+
   it('leaves out the last jobs, and says how many, when they do not fit', () => {
     const jobs = Array.from({ length: 50 }, (_, i) => job(`Job ${i} ${'x'.repeat(110)}`));
     const text = renderMorningDigest(
@@ -203,7 +216,12 @@ describe('renderWeekAhead', () => {
 
   it('puts the year on a day in the next year', () => {
     const text = renderWeekAhead(
-      { today: '2026-12-30', items: [job('Hoover', { dueDate: '2027-01-02' })], holidays: [] },
+      {
+        today: '2026-12-30',
+        items: [job('Hoover', { dueDate: '2027-01-02' })],
+        truncated: false,
+        holidays: [],
+      },
       ZONE,
     );
     expect(text).toMatchInlineSnapshot(`
@@ -270,5 +288,25 @@ describe('renderWeekAhead', () => {
     expect(text).not.toContain('Wed 4 Nov');
     expect(text).not.toContain('Wednesday job');
     expect(text).toMatch(/…and \d+ more — see the app$/);
+  });
+
+  it('says there is more when the agenda was cut short, even though everything it holds fits', () => {
+    const jobs = [job('Put the bins out'), job('Water the plants')];
+
+    const text = renderWeekAhead(agenda(jobs, [], true), ZONE) as string;
+
+    expect(text.endsWith('\n\n…and more — see the app')).toBe(true);
+    expect(text).not.toContain('…and 0');
+    // A complete agenda has no tail.
+    expect(renderWeekAhead(agenda(jobs), ZONE)).not.toContain('see the app');
+  });
+
+  it('counts only what it left out itself, as a lower bound, when the agenda was also cut short', () => {
+    const jobs = Array.from({ length: 50 }, (_, i) => job(`Job ${i} ${'x'.repeat(110)}`));
+    const text = renderMorningDigest(agenda(jobs, [], true), ZONE) as string;
+
+    expect(text.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+    const shown = text.split('\n').filter((l) => l.startsWith('• ')).length;
+    expect(text.endsWith(`…and ${50 - shown}+ more — see the app`)).toBe(true);
   });
 });

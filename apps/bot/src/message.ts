@@ -46,7 +46,8 @@ export async function buildGroupMessage(
 
   return renderMessage({
     lines,
-    tonightsJobs: payloads.some((p) => p.tonight),
+    // Only a batch that is all tonight's (not a mix, e.g. after an outage) gets the heading.
+    tonightsJobs: payloads.every((p) => p.tonight),
     states: new Map(states.map((s) => [s.occurrenceId, s])),
     timeZone: household.timezone,
     now,

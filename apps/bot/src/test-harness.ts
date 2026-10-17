@@ -63,6 +63,8 @@ export interface TelegramCall {
 export interface ApiFailure {
   error_code: number;
   description: string;
+  /** What a 429 adds: how many seconds to wait. */
+  parameters?: { retry_after: number };
 }
 
 /**

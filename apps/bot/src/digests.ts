@@ -6,6 +6,7 @@ import {
   recordDigestMessage,
   releaseDigest,
   type Database,
+  type DigestKey,
   type Household,
 } from '@tracker/db';
 import type { DigestKind } from '@tracker/shared';
@@ -25,7 +26,10 @@ import { NO_PREVIEW } from './sender.js';
  * A digest is claimed before it is built, and a claim is kept when there is nothing to say (a
  * digest for an empty day is not sent, and not looked at again on every tick). The claim is given
  * back, so the next tick tries again until the window closes, when the digest could not be built
- * or Telegram answered that it is busy or failing (429, 5xx). Delivery is at-most-once
+ * or Telegram answered that it is busy or failing (429, 5xx). A 429 says how long to wait
+ * (`retry_after`); the digest is not tried again before then, so the ticks in between do not
+ * hammer a rate limit. That wait is only remembered in memory: a restart forgets it, which at
+ * worst costs one early retry. Delivery is at-most-once
  * otherwise, which is better than posting a digest twice in the group: the claim stays when
  * Telegram refused for good (the bot was removed from the group, say: retrying all morning
  * would not help), when the request failed in a way that does not say whether Telegram took the
@@ -35,6 +39,20 @@ import { NO_PREVIEW } from './sender.js';
 /** Telegram answered, and the failure is on its side or a matter of timing: worth retrying. */
 const retryable = (error: GrammyError): boolean =>
   error.error_code === 429 || error.error_code >= 500;
+
+/** How long to wait after a 429 that does not say (Telegram always does, in practice). */
+const DEFAULT_RETRY_AFTER_SECONDS = 60;
+
+/** Per digest (see `backoffKey`), when it may next be tried, as epoch milliseconds. */
+const notBefore = new Map<string, number>();
+
+const backoffKey = ({ householdId, kind, localDate }: DigestKey): string =>
+  `${householdId}/${kind}/${localDate}`;
+
+/** Forgets every wait; for tests, which share the process (and so this map). */
+export function resetDigestBackoff(): void {
+  notBefore.clear();
+}
 
 const digestText = {
   morning: async (db: Database, household: Household, now: Date) =>
@@ -54,6 +72,8 @@ export async function deliverDigests(db: Database, api: Api, deps: BotDeps): Pro
   const { logger } = deps;
   const now = deps.now();
   let sent = 0;
+  // Waits that are over are forgotten, so the map does not grow with every day.
+  for (const [key, until] of notBefore) if (until <= now.getTime()) notBefore.delete(key);
   for (const household of await linkedHouseholds(db)) {
     try {
       const due = dueDigests({
@@ -64,6 +84,7 @@ export async function deliverDigests(db: Database, api: Api, deps: BotDeps): Pro
       });
       for (const { kind, localDate } of due) {
         const key = { householdId: household.id, kind, localDate };
+        if (notBefore.has(backoffKey(key))) continue;
         if (!(await claimDigest(db, { ...key, now }))) continue;
         let text: string | null;
         try {
@@ -84,6 +105,10 @@ export async function deliverDigests(db: Database, api: Api, deps: BotDeps): Pro
         } catch (error) {
           if (error instanceof GrammyError && retryable(error)) {
             await releaseDigest(db, key);
+            if (error.error_code === 429) {
+              const seconds = error.parameters.retry_after ?? DEFAULT_RETRY_AFTER_SECONDS;
+              notBefore.set(backoffKey(key), now.getTime() + seconds * 1000);
+            }
             logger.warn('digest not sent, will retry', { ...key, ...errorFields(error) });
           } else if (error instanceof GrammyError) {
             logger.warn('digest refused, giving up for today', { ...key, ...errorFields(error) });

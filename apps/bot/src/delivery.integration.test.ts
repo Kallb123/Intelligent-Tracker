@@ -330,5 +330,22 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
 
       expect(telegram.sentTexts).toEqual(['Anyone 🙋: Bins is due today']);
     });
+
+    it('sends no heading for a batch that mixes evening and other reminders (after an outage)', async () => {
+      const h = await newHousehold(test.db);
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Bins'), {
+        fireAt: '2026-11-02T08:00:00Z',
+      });
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Dishes'), {
+        fireAt: EVENING,
+        tonight: true,
+      });
+      const { bot, telegram } = newTestBot(test.db);
+
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+      expect(telegram.to('sendMessage')).toHaveLength(1);
+      expect(telegram.sentTexts[0]).not.toContain('Tonight');
+    });
   });
 });

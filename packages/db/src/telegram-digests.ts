@@ -1,4 +1,4 @@
-import type { DigestKind } from '@tracker/shared';
+import { MS_PER_DAY, type DigestKind } from '@tracker/shared';
 import { and, asc, eq, isNotNull, lt } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
 import { household, telegramDigest, type Household } from './schema/index.js';
@@ -12,7 +12,7 @@ import { household, telegramDigest, type Household } from './schema/index.js';
  */
 
 /** Digest log rows older than this are deleted by `pruneDigests`. */
-export const DIGEST_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const DIGEST_LOG_RETENTION_MS = 30 * MS_PER_DAY;
 
 export interface DigestKey {
   householdId: string;

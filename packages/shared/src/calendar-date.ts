@@ -48,7 +48,8 @@ export function formatDayHeading(date: string, today?: string, alwaysYear = fals
     : day;
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+/** Milliseconds in a day, the one definition the packages and apps share. */
+export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** Whole days from the calendar date `from` to `to` (negative when `to` is earlier), `YYYY-MM-DD`. */
 export function daysBetween(from: string, to: string): number {

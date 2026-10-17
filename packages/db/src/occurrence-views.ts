@@ -1,10 +1,8 @@
 import { addLocalDays, localToday, startOfLocalDay } from '@tracker/core';
-import { OPEN_OCCURRENCE_STATUSES, type OccurrenceView } from '@tracker/shared';
+import { MS_PER_DAY, OPEN_OCCURRENCE_STATUSES, type OccurrenceView } from '@tracker/shared';
 import { and, eq, gt, gte, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { dueInstant } from './due.js';
 import { occurrence, task } from './schema/index.js';
-
-export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface ViewOptions {
   now: Date;
@@ -37,7 +35,7 @@ export function listableOccurrences(householdId: string, now: Date): SQL | undef
 export function startingWithin(now: Date, days: number): SQL | undefined {
   return and(
     gt(occurrence.startAt, now),
-    lte(occurrence.startAt, new Date(now.getTime() + days * DAY_MS)),
+    lte(occurrence.startAt, new Date(now.getTime() + days * MS_PER_DAY)),
   );
 }
 

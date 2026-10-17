@@ -228,6 +228,19 @@ describe.skipIf(!adminUrl)('agenda and digest log (integration)', () => {
 
       expect(agenda.items).toHaveLength(AGENDA_LIMIT);
       expect(agenda.items[0]?.title).toBe('Late');
+      expect(agenda.truncated).toBe(true);
+    });
+
+    it('is not truncated when there are exactly AGENDA_LIMIT items, or fewer', async () => {
+      const h = await newHousehold();
+      for (let i = 0; i < AGENDA_LIMIT; i++) await addJob(h.id, `Someday ${i}`, {});
+
+      const full = await loadAgenda(db, h, { now: NOW, view: 'today' });
+      expect(full.items).toHaveLength(AGENDA_LIMIT);
+      expect(full.truncated).toBe(false);
+
+      const none = await loadAgenda(db, await newHousehold(), { now: NOW, view: 'today' });
+      expect(none.truncated).toBe(false);
     });
 
     it('adds the region`s holidays for the days the view covers', async () => {

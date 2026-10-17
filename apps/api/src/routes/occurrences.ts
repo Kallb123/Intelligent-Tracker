@@ -8,6 +8,7 @@ import {
   type OccurrenceAction,
 } from '@tracker/db';
 import {
+  MS_PER_DAY,
   occurrenceCompletionResponseSchema,
   occurrenceListQuerySchema,
   occurrenceResponseSchema,
@@ -29,8 +30,6 @@ import {
   selectOccurrences,
   toOccurrenceDto,
 } from '../tasks/payloads.js';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Occurrences (the concrete, dated instances of tasks) and what members do with them. All need a
@@ -148,7 +147,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
       const now = ctx.config.clock();
       const body = request.body;
       const until =
-        'until' in body ? new Date(body.until) : new Date(now.getTime() + body.days * DAY_MS);
+        'until' in body ? new Date(body.until) : new Date(now.getTime() + body.days * MS_PER_DAY);
       if (until <= now)
         throw new AppError(400, 'invalid_snooze', 'Snooze until a time in the future');
 

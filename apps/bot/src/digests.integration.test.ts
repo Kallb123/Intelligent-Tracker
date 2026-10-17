@@ -1,9 +1,9 @@
 import { occurrence, task, telegramDigest } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { HttpError } from 'grammy';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
-import { deliverDigests } from './digests.js';
+import { deliverDigests, resetDigestBackoff } from './digests.js';
 import {
   adminUrl,
   CHAT_ID,
@@ -22,6 +22,7 @@ const MONDAY_EVENING = new Date('2026-11-09T19:05:00Z');
 
 describe.skipIf(!adminUrl)('scheduled digests (integration)', () => {
   const test = useTestDatabase();
+  beforeEach(resetDigestBackoff);
 
   async function setup() {
     const household = await newHousehold(test.db);
@@ -84,25 +85,41 @@ describe.skipIf(!adminUrl)('scheduled digests (integration)', () => {
     expect(await claims()).toEqual([]);
   });
 
-  it.each([
-    [429, 'Too Many Requests'],
-    [502, 'Bad Gateway'],
-  ])(
-    'gives the claim back when Telegram answers %i, and sends on the next run',
-    async (error_code, description) => {
-      const harness = await setup();
-      harness.telegram.failNext('sendMessage', { error_code, description });
+  it('gives the claim back when Telegram answers 502, and sends on the next run', async () => {
+    const harness = await setup();
+    harness.telegram.failNext('sendMessage', { error_code: 502, description: 'Bad Gateway' });
 
-      expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
+    expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
 
-      expect(harness.logger.warnings).toEqual(['digest not sent, will retry']);
-      expect(await claims()).toEqual([]);
+    expect(harness.logger.warnings).toEqual(['digest not sent, will retry']);
+    expect(await claims()).toEqual([]);
 
-      expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 10_000))).toBe(1);
-      expect(harness.telegram.to('sendMessage')).toHaveLength(2);
-      expect(await claims()).toHaveLength(1);
-    },
-  );
+    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 10_000))).toBe(1);
+    expect(harness.telegram.to('sendMessage')).toHaveLength(2);
+    expect(await claims()).toHaveLength(1);
+  });
+
+  it('waits out the retry_after of a 429 before sending again', async () => {
+    const harness = await setup();
+    harness.telegram.failNext('sendMessage', {
+      error_code: 429,
+      description: 'Too Many Requests: retry after 30',
+      parameters: { retry_after: 30 },
+    });
+
+    expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
+
+    expect(harness.logger.warnings).toEqual(['digest not sent, will retry']);
+    expect(await claims()).toEqual([]);
+    // Ticks inside the wait do not even claim the digest.
+    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 29_000))).toBe(0);
+    expect(harness.telegram.to('sendMessage')).toHaveLength(1);
+    expect(await claims()).toEqual([]);
+
+    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 30_000))).toBe(1);
+    expect(harness.telegram.to('sendMessage')).toHaveLength(2);
+    expect(await claims()).toHaveLength(1);
+  });
 
   it('keeps the claim and gives up for the day when Telegram refuses for good', async () => {
     const harness = await setup();

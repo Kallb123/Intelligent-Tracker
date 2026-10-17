@@ -16,7 +16,9 @@ import { MAX_NAME_LENGTH, TELEGRAM_MESSAGE_LIMIT, truncate } from './render.js';
  * The whole message stays within Telegram's limit. When the jobs do not fit, the last ones are
  * left out for "…and N more — see the app", so the overdue ones, which come first, are the last
  * to go. Only jobs are ever left out (and counted): the bank holiday lines, under the jobs in
- * the morning digest and in their day's block in the week, are always kept.
+ * the morning digest and in their day's block in the week, are always kept. An agenda that was
+ * itself cut short (`truncated`) says "…and more — see the app" even when the rest fits, and
+ * when jobs are also left out here "…and N+ more", as the count is then only a lower bound.
  */
 
 /** A task title is cut to this in a line. */
@@ -24,11 +26,13 @@ const MAX_TITLE_LENGTH = 120;
 /** A bank holiday's name is cut to this. */
 const MAX_HOLIDAY_LENGTH = 60;
 
-const more = (count: number): string => `…and ${count} more — see the app`;
+/** The tail line for `count` jobs left out here; `truncated`: and more that the agenda cut. */
+const more = (count: number, truncated: boolean): string =>
+  `…and ${count > 0 ? `${count}${truncated ? '+' : ''} ` : ''}more — see the app`;
 
 /** Text from a person, cut to `max` and with its "@"s defused (see above). */
 export function plain(text: string, max: number): string {
-  return truncate(text, max).replace(/@/g, '@​');
+  return truncate(text, max).replace(/@/g, '@\u200B');
 }
 
 /** The household-local date an item is due on, or null when it is undated. */
@@ -110,9 +114,15 @@ function withoutLastJobs(sections: Section[], count: number): Section[] {
 
 /**
  * Joins the heading, the sections and the footer lines, leaving out the last jobs, as many as it
- * takes, when the whole would not fit in a message.
+ * takes, when the whole would not fit in a message. `truncated` (the agenda was cut short) always
+ * adds the "see the app" tail.
  */
-function compose(heading: string, sections: Section[], footer: string[]): string {
+function compose(
+  heading: string,
+  sections: Section[],
+  footer: string[],
+  truncated: boolean,
+): string {
   const jobs = sections.reduce(
     (n, { rows }) => n + rows.filter((r) => r.kind === 'item').length,
     0,
@@ -121,7 +131,7 @@ function compose(heading: string, sections: Section[], footer: string[]): string
     [
       heading,
       ...shown.flatMap(({ title, rows }) => ['', title, ...rows.map((row) => row.text)]),
-      ...(left ? ['', more(left)] : []),
+      ...(left || truncated ? ['', more(left, truncated)] : []),
       ...(footer.length ? ['', ...footer] : []),
     ].join('\n');
   let text = render(sections, 0);
@@ -161,6 +171,7 @@ export function renderMorningDigest(agenda: Agenda, timeZone: string): string | 
       (holiday) =>
         `Bank holiday ${formatDayHeading(holiday.date, today)}: ${holidayNote(holiday.title)}`,
     ),
+    agenda.truncated,
   );
 }
 
@@ -215,5 +226,5 @@ export function renderWeekAhead(
   const blocks = [...days.keys()]
     .sort()
     .flatMap((day) => section(formatDayHeading(day, today), days.get(day) as Row[]));
-  return compose(heading, [...section('Overdue', overdue), ...blocks], []);
+  return compose(heading, [...section('Overdue', overdue), ...blocks], [], agenda.truncated);
 }

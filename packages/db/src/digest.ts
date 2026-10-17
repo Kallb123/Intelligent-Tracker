@@ -1,10 +1,9 @@
 import { addLocalDays, localToday } from '@tracker/core';
-import type { OccurrenceStatus } from '@tracker/shared';
+import { MS_PER_DAY, type OccurrenceStatus } from '@tracker/shared';
 import { and, asc, eq, gte, lte, or } from 'drizzle-orm';
 import type { DbOrTransaction } from './client.js';
 import { isPastDue } from './due.js';
 import {
-  DAY_MS,
   listableOccurrences,
   startingWithin,
   viewCondition,
@@ -43,6 +42,8 @@ export interface Agenda {
   today: string;
   /** Overdue first, then by due, undated last (the order of the api's occurrence lists). */
   items: AgendaItem[];
+  /** There were more than `AGENDA_LIMIT` jobs, so `items` stops short: the rest are in the app. */
+  truncated: boolean;
   holidays: BankHoliday[];
 }
 
@@ -66,7 +67,7 @@ export interface AgendaOptions {
  *   7 days.
  *
  * At most `AGENDA_LIMIT` items; they are cut from the end of the list order, so overdue jobs
- * are the last to go.
+ * are the last to go, and `truncated` says that some were.
  */
 export async function loadAgenda(
   db: DbOrTransaction,
@@ -108,7 +109,8 @@ export async function loadAgenda(
         ),
       )
       .orderBy(...viewOrder(listOptions))
-      .limit(AGENDA_LIMIT),
+      // One more than is kept, to know whether there were more.
+      .limit(AGENDA_LIMIT + 1),
     db
       .select()
       .from(bankHoliday)
@@ -121,11 +123,11 @@ export async function loadAgenda(
       )
       .orderBy(asc(bankHoliday.date)),
   ]);
-  const soon = new Date(now.getTime() + STARTING_SOON_DAYS * DAY_MS);
-  const items = rows.map((row) => ({
+  const soon = new Date(now.getTime() + STARTING_SOON_DAYS * MS_PER_DAY);
+  const items = rows.slice(0, AGENDA_LIMIT).map((row) => ({
     ...row,
     overdue: isPastDue(row, now, today),
     startingSoon: row.startAt !== null && row.startAt > now && row.startAt <= soon,
   }));
-  return { today, items, holidays };
+  return { today, items, truncated: rows.length > AGENDA_LIMIT, holidays };
 }
