@@ -27,3 +27,15 @@ export function dueOf(row: { dueDate: string | null; dueAt: Date | null }): Due 
   if (row.dueDate !== null) return { allDay: true, date: row.dueDate };
   return null;
 }
+
+/**
+ * Whether the due has passed: a timed due is before `now`, an all-day due is before `today` (the
+ * household-local date of `now`). An undated occurrence is never past due.
+ */
+export function isPastDue(
+  row: { dueDate: string | null; dueAt: Date | null },
+  now: Date,
+  today: string,
+): boolean {
+  return (row.dueAt !== null && row.dueAt < now) || (row.dueDate !== null && row.dueDate < today);
+}

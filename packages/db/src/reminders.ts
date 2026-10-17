@@ -1,11 +1,12 @@
 import {
+  isEscalated,
   localToday,
   planReminders,
   RecurrenceError,
   type PlannedReminder,
   type PlanRemindersInput,
 } from '@tracker/core';
-import { OPEN_OCCURRENCE_STATUSES, type ReminderPayload } from '@tracker/shared';
+import { instantToWall, OPEN_OCCURRENCE_STATUSES, type ReminderPayload } from '@tracker/shared';
 import {
   and,
   asc,
@@ -101,6 +102,11 @@ export function inAppDedupeKey(reminderId: string, memberId: string): string {
  */
 export function telegramGroupDedupeKey(reminderId: string): string {
   return `reminder:${reminderId}:telegram_group`;
+}
+
+/** Whether `at`, as wall time in the household's zone, is exactly its evening slot. */
+function isEveningSlot(at: Date, h: { timezone: string; eveningSlot: string }): boolean {
+  return instantToWall(at, h.timezone).time === h.eveningSlot.slice(0, 5);
 }
 
 /**
@@ -250,6 +256,14 @@ export async function queueDueReminders(
       assigneeId: occ.assigneeId,
       ...(rem.data.milestoneTitle !== undefined ? { milestoneTitle: rem.data.milestoneTitle } : {}),
       ...(rem.data.overdueDays !== undefined ? { overdueDays: rem.data.overdueDays } : {}),
+      ...(t.effortMinutes !== null ? { effortMinutes: t.effortMinutes } : {}),
+      ...(rem.kind === 'overdue' &&
+      rem.data.overdueDays !== undefined &&
+      isEscalated(t.reminderProfile, rem.data.overdueDays)
+        ? { escalated: true as const }
+        : {}),
+      // Frozen now: the heading of the Telegram message must not follow a later slot change.
+      ...(isEveningSlot(rem.fireAt, context.household) ? { tonight: true as const } : {}),
     };
     const recipients = occ.assigneeId
       ? [occ.assigneeId]

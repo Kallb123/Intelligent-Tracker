@@ -1,8 +1,14 @@
-import { HOUSEHOLD_DEFAULTS } from '@tracker/shared';
+import { HOUSEHOLD_DEFAULTS, type ReminderProfile } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
 import { RecurrenceError } from '../recurrence/errors.js';
 import { allDay, at, timed } from '../recurrence/test-util.js';
-import { DEFAULT_OVERDUE_HORIZON_DAYS, planReminders, type PlanRemindersInput } from './index.js';
+import {
+  DEFAULT_OVERDUE_HORIZON_DAYS,
+  ESCALATE_AFTER_DAYS,
+  isEscalated,
+  planReminders,
+  type PlanRemindersInput,
+} from './index.js';
 
 const household = {
   morningSlot: HOUSEHOLD_DEFAULTS.slots.morningDigest,
@@ -815,5 +821,24 @@ describe('invalid input', () => {
     expect(bad({ ...overrides, occurrence: { status: 'done', ...overrides.occurrence } })).toThrow(
       RecurrenceError,
     );
+  });
+});
+
+describe('escalation', () => {
+  it('starts after 3 days overdue', () => {
+    expect(ESCALATE_AFTER_DAYS).toBe(3);
+  });
+
+  it.each<[ReminderProfile, number, boolean]>([
+    ['persistent', 1, false],
+    ['persistent', ESCALATE_AFTER_DAYS - 1, false],
+    ['persistent', ESCALATE_AFTER_DAYS, true],
+    ['persistent', ESCALATE_AFTER_DAYS + 4, true],
+    ['standard', ESCALATE_AFTER_DAYS, false],
+    ['standard', 30, false],
+    ['gentle', 30, false],
+    ['silent', 30, false],
+  ])('%s, %i days overdue: %s', (profile, overdueDays, expected) => {
+    expect(isEscalated(profile, overdueDays)).toBe(expected);
   });
 });

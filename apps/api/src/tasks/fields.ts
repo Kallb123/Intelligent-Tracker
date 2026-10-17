@@ -1,5 +1,5 @@
 import { RecurrenceError, scheduleFromTask } from '@tracker/core';
-import type { NewTask } from '@tracker/db';
+import type { TaskValues } from '@tracker/db';
 import type { MilestoneInput, ReminderProfile, TaskBody, TaskDto } from '@tracker/shared';
 import { AppError } from '../errors.js';
 
@@ -95,9 +95,7 @@ export function normaliseBody(body: TaskBody, defaultProfile: ReminderProfile): 
 }
 
 /** The `task` row columns for these fields (not the assignees and milestones, which are tables). */
-export function taskColumns(
-  fields: TaskFieldValues,
-): Omit<NewTask, 'householdId' | 'createdBy' | 'id'> {
+export function taskColumns(fields: TaskFieldValues): TaskValues {
   return {
     title: fields.title,
     notes: fields.notes,

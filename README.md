@@ -20,7 +20,7 @@ Runs locally with Docker Compose, with a Vue web UI.
 apps/
   api/        Fastify HTTP API: auth, tasks, occurrences, OpenAPI document
   worker/     scheduler tick: materialises occurrences, plans and queues reminders, delivers in-app notifications
-  bot/        Telegram bot (grammY, long polling): links the house group and members, delivers reminders with buttons
+  bot/        Telegram bot (grammY, long polling): links the house group and members, delivers reminders with buttons, commands and digests
   web/        Vue 3 SPA (Vite, Pinia, Vue Router, PrimeVue) with a typed API client
 packages/
   core/       pure domain logic: recurrence, rotation, reminder planning
@@ -200,7 +200,25 @@ place to show the result. Long titles and names are cut with "…" so a message 
 4096 characters, and reminders that were due more than 24 hours ago (the bot was down) are given up
 instead of posted late. A Telegram account that is already connected to a member is never moved by
 someone else's link: it has to be disconnected in the app first, and a `/linkgroup` code is used up
-even when the group is refused. Its tests use a mocked Telegram API (`pnpm exec vitest run --project @tracker/bot`
+even when the group is refused.
+
+The bot also answers these commands in the house group (in a private chat it points you there, and
+in any other group it stays silent):
+
+| Command        | What it does                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| `/today`       | Today's jobs: overdue, due today and starting soon, plus coming bank holidays             |
+| `/week`        | The next 7 days, a block per day, overdue jobs first                                      |
+| `/mine`        | Your own jobs for the next 7 days (you must have connected Telegram)                      |
+| `/digest`      | The morning digest on demand (the same text as `/today`)                                  |
+| `/away <date>` | Away until that date, as `24/12` or `24/12/2026`; `/away off` clears it, `/away` shows it |
+| `/add <title>` | Adds an undated one-off job for you; set its date in the web app                          |
+
+The bot posts a morning digest at the household's morning slot every day and a "week ahead" at the
+evening slot on Sundays (each at most once a day, and only when there is something on; a digest
+more than 2 hours late is skipped). Reminders that fire at the evening slot are posted as
+"Tonight's jobs", quickest first, and an overdue reminder on a `persistent` task that is still not
+done after 3 days is marked 🚨. Its tests use a mocked Telegram API (`pnpm exec vitest run --project @tracker/bot`
 with `TEST_DATABASE_URL` set).
 
 The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps/api/openapi.json`

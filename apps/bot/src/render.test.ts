@@ -276,6 +276,88 @@ function visibleLength(html: string): number {
     .replace(/&amp;/g, '&').length;
 }
 
+describe("Tonight's jobs", () => {
+  const OCC_C = '55555555-5555-4555-8555-555555555555';
+  const quick = (id: string, title: string, effortMinutes: number | null) =>
+    line(id, { taskTitle: title, effortMinutes });
+
+  it('starts with a heading, and only the evening message does', () => {
+    const lines = [line(OCC_A)];
+    expect(render(lines, [open(OCC_A)], { tonightsJobs: true }).text).toBe(
+      '🌙 <b>Tonight\'s jobs</b>\n\n<a href="tg://user?id=1001">Alex</a>: Put the bins out is due today',
+    );
+    expect(render(lines, [open(OCC_A)]).text).not.toContain('Tonight');
+  });
+
+  it('lists the quickest job first, jobs without an effort last, otherwise in order', () => {
+    const lines = [
+      quick(OCC_A, 'Hoover', null),
+      quick(OCC_B, 'Bins', 30),
+      quick(OCC_C, 'Dishes', 10),
+      line('66666666-6666-4666-8666-666666666666', { taskTitle: 'Laundry', effortMinutes: 30 }),
+      line('77777777-7777-4777-8777-777777777777', { taskTitle: 'Dust' }),
+    ];
+    const states = lines.map((l) => open(l.payload.occurrenceId));
+
+    const { text, keyboard } = render(lines, states, { tonightsJobs: true });
+
+    expect(text).toMatchInlineSnapshot(`
+      "🌙 <b>Tonight's jobs</b>
+
+      1. <a href="tg://user?id=1001">Alex</a>: Dishes is due today
+
+      2. <a href="tg://user?id=1001">Alex</a>: Bins is due today
+
+      3. <a href="tg://user?id=1001">Alex</a>: Laundry is due today
+
+      4. <a href="tg://user?id=1001">Alex</a>: Hoover is due today
+
+      5. <a href="tg://user?id=1001">Alex</a>: Dust is due today"
+    `);
+    // The buttons are numbered by the line they belong to.
+    expect(keyboard.map((row) => row[0]?.text)).toEqual(['✅ 1', '✅ 2', '✅ 3', '✅ 4', '✅ 5']);
+    expect(decodeCallback(keyboard[0]?.[0]?.callback_data ?? '')).toMatchObject({
+      occurrenceId: OCC_C,
+    });
+    // The same order again, when it is redrawn with some of the jobs closed.
+    const closed = states.map((s, i) => (i === 2 ? { ...s, status: 'done' as const } : s));
+    expect(render(lines, closed, { tonightsJobs: true }).text.split('\n\n')[1]).toContain('Dishes');
+  });
+
+  it('keeps the order of the lines when it is not the evening message', () => {
+    const lines = [quick(OCC_A, 'Hoover', 60), quick(OCC_B, 'Bins', 5)];
+    const { text } = render(
+      lines,
+      lines.map((l) => open(l.payload.occurrenceId)),
+    );
+    expect(text.indexOf('Hoover')).toBeLessThan(text.indexOf('Bins'));
+  });
+});
+
+describe('escalated overdue lines', () => {
+  const escalated = line(OCC_A, { kind: 'overdue', overdueDays: 4, escalated: true });
+
+  it('get a siren and bold text while they are open', () => {
+    expect(render([escalated], [open(OCC_A)]).text).toBe(
+      '🚨 <b><a href="tg://user?id=1001">Alex</a>: Still not done after 4 days: Put the bins out</b>',
+    );
+    expect(render([escalated, line(OCC_B)], [open(OCC_A), open(OCC_B)]).text).toMatch(
+      /^1\. 🚨 <b>/,
+    );
+  });
+
+  it('are struck through like any other once closed', () => {
+    expect(
+      render([escalated], [open(OCC_A, { status: 'done', actors: { completed: 'Sam' } })]).text,
+    ).toBe('<s>Alex: Still not done after 4 days: Put the bins out</s>\n✅ Done by Sam');
+  });
+
+  it('are an ordinary line when not escalated', () => {
+    const plain = line(OCC_A, { kind: 'overdue', overdueDays: 4 });
+    expect(render([plain], [open(OCC_A)]).text).not.toMatch(/🚨|<b>/);
+  });
+});
+
 describe('message length', () => {
   // Every character that is an entity once escaped, as long as the schemas allow.
   const title = '&<>'.repeat(66).slice(0, 200);
@@ -297,13 +379,22 @@ describe('message length', () => {
       const lines = full.map((i) =>
         line(
           `00000000-0000-4000-8000-00000000000${i}`,
-          { kind, taskTitle: title, milestoneTitle: title, overdueDays: 100, dueAt: null },
+          {
+            kind,
+            taskTitle: title,
+            milestoneTitle: title,
+            overdueDays: 100,
+            dueAt: null,
+            escalated: true,
+          },
           { name: longName, telegramUserId: 1000 + i },
         ),
       );
+      // With the evening heading, and with the 🚨 in front of every line.
       const { text } = render(
         lines,
         lines.flatMap((l) => state(l.payload.occurrenceId) ?? []),
+        { tonightsJobs: true },
       );
 
       expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
@@ -323,6 +414,7 @@ describe('message length', () => {
     const { text } = render(
       lines,
       lines.flatMap((l, i) => states[i % states.length]?.[1](l.payload.occurrenceId) ?? []),
+      { tonightsJobs: true },
     );
     expect(visibleLength(text)).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
   });

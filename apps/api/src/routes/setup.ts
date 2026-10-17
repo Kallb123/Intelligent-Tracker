@@ -1,4 +1,4 @@
-import { household, member } from '@tracker/db';
+import { household, member, one } from '@tracker/db';
 import {
   sessionInfoSchema,
   setupBodySchema,
@@ -13,7 +13,6 @@ import { startSession } from '../auth/sessions.js';
 import { sessionInfo } from '../auth/payloads.js';
 import type { ApiContext } from '../context.js';
 import { conflict } from '../errors.js';
-import { one } from '../rows.js';
 
 /**
  * First-run setup (public, but only while no household exists):

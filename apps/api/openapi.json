@@ -6165,6 +6165,25 @@
                                 "minimum": 0,
                                 "exclusiveMinimum": true,
                                 "maximum": 9007199254740991
+                              },
+                              "effortMinutes": {
+                                "nullable": true,
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991
+                              },
+                              "escalated": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
+                              },
+                              "tonight": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
                               }
                             },
                             "required": [

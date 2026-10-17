@@ -1,5 +1,6 @@
 import type { IANAZone } from 'luxon';
 import {
+  daysBetween,
   REMINDER_KINDS,
   type OccurrenceStatus,
   type ReminderKind,
@@ -96,6 +97,21 @@ export const DEFAULT_OVERDUE_HORIZON_DAYS = 14;
 const MAX_DAYS = 3650;
 /** Standard-profile overdue reminders repeat this often; persistent ones are daily. */
 const STANDARD_OVERDUE_INTERVAL_DAYS = 3;
+
+/**
+ * An overdue reminder of a `persistent` task that is this many days or more past due is
+ * escalated: the group message says it louder (see `isEscalated`).
+ */
+export const ESCALATE_AFTER_DAYS = 3;
+
+/**
+ * Whether an overdue reminder is an escalation ("still not done after N days"). Only the
+ * `persistent` profile asks for the louder message (plan 4.3); `standard` keeps its plain,
+ * every-3-days reminders. One rule, used where the reminder is queued.
+ */
+export function isEscalated(profile: ReminderProfile, overdueDays: number): boolean {
+  return profile === 'persistent' && overdueDays >= ESCALATE_AFTER_DAYS;
+}
 
 /** Nudge positions as fractions of the window between the start day and the due day. */
 const NUDGE_FRACTIONS: Record<ReminderProfile, readonly number[]> = {
@@ -308,8 +324,7 @@ function overdueReminders(
   const interval = profile === 'persistent' ? 1 : STANDARD_OVERDUE_INTERVAL_DAYS;
   // Skip the days that are certainly past: start at the first reminder, on the grid of 1 + n x
   // interval days from the due day, that is not before the day before `now`'s local day.
-  const sinceDue =
-    (parseLocalDate(localDateOf(clock.zone, input.now)) - parseLocalDate(dueDay)) / MS_PER_DAY;
+  const sinceDue = daysBetween(dueDay, localDateOf(clock.zone, input.now));
   const first = 1 + Math.ceil((sinceDue - 2) / interval) * interval;
   const reminders: PlannedReminder[] = [];
   for (let overdueDays = Math.max(1, first); ; overdueDays += interval) {
@@ -366,7 +381,7 @@ function applyHold(
     const moved = { ...reminder, fireAt: heldAt };
     if (reminder.kind !== 'overdue') return moved;
     // An overdue reminder moved to the hold says how overdue it is by then.
-    const pastDue = (parseLocalDate(holdDay) - parseLocalDate(dueDay)) / MS_PER_DAY;
+    const pastDue = daysBetween(dueDay, holdDay);
     return { ...moved, overdueDays: pastDue };
   });
 }

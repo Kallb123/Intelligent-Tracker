@@ -59,10 +59,12 @@ export interface TelegramCall {
   payload: Record<string, unknown>;
 }
 
-/** Makes the next call of `method` fail the way the Bot API does. */
+/** Makes the next call of `method` fail the way the Bot API does (or throw, for a network error). */
 export interface ApiFailure {
   error_code: number;
   description: string;
+  /** What a 429 adds: how many seconds to wait. */
+  parameters?: { retry_after: number };
 }
 
 /**
@@ -71,7 +73,7 @@ export interface ApiFailure {
  */
 export class FakeTelegram {
   readonly calls: TelegramCall[] = [];
-  private readonly failures: { method: string; failure: ApiFailure }[] = [];
+  private readonly failures: { method: string; failure: ApiFailure | Error }[] = [];
   private nextMessageId = 1000;
 
   install(bot: Bot): void {
@@ -79,6 +81,7 @@ export class FakeTelegram {
       this.calls.push({ method, payload: payload as Record<string, unknown> });
       const index = this.failures.findIndex((f) => f.method === method);
       const failure = index >= 0 ? this.failures.splice(index, 1)[0]?.failure : undefined;
+      if (failure instanceof Error) throw failure;
       if (failure) return { ok: false, ...failure };
       if (method === 'sendMessage') {
         const { chat_id: chatId, text } = payload as { chat_id: number; text: string };
@@ -97,7 +100,10 @@ export class FakeTelegram {
     });
   }
 
-  failNext(method: string, failure: ApiFailure = { error_code: 500, description: 'boom' }): void {
+  failNext(
+    method: string,
+    failure: ApiFailure | Error = { error_code: 500, description: 'boom' },
+  ): void {
     this.failures.push({ method, failure });
   }
 

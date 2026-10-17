@@ -2,8 +2,9 @@ import { createDb } from '@tracker/db';
 import { startTicker } from '@tracker/shared';
 import { writeFileSync } from 'node:fs';
 import { BOT_ALLOWED_UPDATES, botDeps, createBot } from './bot.js';
+import { BOT_COMMANDS } from './commands.js';
 import { configFromEnv } from './config.js';
-import { deliverGroupMessages } from './delivery.js';
+import { runDeliveryTick } from './delivery.js';
 import { startupMessage } from './index.js';
 import { createLogger, errorFields } from './logger.js';
 
@@ -54,13 +55,17 @@ if (bot && dbHandle) {
     process.exit(1);
   }
   logger.info('bot started', { username: bot.botInfo.username });
+  // Fills Telegram's command menu. Only a convenience, so a failure is not worth stopping for.
+  await bot.api
+    .setMyCommands(BOT_COMMANDS.map(({ command, description }) => ({ command, description })))
+    .catch((error: unknown) => logger.warn('could not set the command menu', errorFields(error)));
   const deps = botDeps(dbHandle.db, botOptions);
   const { db } = dbHandle;
   delivery = startTicker({
     intervalMs: config.deliveryIntervalMs,
     // A failed run (e.g. migrations not applied yet) is logged and retried on the next one.
     onError: (error) => logger.error('delivery run failed', errorFields(error)),
-    run: async () => void (await deliverGroupMessages(db, bot.api, deps)),
+    run: () => runDeliveryTick(db, bot.api, deps),
   });
   // Long polling. Updates that arrived while the bot was down are kept (not dropped), so a
   // button pressed during a restart is still handled. Resolves when `bot.stop()` is called.

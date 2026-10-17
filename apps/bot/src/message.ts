@@ -7,6 +7,7 @@ import {
   type Notification,
 } from '@tracker/db';
 import { renderMessage, snoozeChoices, type RenderedMessage, type RenderLine } from './render.js';
+import { NO_PREVIEW } from './sender.js';
 
 /**
  * Renders the group message that carries `notifications`, from the state of the database now:
@@ -45,6 +46,8 @@ export async function buildGroupMessage(
 
   return renderMessage({
     lines,
+    // Only a batch that is all tonight's (not a mix, e.g. after an outage) gets the heading.
+    tonightsJobs: payloads.every((p) => p.tonight),
     states: new Map(states.map((s) => [s.occurrenceId, s])),
     timeZone: household.timezone,
     now,
@@ -69,7 +72,7 @@ export async function buildGroupMessage(
 export function messageOptions({ keyboard }: RenderedMessage) {
   return {
     parse_mode: 'HTML',
-    link_preview_options: { is_disabled: true },
+    ...NO_PREVIEW,
     reply_markup: { inline_keyboard: keyboard },
   } as const;
 }

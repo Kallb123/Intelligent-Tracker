@@ -1,4 +1,4 @@
-import { cachedBankHolidays, household, template } from '@tracker/db';
+import { cachedBankHolidays, household, template, one } from '@tracker/db';
 import { scheduleFromTask } from '@tracker/core';
 import {
   bankHolidaysResponseSchema,
@@ -15,7 +15,6 @@ import { z } from 'zod';
 import { authOf } from '../auth/guards.js';
 import type { ApiContext } from '../context.js';
 import { errorResponseSchema, notFound } from '../errors.js';
-import { one } from '../rows.js';
 import { withScheduleErrors } from '../tasks/fields.js';
 
 export function registerTemplateRoutes(app: FastifyInstance, ctx: ApiContext): void {

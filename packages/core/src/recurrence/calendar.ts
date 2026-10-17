@@ -1,3 +1,4 @@
+import { MS_PER_DAY } from '@tracker/shared';
 import { IANAZone } from 'luxon';
 import { DEFAULT_TIMEZONE } from '../timezone.js';
 import { RecurrenceError } from './errors.js';
@@ -11,7 +12,8 @@ import type { Due, LocalDate } from './types.js';
  */
 
 export const MS_PER_MINUTE = 60_000;
-export const MS_PER_DAY = 86_400_000;
+// Defined in `@tracker/shared`; re-exported so the engine's modules keep importing it from here.
+export { MS_PER_DAY };
 
 /** Latest wall time the engine will iterate to (rrule itself stops at the end of year 9999). */
 export const MAX_WALL = Date.UTC(9999, 11, 31);

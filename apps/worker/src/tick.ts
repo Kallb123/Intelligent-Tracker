@@ -2,6 +2,7 @@ import {
   activateDue,
   deliverOutbox,
   materialiseAll,
+  pruneDigests,
   pruneNotifications,
   queueDueReminders,
   recordHeartbeat,
@@ -48,7 +49,7 @@ export type TickResult =
       planFailures: ReminderPlanFailure[];
       /** Outbox notifications delivered after the transaction committed. */
       delivered: number;
-      /** Old notifications deleted by the retention sweep (see `pruneNotifications`). */
+      /** Old notifications and digest log rows deleted by the retention sweep. */
       pruned: number;
     };
 
@@ -77,7 +78,7 @@ const HANDLERS: Record<'in_app', OutboxHandler> = { in_app: async () => {} };
  * nothing. After the commit the tick records the worker's heartbeat and delivers the outbox
  * (a separate step: delivery is retried with backoff and must not hold the tick lock), then,
  * when `prune` is set (the default), deletes notifications past their retention
- * (`pruneNotifications`; the worker passes `prune` about once an hour, see `PruneSchedule`). The
+ * (`pruneNotifications` and `pruneDigests`; the worker passes `prune` about once an hour, see `PruneSchedule`). The
  * heartbeat is also recorded when another worker holds the lock.
  * Idempotent. A task that cannot be materialised, or an occurrence that cannot be planned, is
  * logged and left to the next tick.
@@ -133,6 +134,8 @@ export async function runTick(
   }
   // Retention sweep, last: it never touches pending rows, so it cannot take away what was just
   // queued or delivered.
-  const pruned = prune ? await pruneNotifications(db, { now }) : 0;
+  const pruned = prune
+    ? (await pruneNotifications(db, { now })) + (await pruneDigests(db, { now }))
+    : 0;
   return { ...result, delivered: delivery.delivered, pruned };
 }

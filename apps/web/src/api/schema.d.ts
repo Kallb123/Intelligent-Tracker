@@ -2645,6 +2645,11 @@ export interface paths {
                                     assigneeId: string | null;
                                     milestoneTitle?: string;
                                     overdueDays?: number;
+                                    effortMinutes?: number | null;
+                                    /** @enum {boolean} */
+                                    escalated?: true;
+                                    /** @enum {boolean} */
+                                    tonight?: true;
                                 };
                             }[];
                             unreadCount: number;

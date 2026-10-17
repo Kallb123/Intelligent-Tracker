@@ -1,4 +1,4 @@
-import { activity, member, replanRotationsForMember, session } from '@tracker/db';
+import { member, one, session, setMemberAway } from '@tracker/db';
 import {
   createInviteBodySchema,
   createInviteResponseSchema,
@@ -21,7 +21,6 @@ import {
 import type { ApiContext } from '../context.js';
 import { uniqueViolation } from '../db-errors.js';
 import { AppError, conflict, errorResponseSchema, forbidden, notFound } from '../errors.js';
-import { one } from '../rows.js';
 
 /**
  * Household members and the admin actions on them (all need a session; the admin ones need an
@@ -89,33 +88,19 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: ApiContext): voi
     async (request) => {
       const me = authOf(request).member;
       const now = ctx.config.clock();
-      const result = await ctx.db.transaction(async (tx) => {
-        const [target] = await tx
-          .select()
-          .from(member)
-          .where(and(eq(member.id, request.params.id), eq(member.householdId, me.householdId)))
-          // NO KEY UPDATE, so it does not block task edits inserting assignee rows that reference
-          // this member (while this holds the member and waits for a task, that would deadlock).
-          .for('no key update');
-        if (!target) throw notFound('No such member');
-        if (target.id !== me.id && me.role !== 'admin') {
-          throw forbidden('You can only set your own away dates');
-        }
-
-        const { awayUntil } = request.body;
-        if (awayUntil === target.awayUntil) return target;
-        const updated = one(
-          await tx.update(member).set({ awayUntil }).where(eq(member.id, target.id)).returning(),
-        );
-        await replanRotationsForMember(tx, target.id, { now });
-        await tx.insert(activity).values({
+      if (request.params.id !== me.id && me.role !== 'admin') {
+        throw forbidden('You can only set your own away dates');
+      }
+      const result = await ctx.db.transaction((tx) =>
+        setMemberAway(tx, {
           householdId: me.householdId,
-          memberId: me.id,
-          kind: 'member.away_changed',
-          data: { memberId: target.id, awayUntil },
-        });
-        return updated;
-      });
+          actorId: me.id,
+          memberId: request.params.id,
+          awayUntil: request.body.awayUntil,
+          now,
+        }),
+      );
+      if (!result) throw notFound('No such member');
       return { member: toMemberDto(result) };
     },
   );

@@ -23,6 +23,11 @@ import { encodeCallback } from './callback-data.js';
  * (`MAX_LINE_LENGTH`) and its task text is cut with an ellipsis to fit what its name and note
  * leave over. The cut is made on the plain text before it is escaped, so an entity is never
  * split.
+ *
+ * The message that carries the household's evening slot ("Tonight's jobs", the main slot of the
+ * day, see docs/PLAN.md 4.5) starts with a heading and lists the quickest jobs first. The
+ * heading's room is taken off every line's budget whether or not it is shown, so the bound holds
+ * in every state.
  */
 
 /** The most characters Telegram accepts in a message, after entity parsing. */
@@ -30,17 +35,27 @@ export const TELEGRAM_MESSAGE_LIMIT = 4096;
 
 const LINE_SEPARATOR = '\n\n';
 
+/** The evening message's heading: its visible text and the HTML that shows it. */
+const TONIGHT_HEADING_TEXT = "🌙 Tonight's jobs";
+const TONIGHT_HEADING = "🌙 <b>Tonight's jobs</b>";
+
+/** Put before an overdue line that has gone unanswered for days (see `isEscalated`). */
+const ESCALATED_PREFIX = '🚨 ';
+
 /**
  * The most visible characters one line may have (its number, text and note), so that a full
- * batch of `DEFAULT_OUTBOX_MESSAGE_SIZE` lines and the separators between them fit in a message.
+ * batch of `DEFAULT_OUTBOX_MESSAGE_SIZE` lines, the separators between them and the evening
+ * heading fit in a message.
  */
 export const MAX_LINE_LENGTH = Math.floor(
-  (TELEGRAM_MESSAGE_LIMIT - LINE_SEPARATOR.length * (DEFAULT_OUTBOX_MESSAGE_SIZE - 1)) /
+  (TELEGRAM_MESSAGE_LIMIT -
+    LINE_SEPARATOR.length * (DEFAULT_OUTBOX_MESSAGE_SIZE - 1) -
+    (TONIGHT_HEADING_TEXT.length + LINE_SEPARATOR.length)) /
     DEFAULT_OUTBOX_MESSAGE_SIZE,
 );
 
 /** A member's name is cut to this in a line, whatever its length in the database. */
-const MAX_NAME_LENGTH = 40;
+export const MAX_NAME_LENGTH = 40;
 
 /**
  * `text` cut to at most `max` characters, ending in "…" when it was cut. Lengths are UTF-16
@@ -74,6 +89,11 @@ export interface RenderInput {
   /** The household's zone, for the times in the text. */
   timeZone: string;
   now: Date;
+  /**
+   * This is the household's evening message: it gets the "Tonight's jobs" heading, and its lines
+   * are listed quickest job first (the order of `lines` otherwise).
+   */
+  tonightsJobs?: boolean;
   /** When set, that occurrence's row offers these snooze choices (and a way back) instead. */
   snoozeMenu?: { occurrenceId: string; choices: SnoozeChoice[] };
 }
@@ -167,7 +187,8 @@ function renderLine(
 ): string {
   const open = isOpen(state);
   const { assignee } = line;
-  const prefix = number === undefined ? '' : `${number}. `;
+  const loud = open && line.payload.escalated === true;
+  const prefix = `${number === undefined ? '' : `${number}. `}${loud ? ESCALATED_PREFIX : ''}`;
   const note = noteFor(state, now, timeZone);
   const name = assignee ? truncate(assignee.name, MAX_NAME_LENGTH) : 'Anyone 🙋';
   // What is left of the line's budget once the number, the name (and its ": ") and the note
@@ -180,7 +201,18 @@ function renderLine(
       ? `<a href="tg://user?id=${assignee.telegramUserId}">${escapeHtml(name)}</a>`
       : escapeHtml(name);
   const text = `${who}: ${escapeHtml(truncate(describeReminder(line.payload, timeZone), room))}`;
-  return `${prefix}${open ? text : `<s>${text}</s>`}${note ? `\n${escapeHtml(note)}` : ''}`;
+  const shown = open ? (loud ? `<b>${text}</b>` : text) : `<s>${text}</s>`;
+  return `${prefix}${shown}${note ? `\n${escapeHtml(note)}` : ''}`;
+}
+
+/**
+ * The lines with the quickest job first: by the task's effort when the reminder was queued, jobs
+ * without one last. The sort is stable and uses only what is frozen in the payloads, so the
+ * message keeps its order each time it is redrawn after a button press.
+ */
+function quickestFirst(lines: RenderLine[]): RenderLine[] {
+  const effort = (line: RenderLine): number => line.payload.effortMinutes ?? Infinity;
+  return [...lines].sort((a, b) => (effort(a) === effort(b) ? 0 : effort(a) < effort(b) ? -1 : 1));
 }
 
 /** The buttons of one open occurrence; `n` is its (first) line number when there are several. */
@@ -207,7 +239,7 @@ function actionRow(
 }
 
 /**
- * Builds the message: one numbered line per reminder (numbers only when there is more than one;
+ * Builds the message: an optional heading, then one numbered line per reminder (numbers only when there is more than one;
  * at most `DEFAULT_OUTBOX_MESSAGE_SIZE` of them, which the outbox guarantees),
  * struck through with who closed it once its occurrence is done or skipped, and one row of
  * buttons per distinct occurrence that is still open (several reminders of one occurrence share
@@ -215,13 +247,15 @@ function actionRow(
  * row's position is all that ties it to its line.
  */
 export function renderMessage(input: RenderInput): RenderedMessage {
-  const { lines, states, snoozeMenu } = input;
+  const { states, snoozeMenu, tonightsJobs } = input;
+  const lines = tonightsJobs ? quickestFirst(input.lines) : input.lines;
   const numbered = lines.length > 1;
-  const text = lines
+  const body = lines
     .map((line, i) =>
       renderLine(line, numbered ? i + 1 : undefined, states.get(line.payload.occurrenceId), input),
     )
     .join(LINE_SEPARATOR);
+  const text = tonightsJobs ? `${TONIGHT_HEADING}${LINE_SEPARATOR}${body}` : body;
 
   // First line of each occurrence, in message order.
   const firstLine = new Map<string, number>();

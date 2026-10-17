@@ -1,4 +1,9 @@
-import { MISSED_REMINDER_GRACE_MS, notification, OUTBOX_RETRY_BASE_MS } from '@tracker/db';
+import {
+  household,
+  MISSED_REMINDER_GRACE_MS,
+  notification,
+  OUTBOX_RETRY_BASE_MS,
+} from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
@@ -11,6 +16,7 @@ import {
   newOccurrence,
   newTestBot,
   NOW,
+  pressUpdate,
   queueGroupReminder,
   useTestDatabase,
 } from './test-harness.js';
@@ -192,5 +198,154 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
       { notificationId: n.id, error: 'The household has no linked Telegram group' },
     ]);
     expect((await reload(n.id)).sentAt).toBeNull();
+  });
+
+  describe("Tonight's jobs", () => {
+    // 19:00 in London on 2 Nov (GMT) is the default evening slot.
+    const EVENING = '2026-11-02T19:00:00Z';
+
+    async function queueEvening(db = test.db) {
+      const h = await newHousehold(db);
+      const alex = await newMember(db, h.id, 'Alex', 1001);
+      const plain = async (title: string, effortMinutes: number | null, escalated = false) =>
+        queueGroupReminder(
+          db,
+          h.id,
+          await newOccurrence(db, h.id, title, { assigneeId: alex.id }),
+          {
+            fireAt: EVENING,
+            tonight: true,
+            effortMinutes,
+            ...(escalated ? { kind: 'overdue', overdueDays: 4, escalated: true } : {}),
+          },
+        );
+      await plain('Deep clean the oven', 90);
+      await plain('Unknown effort', null);
+      await plain('Empty the dishwasher', 10, true);
+      await plain('Take out the recycling', 5);
+      return h;
+    }
+
+    it('sends the evening reminders under a heading, quickest first, with the escalated one loud', async () => {
+      await queueEvening();
+      const { bot, telegram } = newTestBot(test.db);
+
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+      expect(telegram.sentTexts).toMatchInlineSnapshot(`
+        [
+          "🌙 <b>Tonight's jobs</b>
+
+        1. <a href="tg://user?id=1001">Alex</a>: Take out the recycling is due today
+
+        2. 🚨 <b><a href="tg://user?id=1001">Alex</a>: Still not done after 4 days: Empty the dishwasher</b>
+
+        3. <a href="tg://user?id=1001">Alex</a>: Deep clean the oven is due today
+
+        4. <a href="tg://user?id=1001">Alex</a>: Unknown effort is due today",
+        ]
+      `);
+    });
+
+    it('keeps the heading and the order when the message is redrawn after a button press', async () => {
+      await queueEvening();
+      const { bot, telegram } = newTestBot(test.db);
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+      const keyboard = (
+        telegram.to('sendMessage')[0]?.['reply_markup'] as {
+          inline_keyboard: { callback_data: string }[][];
+        }
+      ).inline_keyboard;
+
+      // Done on line 1, the quickest job.
+      await bot.handleUpdate(
+        pressUpdate({
+          chatId: CHAT_ID,
+          messageId: 1001,
+          fromId: 1001,
+          data: keyboard[0]?.[0]?.callback_data as string,
+        }),
+      );
+
+      expect(telegram.to('editMessageText')[0]?.['text']).toMatchInlineSnapshot(`
+        "🌙 <b>Tonight's jobs</b>
+
+        1. <s>Alex: Take out the recycling is due today</s>
+        ✅ Done by Alex
+
+        2. 🚨 <b><a href="tg://user?id=1001">Alex</a>: Still not done after 4 days: Empty the dishwasher</b>
+
+        3. <a href="tg://user?id=1001">Alex</a>: Deep clean the oven is due today
+
+        4. <a href="tg://user?id=1001">Alex</a>: Unknown effort is due today"
+      `);
+    });
+
+    it('keeps the heading and the order when the evening slot is changed after sending', async () => {
+      const h = await queueEvening();
+      const { bot, telegram } = newTestBot(test.db);
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+      const keyboard = (
+        telegram.to('sendMessage')[0]?.['reply_markup'] as {
+          inline_keyboard: { callback_data: string }[][];
+        }
+      ).inline_keyboard;
+
+      await test.db.update(household).set({ eveningSlot: '20:30' }).where(eq(household.id, h.id));
+      await bot.handleUpdate(
+        pressUpdate({
+          chatId: CHAT_ID,
+          messageId: 1001,
+          fromId: 1001,
+          data: keyboard[0]?.[0]?.callback_data as string,
+        }),
+      );
+
+      const lines = (telegram.to('editMessageText')[0]?.['text'] as string).split('\n\n');
+      expect(lines[0]).toBe("🌙 <b>Tonight's jobs</b>");
+      expect(lines[1]).toContain('Take out the recycling');
+      expect(lines[4]).toContain('Unknown effort');
+    });
+
+    it('sends no heading for an evening-time reminder queued without the mark', async () => {
+      const h = await newHousehold(test.db);
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Bins'), {
+        fireAt: EVENING,
+      });
+      const { bot, telegram } = newTestBot(test.db);
+
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+      expect(telegram.sentTexts).toEqual(['Anyone 🙋: Bins is due today']);
+    });
+
+    it('sends no heading for reminders at any other time', async () => {
+      const h = await newHousehold(test.db);
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Bins'), {
+        fireAt: '2026-11-02T08:00:00Z',
+      });
+      const { bot, telegram } = newTestBot(test.db);
+
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+      expect(telegram.sentTexts).toEqual(['Anyone 🙋: Bins is due today']);
+    });
+
+    it('sends no heading for a batch that mixes evening and other reminders (after an outage)', async () => {
+      const h = await newHousehold(test.db);
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Bins'), {
+        fireAt: '2026-11-02T08:00:00Z',
+      });
+      await queueGroupReminder(test.db, h.id, await newOccurrence(test.db, h.id, 'Dishes'), {
+        fireAt: EVENING,
+        tonight: true,
+      });
+      const { bot, telegram } = newTestBot(test.db);
+
+      await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+      expect(telegram.to('sendMessage')).toHaveLength(1);
+      expect(telegram.sentTexts[0]).not.toContain('Tonight');
+    });
   });
 });

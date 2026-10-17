@@ -13,10 +13,17 @@ export const REMINDER_STATUSES = ['planned', 'sent', 'cancelled'] as const;
 /** `in_app` feeds the web app's bell; `telegram_group` is delivered by the bot (PR 12). */
 export const NOTIFICATION_CHANNELS = ['in_app', 'telegram_group'] as const;
 
+/**
+ * The scheduled Telegram digests: the `morning` digest of the day's jobs every day, and the
+ * `week_ahead` on Sundays. Mirrors the Postgres enum `digest_kind`.
+ */
+export const DIGEST_KINDS = ['morning', 'week_ahead'] as const;
+
 export const reminderKindSchema = z.enum(REMINDER_KINDS);
 export const reminderStatusSchema = z.enum(REMINDER_STATUSES);
 export const notificationChannelSchema = z.enum(NOTIFICATION_CHANNELS);
 
+export type DigestKind = (typeof DIGEST_KINDS)[number];
 export type ReminderKind = z.infer<typeof reminderKindSchema>;
 export type ReminderStatus = z.infer<typeof reminderStatusSchema>;
 export type NotificationChannel = z.infer<typeof notificationChannelSchema>;
@@ -42,6 +49,19 @@ export const reminderPayloadSchema = z.object({
   milestoneTitle: z.string().optional(),
   /** Kind `overdue` only: whole local days past the due date. */
   overdueDays: z.number().int().positive().optional(),
+  /**
+   * The task's effort when the reminder was queued, so the evening digest can list quick jobs
+   * first. Optional, as is `escalated`: notifications queued by an older version still parse.
+   */
+  effortMinutes: z.number().int().positive().nullable().optional(),
+  /** Kind `overdue` only: still overdue after several days on a `persistent` task; louder. */
+  escalated: z.literal(true).optional(),
+  /**
+   * The reminder fired at the household's evening slot, as it was when queued, which makes the
+   * Telegram message that carries it "Tonight's jobs". Frozen in the payload so that changing
+   * the slot later does not change a message already sent. Optional: older ones lack it.
+   */
+  tonight: z.literal(true).optional(),
 });
 
 export type ReminderPayload = z.infer<typeof reminderPayloadSchema>;

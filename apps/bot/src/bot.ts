@@ -1,8 +1,8 @@
 import type { Database } from '@tracker/db';
 import { Bot } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
-import { registerDigest } from './digest.js';
 import { registerActions } from './actions.js';
+import { registerCommands } from './commands.js';
 import type { BotDeps } from './deps.js';
 import { registerLinking } from './linking.js';
 import { errorFields, silentLogger } from './logger.js';
@@ -38,7 +38,7 @@ export function botDeps(
 }
 
 /**
- * Builds the bot with its handlers: linking commands and button presses. Starting it (long
+ * Builds the bot with its handlers: linking commands, the group commands and button presses. Starting it (long
  * polling) and delivering reminders are left to the caller, so tests can feed it updates with
  * `bot.handleUpdate` and swap the Telegram API out with `bot.api.config.use`.
  */
@@ -51,6 +51,6 @@ export function createBot(db: Database, options: CreateBotOptions): Bot {
   );
   registerLinking(bot, deps);
   registerActions(bot, deps);
-  registerDigest(bot, deps);
+  registerCommands(bot, deps);
   return bot;
 }

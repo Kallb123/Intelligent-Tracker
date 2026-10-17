@@ -8,6 +8,8 @@ import {
 } from '@tracker/db';
 import type { Api } from 'grammy';
 import type { BotDeps } from './deps.js';
+import { deliverDigests } from './digests.js';
+import { errorFields } from './logger.js';
 import { buildGroupMessage, messageOptions } from './message.js';
 
 /*
@@ -69,4 +71,19 @@ export async function deliverGroupMessages(
     deps.logger.warn('reminder delivery failed', { ...failure });
   }
   return result;
+}
+
+/**
+ * One delivery tick: the scheduled digests, then the reminders. Digests go first: the morning
+ * digest comes before the morning reminders, and the Sunday week ahead before that evening's
+ * "Tonight's jobs". A digest failure that reaches here (say the database was unreachable for
+ * the list of households) is logged and does not stop the reminders, which matter more.
+ */
+export async function runDeliveryTick(db: Database, api: Api, deps: BotDeps): Promise<void> {
+  try {
+    await deliverDigests(db, api, deps);
+  } catch (error) {
+    deps.logger.error('digest run failed', errorFields(error));
+  }
+  await deliverGroupMessages(db, api, deps);
 }

@@ -93,6 +93,15 @@ describe('describeReminder', () => {
     expect(words({ kind: 'overdue' })).toBe('Car insurance is overdue');
   });
 
+  it('says an escalated overdue reminder louder', () => {
+    expect(words({ kind: 'overdue', overdueDays: 3, escalated: true })).toBe(
+      'Still not done after 3 days: Car insurance',
+    );
+    expect(words({ kind: 'overdue', overdueDays: 1, escalated: true })).toBe(
+      'Still not done after 1 day: Car insurance',
+    );
+  });
+
   it('shows a timed due in the household time zone', () => {
     // 23:30 UTC on 30 June is already 00:30 on 1 July in London (BST).
     const timed = { dueDate: null, dueAt: '2026-06-30T23:30:00.000Z' };
