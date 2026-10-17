@@ -23,6 +23,17 @@ describe('working days only', () => {
       startAt: new Date('2026-03-29T08:00Z'),
     });
   });
+  it('never moves a due before notBefore', () => {
+    const p = { due: { allDay: true as const, date: '2026-11-27' }, startAt: null };
+    expect(onWorkingDay(p, new Set(), zone, '2026-11-30').due).toEqual({
+      allDay: true,
+      date: '2026-11-30',
+    });
+    expect(onWorkingDay(p, new Set(), zone, '2026-11-28').due).toEqual({
+      allDay: true,
+      date: '2026-11-30',
+    });
+  });
   it('preserves dates on working days and null prep starts', () => {
     const p = { due: { allDay: true as const, date: '2026-03-30' }, startAt: null };
     expect(onWorkingDay(p, new Set(), zone)).toBe(p);

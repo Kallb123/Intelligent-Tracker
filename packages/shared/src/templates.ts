@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { taskFieldsIssues, taskPatchSchema } from './tasks.js';
+import { taskFieldsIssues, taskPatchSchema, type TaskCrossFieldInput } from './tasks.js';
 
 /** A template never carries a person's assignment or an expired due date. */
 export const templateDefaultsSchema = taskPatchSchema
@@ -19,22 +19,34 @@ export const templateDefaultsSchema = taskPatchSchema
   })
   .strict();
 
+/**
+ * A template's schedule as task fields, on a placeholder all-day due (templates carry no date),
+ * so the task rules and the recurrence engine can check it.
+ */
+export function templateScheduleFields(
+  d: z.infer<typeof templateDefaultsSchema>,
+  dueDate = '2026-01-01',
+) {
+  return {
+    scheduleKind: d.scheduleKind ?? 'once',
+    allDay: true,
+    dueDate,
+    dueAt: null,
+    rrule: d.rrule ?? null,
+    intervalAfterCompletionDays: d.intervalAfterCompletionDays ?? null,
+    reminderSlot: d.reminderSlot ?? 'evening',
+    reminderCustomTime: d.reminderCustomTime ?? null,
+  } satisfies TaskCrossFieldInput;
+}
+
 export const templateBodySchema = z
   .object({
     title: z.string().trim().min(1).max(200),
     keywords: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
     defaults: templateDefaultsSchema,
   })
-  .superRefine(({ defaults: d }, ctx) => {
-    for (const issue of taskFieldsIssues({
-      scheduleKind: d.scheduleKind ?? 'once',
-      allDay: true,
-      dueDate: '2026-01-01',
-      rrule: d.rrule,
-      intervalAfterCompletionDays: d.intervalAfterCompletionDays,
-      reminderSlot: d.reminderSlot ?? 'evening',
-      reminderCustomTime: d.reminderCustomTime,
-    }))
+  .superRefine(({ defaults }, ctx) => {
+    for (const issue of taskFieldsIssues(templateScheduleFields(defaults)))
       ctx.addIssue({ code: 'custom', path: ['defaults', ...issue.path], message: issue.message });
   });
 export const templateSchema = templateBodySchema.safeExtend({

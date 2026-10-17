@@ -27,10 +27,3 @@ export function dueOf(row: { dueDate: string | null; dueAt: Date | null }): Due 
   if (row.dueDate !== null) return { allDay: true, date: row.dueDate };
   return null;
 }
-
-/** Decode the immutable recurrence identity saved before applying working-day shifts. */
-export function dueFromKey(key: string): Due {
-  return key.startsWith('d:')
-    ? { allDay: true, date: key.slice(2) }
-    : { allDay: false, at: new Date(Number(key.slice(2))) };
-}

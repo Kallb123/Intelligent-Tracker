@@ -44,7 +44,10 @@ describe.skipIf(!adminUrl)('bank holiday sync (integration)', () => {
 
   it('validates the England/Wales division, persists it and refreshes weekly across restarts', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => response());
-    expect(await refreshBankHolidays(handle.db, now, fetcher)).toEqual({ synced: true });
+    expect(await refreshBankHolidays(handle.db, now, fetcher)).toEqual({
+      synced: true,
+      failures: [],
+    });
     expect(fetcher).toHaveBeenCalledWith(
       BANK_HOLIDAY_URL,
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -55,7 +58,7 @@ describe.skipIf(!adminUrl)('bank holiday sync (integration)', () => {
     ]);
     expect(
       await refreshBankHolidays(handle.db, new Date(now.getTime() + week - 1), fetcher),
-    ).toEqual({ synced: false });
+    ).toEqual({ synced: false, failures: [] });
     expect(fetcher).toHaveBeenCalledTimes(1);
     await refreshBankHolidays(handle.db, new Date(now.getTime() + week), fetcher);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -119,6 +122,93 @@ describe.skipIf(!adminUrl)('bank holiday sync (integration)', () => {
     expect((await handle.db.select().from(task).where(eq(task.id, t.id)))[0]?.dueDate).toBe(
       '2026-12-25',
     );
+  });
+  it('re-plans only the occurrences a changed holiday can move', async () => {
+    const h = (await handle.db.insert(household).values({ name: 'Home' }).returning())[0]!;
+    const t = (
+      await handle.db
+        .insert(task)
+        .values({
+          householdId: h.id,
+          title: 'Mondays',
+          scheduleKind: 'fixed',
+          rrule: 'FREQ=WEEKLY;COUNT=3',
+          dueDate: '2026-12-14',
+          workingDaysOnly: true,
+        })
+        .returning()
+    )[0]!;
+    await materialiseTask(handle.db, t.id, { now });
+    const before = await handle.db.select().from(occurrence).where(eq(occurrence.taskId, t.id));
+    await refreshBankHolidays(handle.db, now, async () => response());
+    const after = await handle.db.select().from(occurrence).where(eq(occurrence.taskId, t.id));
+    const idOf = (rows: typeof after, date: string) => rows.find((o) => o.dueDate === date)?.id;
+    expect(after.map((o) => o.dueDate).sort()).toEqual(['2026-12-14', '2026-12-21', '2026-12-29']);
+    expect(idOf(after, '2026-12-14')).toBe(idOf(before, '2026-12-14'));
+    expect(idOf(after, '2026-12-21')).toBe(idOf(before, '2026-12-21'));
+  });
+  it('does not move a re-planned due into the past when a holiday is withdrawn', async () => {
+    await handle.db.insert(bankHoliday).values(
+      ['2026-11-27', '2026-11-30'].map((date) => ({
+        region: 'england-and-wales' as const,
+        date,
+        title: 'Cached',
+      })),
+    );
+    const h = (await handle.db.insert(household).values({ name: 'Home' }).returning())[0]!;
+    const t = (
+      await handle.db
+        .insert(task)
+        .values({
+          householdId: h.id,
+          title: 'Once',
+          scheduleKind: 'once',
+          dueDate: '2026-11-27',
+          workingDaysOnly: true,
+        })
+        .returning()
+    )[0]!;
+    await materialiseTask(handle.db, t.id, { now: new Date('2026-11-26T12:00Z') });
+    await refreshBankHolidays(handle.db, new Date('2026-11-28T12:00Z'), async () => response());
+    const rows = await handle.db.select().from(occurrence).where(eq(occurrence.taskId, t.id));
+    expect(rows.map((o) => [o.dueDate, o.sourceDueKeys])).toEqual([
+      ['2026-11-30', ['d:2026-11-27']],
+    ]);
+  });
+  it('reports a broken task, keeps its occurrences and still finishes the sync', async () => {
+    const h = (await handle.db.insert(household).values({ name: 'Home' }).returning())[0]!;
+    const [broken, working] = await handle.db
+      .insert(task)
+      .values(
+        ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'].map(
+          (id) => ({
+            id,
+            householdId: h.id,
+            title: 'Daily',
+            scheduleKind: 'fixed' as const,
+            rrule: 'FREQ=DAILY;COUNT=4',
+            dueDate: '2026-12-25',
+            workingDaysOnly: true,
+          }),
+        ),
+      )
+      .returning();
+    await materialiseTask(handle.db, broken!.id, { now });
+    await materialiseTask(handle.db, working!.id, { now });
+    await handle.db.update(task).set({ rrule: 'NOT A RULE' }).where(eq(task.id, broken!.id));
+    const kept = await handle.db.select().from(occurrence).where(eq(occurrence.taskId, broken!.id));
+
+    const result = await refreshBankHolidays(handle.db, now, async () => response());
+    expect(result).toMatchObject({ synced: true, failures: [{ taskId: broken!.id }] });
+    expect(
+      await handle.db.select().from(occurrence).where(eq(occurrence.taskId, broken!.id)),
+    ).toEqual(kept);
+    expect(
+      (await handle.db.select().from(occurrence).where(eq(occurrence.taskId, working!.id))).map(
+        (o) => o.dueDate,
+      ),
+    ).toEqual(['2026-12-29']);
+    expect((await handle.db.select().from(bankHolidaySync))[0]?.syncedAt).toEqual(now);
   });
   it('keeps a due-today job whose original Sunday is already in the past', async () => {
     const h = (await handle.db.insert(household).values({ name: 'Home' }).returning())[0]!;

@@ -51,6 +51,8 @@ const ticker = dbHandle
           const sync = await refreshBankHolidays(dbHandle.db, now);
           if (sync.error)
             write('warn', 'bank holiday sync failed; using cached data', { error: sync.error });
+          for (const failure of sync.failures)
+            write('warn', 'bank holiday re-plan skipped a task', { ...failure });
         } catch (error) {
           write('warn', 'bank holiday sync failed', errorFields(error));
         }

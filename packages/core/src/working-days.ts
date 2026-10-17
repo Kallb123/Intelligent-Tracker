@@ -8,17 +8,25 @@ import {
 } from './recurrence/calendar.js';
 import type { MaterialisedDue } from './recurrence/horizon.js';
 
-/** Move dues forward to a weekday outside the cached holidays, preserving local time and lead. */
+/**
+ * Move dues forward to a weekday outside the cached holidays, and not before the local date
+ * `notBefore` if given, preserving local time and lead.
+ */
 export function onWorkingDay(
   planned: MaterialisedDue,
   holidays: ReadonlySet<string>,
   timezone: string,
+  notBefore = '',
 ): MaterialisedDue {
   const zone = resolveZone(timezone);
   const originalWall = wallOfDue(zone, planned.due);
   let date = new Date(originalWall).toISOString().slice(0, 10);
   let days = 0;
-  while ([0, 6].includes(new Date(parseLocalDate(date)).getUTCDay()) || holidays.has(date)) {
+  while (
+    date < notBefore ||
+    [0, 6].includes(new Date(parseLocalDate(date)).getUTCDay()) ||
+    holidays.has(date)
+  ) {
     date = addDays(date, 1);
     days++;
   }

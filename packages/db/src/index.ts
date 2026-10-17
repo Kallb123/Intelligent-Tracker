@@ -5,12 +5,13 @@ export {
   materialiseAll,
   materialiseTask,
   reassignOpenOccurrences,
+  rematerialiseTask,
   type MaterialiseAllResult,
   type MaterialiseFailure,
   type MaterialiseTaskResult,
 } from './materialise.js';
 export { uniqueViolation } from './errors.js';
-export { dueFromKey, dueInstant, dueOrder } from './due.js';
+export { dueInstant, dueOrder } from './due.js';
 export { recordHeartbeat, WORKER_SERVICE } from './heartbeat.js';
 export {
   DEFAULT_OUTBOX_BATCH_SIZE,

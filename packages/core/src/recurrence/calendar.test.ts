@@ -5,6 +5,7 @@ import {
   assertValidDue,
   assertValidInstant,
   comparatorTo,
+  dueFromKey,
   dueFromWall,
   dueKey,
   formatLocalDate,
@@ -145,6 +146,9 @@ describe('dues', () => {
   it('gives all-day and timed dues distinct keys', () => {
     expect(dueKey(allDay('2026-07-01'))).not.toBe(dueKey(timed('2026-07-01T00:00:00Z')));
     expect(dueKey(timed('2026-07-01T00:00:00Z'))).toBe(dueKey(timed('2026-07-01T00:00:00Z')));
+    for (const due of [allDay('2026-07-01'), timed('2026-07-01T08:30:00Z')]) {
+      expect(dueFromKey(dueKey(due))).toEqual(due);
+    }
   });
 
   it('compares all-day dues by local date and timed dues by instant', () => {

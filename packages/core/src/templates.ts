@@ -15,7 +15,11 @@ export function suggestTemplates(title: string, templates: readonly Template[]):
       index,
       score: Math.max(
         0,
-        ...template.keywords.filter((k) => text.includes(words(k))).map((k) => words(k).length),
+        ...template.keywords
+          .map(words)
+          // A keyword of only punctuation normalises to blanks and would match an empty title.
+          .filter((k) => k.trim() && text.includes(k))
+          .map((k) => k.length),
       ),
     }))
     .filter(({ score }) => score > 0)

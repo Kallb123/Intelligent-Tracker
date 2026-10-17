@@ -93,6 +93,11 @@ export function localDateOf(zone: IANAZone, instant: Date): LocalDate {
   return formatLocalDate(toWall(zone, instant.getTime()));
 }
 
+/** The calendar date a due falls on in `zone`: its date if all-day, else its local date. */
+export function localDateOfDue(zone: IANAZone, due: Due): LocalDate {
+  return due.allDay ? due.date : localDateOf(zone, due.at);
+}
+
 /** Wall time of a due (midnight for all-day dues). */
 export function wallOfDue(zone: IANAZone, due: Due): number {
   return due.allDay ? parseLocalDate(due.date) : toWall(zone, due.at.getTime());
@@ -116,6 +121,13 @@ export function assertValidDue(due: Due): void {
 /** A string unique to the moment a due refers to; all-day and timed dues never collide. */
 export function dueKey(due: Due): string {
   return due.allDay ? `d:${due.date}` : `t:${due.at.getTime()}`;
+}
+
+/** The inverse of `dueKey`. */
+export function dueFromKey(key: string): Due {
+  return key.startsWith('d:')
+    ? { allDay: true, date: key.slice(2) }
+    : { allDay: false, at: new Date(Number(key.slice(2))) };
 }
 
 /**

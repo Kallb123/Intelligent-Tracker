@@ -5,8 +5,8 @@ import {
   UK_TEMPLATES,
   templateBodySchema,
   templateResponseSchema,
+  templateScheduleFields,
   templatesResponseSchema,
-  type TemplateBody,
 } from '@tracker/shared';
 import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -17,19 +17,6 @@ import type { ApiContext } from '../context.js';
 import { errorResponseSchema, notFound } from '../errors.js';
 import { one } from '../rows.js';
 import { withScheduleErrors } from '../tasks/fields.js';
-
-/** Validate recurrence semantics without baking a real due date into a template. */
-function validateTemplate(body: TemplateBody): void {
-  const d = body.defaults;
-  scheduleFromTask({
-    scheduleKind: d.scheduleKind ?? 'once',
-    allDay: true,
-    dueDate: '2026-01-01',
-    dueAt: null,
-    rrule: d.rrule ?? null,
-    intervalAfterCompletionDays: d.intervalAfterCompletionDays ?? null,
-  });
-}
 
 export function registerTemplateRoutes(app: FastifyInstance, ctx: ApiContext): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -91,7 +78,9 @@ export function registerTemplateRoutes(app: FastifyInstance, ctx: ApiContext): v
       },
     },
     async (request, reply) => {
-      await withScheduleErrors(() => validateTemplate(request.body));
+      await withScheduleErrors(() =>
+        scheduleFromTask(templateScheduleFields(request.body.defaults)),
+      );
       const row = one(
         await ctx.db
           .insert(template)
@@ -120,7 +109,9 @@ export function registerTemplateRoutes(app: FastifyInstance, ctx: ApiContext): v
       },
     },
     async (request) => {
-      await withScheduleErrors(() => validateTemplate(request.body));
+      await withScheduleErrors(() =>
+        scheduleFromTask(templateScheduleFields(request.body.defaults)),
+      );
       const [row] = await ctx.db
         .update(template)
         .set(request.body)

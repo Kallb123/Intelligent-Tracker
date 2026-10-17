@@ -1,4 +1,5 @@
 import {
+  dueKey,
   previewDates,
   onWorkingDay,
   RecurrenceError,
@@ -262,11 +263,7 @@ export function previewSchedule(
     const shifted = raw.map((due) =>
       form.workingDaysOnly ? onWorkingDay({ due, startAt: null }, holidays, timeZone).due : due,
     );
-    const dues = [
-      ...new Map(
-        shifted.map((due) => [due.allDay ? due.date : due.at.toISOString(), due]),
-      ).values(),
-    ].slice(0, count);
+    const dues = [...new Map(shifted.map((due) => [dueKey(due), due])).values()].slice(0, count);
     return fields.scheduleKind === 'after_completion'
       ? { dues, note: 'Later dates are set when each one is completed.' }
       : { dues };

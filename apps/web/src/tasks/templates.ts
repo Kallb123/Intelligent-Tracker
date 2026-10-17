@@ -1,25 +1,23 @@
 import { previewDates, scheduleFromTask } from '@tracker/core';
-import { templateDefaultsSchema, type Template, type TemplateBody } from '@tracker/shared';
+import {
+  templateDefaultsSchema,
+  templateScheduleFields,
+  type Template,
+  type TemplateBody,
+} from '@tracker/shared';
 import { parseRecurrence } from './recurrence-form.js';
 import { taskBody, type TaskForm } from './task-form.js';
 
 /** Apply only after confirmation; keep the task's title, people and chosen expiry/collection date. */
 export function applyTemplate(form: TaskForm, template: Template, timezone: string): TaskForm {
   const d = template.defaults;
-  const schedule = {
-    scheduleKind: d.scheduleKind ?? 'once',
-    rrule: d.rrule ?? null,
-    intervalAfterCompletionDays: d.intervalAfterCompletionDays ?? null,
-  };
+  const schedule = templateScheduleFields(d, form.dueDate);
   let dueDate = form.dueDate;
   // Calendar-anchored rules (tax deadlines, clocks) choose their next valid date.
   if (schedule.scheduleKind === 'fixed' && dueDate) {
-    const [next] = previewDates(
-      scheduleFromTask({ ...schedule, allDay: true, dueDate, dueAt: null }),
-      new Date(`${dueDate}T00:00:00Z`),
-      1,
-      { timezone },
-    );
+    const [next] = previewDates(scheduleFromTask(schedule), new Date(`${dueDate}T00:00:00Z`), 1, {
+      timezone,
+    });
     if (next?.allDay) dueDate = next.date;
   }
   return {

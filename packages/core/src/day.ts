@@ -3,10 +3,11 @@ import {
   assertValidInstant,
   fromWall,
   localDateOf,
+  localDateOfDue,
   parseLocalDate,
   resolveZone,
 } from './recurrence/calendar.js';
-import type { LocalDate } from './recurrence/types.js';
+import type { Due, LocalDate } from './recurrence/types.js';
 
 /**
  * The calendar date `now` falls on in `timezone` (default `DEFAULT_TIMEZONE`), as `YYYY-MM-DD`.
@@ -15,6 +16,11 @@ import type { LocalDate } from './recurrence/types.js';
 export function localToday(now: Date, timezone?: string): LocalDate {
   assertValidInstant(now, 'now');
   return localDateOf(resolveZone(timezone), now);
+}
+
+/** The calendar date `due` falls on in `timezone` (default `DEFAULT_TIMEZONE`). */
+export function dueLocalDate(due: Due, timezone?: string): LocalDate {
+  return localDateOfDue(resolveZone(timezone), due);
 }
 
 /**

@@ -1,15 +1,15 @@
 import {
   activity,
   clearFutureOpenOccurrences,
-  dueFromKey,
   materialiseTask,
   member,
   reassignOpenOccurrences,
+  rematerialiseTask,
   task,
   taskAssignee,
   taskMilestone,
 } from '@tracker/db';
-import { remapCursor, type Due } from '@tracker/core';
+import { remapCursor } from '@tracker/core';
 import {
   TASK_SCHEDULE_FIELDS,
   TASK_RECURRENCE_FIELDS,
@@ -295,18 +295,20 @@ export function registerTaskRoutes(app: FastifyInstance, ctx: ApiContext): void 
           });
 
           const rescheduled = TASK_SCHEDULE_FIELDS.some((field) => changed.includes(field));
-          const recurrenceChanged = TASK_RECURRENCE_FIELDS.some((field) => changed.includes(field));
-          let retainedDues: Due[] = [];
-          if (rescheduled || (archiveChanged && isArchived)) {
-            const cleared = await clearFutureOpenOccurrences(tx, row.id, { now });
-            if (!recurrenceChanged) retainedDues = cleared.sourceDueKeys.map(dueFromKey);
-          }
-          if (!isArchived) {
+          if (isArchived) {
+            if (rescheduled || archiveChanged)
+              await clearFutureOpenOccurrences(tx, row.id, { now });
+          } else {
             if (changed.includes('assigneeIds') || changed.includes('assignmentMode')) {
               await reassignOpenOccurrences(tx, row.id, { now });
             }
-            if (rescheduled || archiveChanged)
-              await materialiseTask(tx, row.id, { now, additionalDues: retainedDues });
+            if (rescheduled) {
+              // Keep the cleared dates unless the recurrence itself changed.
+              const keepDues = !TASK_RECURRENCE_FIELDS.some((field) => changed.includes(field));
+              await rematerialiseTask(tx, row.id, { now, keepDues });
+            } else if (archiveChanged) {
+              await materialiseTask(tx, row.id, { now });
+            }
           }
 
           await tx.insert(activity).values({

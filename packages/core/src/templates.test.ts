@@ -19,6 +19,12 @@ describe('UK template pack', () => {
       expect(suggestTemplates(title, UK_TEMPLATES)).toEqual([]);
     }
   });
+  it('ignores keywords that are only punctuation', () => {
+    const template = { ...UK_TEMPLATES[0]!, id: 'blank', builtIn: false, keywords: ['—', '!!!'] };
+    for (const title of ['', '—', 'anything']) {
+      expect(suggestTemplates(title, [template])).toEqual([]);
+    }
+  });
   it('ranks specific phrases first and supports user keywords', () => {
     const template = {
       ...UK_TEMPLATES[0]!,

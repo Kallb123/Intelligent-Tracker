@@ -44,9 +44,11 @@ keeps the last good cache and is retried after an hour; failures are logged.
 Allow outbound HTTPS to `www.gov.uk` when deploying behind an egress firewall.
 Other regions are not synced by this PR.
 
-A successful refresh replaces the division's snapshot, including withdrawn dates,
-and regenerates future unstarted occurrences of working-day tasks when dates
-change. Started, completed, skipped and overdue occurrences are kept. The seed
+A successful refresh replaces the division's snapshot, including withdrawn dates.
+When dates change, working-day tasks re-plan only the future unstarted occurrences
+that an added or withdrawn date can move. Started, completed, skipped and overdue
+occurrences are kept. A task with a broken schedule keeps its occurrences, is
+logged, and does not stop the refresh. The seed
 command supplies offline England/Wales reference dates for 2025–2027 without
 overwriting existing cached rows. After a successful sync, seeding is disabled so a restart cannot restore withdrawn dates. A fresh installation without a successful sync
 or seed has weekend-only scheduling until a cache is available; the editor shows
