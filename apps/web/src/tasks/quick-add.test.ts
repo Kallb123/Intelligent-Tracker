@@ -1,7 +1,7 @@
 import { parseQuickAdd } from '@tracker/core';
 import { UK_TEMPLATES, taskBodySchema } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
-import { highlightMatches, quickAddBody, quickAddForm, quickAddTask } from './quick-add.js';
+import { highlightMatches, quickAddBody, quickAddForm } from './quick-add.js';
 
 const TZ = 'Europe/London';
 const NOW = new Date('2026-10-11T10:00:00Z');
@@ -15,20 +15,6 @@ const parse = (text: string) =>
   parseQuickAdd(text, { now: NOW, timezone: TZ, members, templates: UK_TEMPLATES });
 
 const EXAMPLE = 'Car insurance renews 1/11 every year, sort it a month before';
-
-describe('quickAddTask', () => {
-  it('assigns the person adding it when the text named nobody', () => {
-    const task = quickAddTask(parse(EXAMPLE), ME);
-    expect(task.assigneeIds).toEqual([ME]);
-    expect(quickAddTask(parse(EXAMPLE), undefined).assigneeIds).toEqual([]);
-  });
-
-  it('keeps an assignee named in the text', () => {
-    expect(quickAddTask(parse('Put the bins out every Monday @Sam'), ME).assigneeIds).toEqual([
-      SAM,
-    ]);
-  });
-});
 
 describe('quickAddBody', () => {
   it('is a body the api accepts, with only what was understood or set by a template', () => {
@@ -44,6 +30,14 @@ describe('quickAddBody', () => {
       assigneeIds: [ME],
     });
     expect(body.milestones?.map((m) => m.title)).toEqual(['Get quotes', 'Decide', 'Renew']);
+  });
+
+  it('assigns the person adding it when the text named nobody, and keeps a named assignee', () => {
+    expect(quickAddBody(parse(EXAMPLE), ME).assigneeIds).toEqual([ME]);
+    expect(quickAddBody(parse(EXAMPLE), undefined).assigneeIds).toEqual([]);
+    expect(quickAddBody(parse('Put the bins out every Monday @Sam'), ME).assigneeIds).toEqual([
+      SAM,
+    ]);
   });
 
   it('leaves the reminder profile to the api when no template set it', () => {

@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { taskFieldsIssues, taskPatchSchema, type TaskCrossFieldInput } from './tasks.js';
+import {
+  MAX_TITLE_LENGTH,
+  taskFieldsIssues,
+  taskPatchSchema,
+  type TaskCrossFieldInput,
+} from './tasks.js';
 
 /** A template never carries a person's assignment or an expired due date. */
 export const templateDefaultsSchema = taskPatchSchema
@@ -41,7 +46,7 @@ export function templateScheduleFields(
 
 export const templateBodySchema = z
   .object({
-    title: z.string().trim().min(1).max(200),
+    title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
     keywords: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
     defaults: templateDefaultsSchema,
   })

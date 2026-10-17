@@ -34,15 +34,6 @@ export async function createQuickAddDraft(
   );
 }
 
-/** Notes which Telegram message carries the draft's card. */
-export async function recordQuickAddCard(
-  db: DbOrTransaction,
-  draftId: string,
-  card: { telegramChatId: number; telegramMessageId: number },
-): Promise<void> {
-  await db.update(quickAddDraft).set(card).where(eq(quickAddDraft.id, draftId));
-}
-
 /** The draft of this household that has not expired, or null: gone, expired or someone else's. */
 export async function findQuickAddDraft(
   db: DbOrTransaction,

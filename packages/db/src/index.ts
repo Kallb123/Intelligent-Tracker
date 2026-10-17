@@ -109,7 +109,6 @@ export {
   findQuickAddDraft,
   pruneQuickAddDrafts,
   QUICK_ADD_DRAFT_TTL_MS,
-  recordQuickAddCard,
   takeQuickAddDraft,
 } from './telegram-quick-add.js';
 export { generateToken, hashToken } from './tokens.js';

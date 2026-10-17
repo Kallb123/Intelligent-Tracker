@@ -42,6 +42,37 @@ describe('findDateTime: numeric dates', () => {
     }
   });
 
+  it('does not read a fraction or "24/7" as a date', () => {
+    for (const text of [
+      'Buy 3/4 inch bolts',
+      'Buy 3/4 inches of pipe',
+      'Buy 3/4" bolts',
+      'Buy 3/4in bolts',
+      'Cut 1/2 cm off',
+      'Buy 1/2 kg flour',
+      'Add 1/4 tsp salt',
+      'Add 1/2 cup sugar',
+      'Fill the tank 3/4 full',
+      'Drive 1/2 mile to the shop',
+      'Sale 1/2 price tomatoes',
+      'Get 1/3 off',
+      'Eat 1/4 of the cake',
+      'Open 24/7 shop',
+      'Call the 24/7 helpline',
+    ]) {
+      expect(read(text), text).toMatchObject({ date: undefined, pieces: [] });
+    }
+  });
+
+  it('still reads a day and month that merely look like a fraction', () => {
+    expect(read('Pay 1/11')).toMatchObject({ date: '2026-11-01', pieces: ['date:1/11'] });
+    expect(read('MOT due 14/03')).toMatchObject({ date: '2027-03-14' });
+    expect(read('Insurance renews 1/11 every year').date).toBe('2026-11-01');
+    expect(read('Party 1/11 in London').date).toBe('2026-11-01');
+    expect(read('Party 3/4 in March').date).toBe('2027-04-03');
+    expect(read('Dentist due 24/7').date).toBe('2027-07-24');
+  });
+
   it('takes the connector word with the date', () => {
     expect(read('MOT due 14/03').pieces).toEqual(['date:due 14/03']);
     expect(read('Pay due on 14/03').pieces).toEqual(['date:due on 14/03']);
@@ -124,6 +155,42 @@ describe('findDateTime: spoken dates', () => {
     ]) {
       expect(read(text), text).toMatchObject({ date: undefined, time: undefined, pieces: [] });
     }
+  });
+
+  it('keeps the day of "tomorrow at 5" and leaves the unclear hour out', () => {
+    expect(read('Fix boiler tomorrow at 5')).toEqual({
+      date: '2026-10-18',
+      time: undefined,
+      implied: undefined,
+      pieces: ['date:tomorrow'],
+    });
+    expect(read('Fix boiler at 5 tomorrow')).toMatchObject({
+      date: '2026-10-18',
+      time: undefined,
+      pieces: ['date:tomorrow'],
+    });
+    expect(read('Fix boiler by tomorrow at 5 please').pieces).toEqual(['date:by tomorrow']);
+    expect(read('Boiler Friday at 5')).toMatchObject({
+      date: '2026-10-23',
+      pieces: ['date:Friday'],
+    });
+    expect(read('Boiler 25th December at 5')).toMatchObject({
+      date: '2026-12-25',
+      time: undefined,
+      pieces: ['date:25th December'],
+    });
+  });
+
+  it('still takes an hour that is clear along with its day', () => {
+    expect(read('Fix boiler tomorrow at 5pm')).toMatchObject({
+      date: '2026-10-18',
+      time: '17:00',
+      pieces: ['date:tomorrow at 5pm'],
+    });
+    expect(read('Fix boiler tomorrow at 5:30')).toMatchObject({
+      date: '2026-10-18',
+      time: '05:30',
+    });
   });
 
   it('reads times that are clear without a meridiem', () => {

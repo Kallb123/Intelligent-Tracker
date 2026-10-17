@@ -9,7 +9,6 @@ import {
   findQuickAddDraft,
   pruneQuickAddDrafts,
   QUICK_ADD_DRAFT_TTL_MS,
-  recordQuickAddCard,
   takeQuickAddDraft,
 } from './telegram-quick-add.js';
 import { listMembers } from './members.js';
@@ -68,7 +67,7 @@ describe.skipIf(!adminUrl)('quick-add drafts (integration)', () => {
 
   const later = (ms: number) => new Date(NOW.getTime() + ms);
 
-  it('stores the parsed task for its author, and notes the card it was sent as', async () => {
+  it('stores the parsed task for its author', async () => {
     const { h, m } = await setup();
 
     const draft = await createQuickAddDraft(db, {
@@ -77,17 +76,19 @@ describe.skipIf(!adminUrl)('quick-add drafts (integration)', () => {
       task: TASK,
       now: NOW,
     });
-    await recordQuickAddCard(db, draft.id, {
-      telegramChatId: -1_001_234_567_890,
-      telegramMessageId: 7,
-    });
 
-    expect(await findQuickAddDraft(db, { id: draft.id, householdId: h.id, now: NOW })).toEqual({
-      ...draft,
-      telegramChatId: -1_001_234_567_890,
-      telegramMessageId: 7,
-    });
+    expect(await findQuickAddDraft(db, { id: draft.id, householdId: h.id, now: NOW })).toEqual(
+      draft,
+    );
     expect(draft).toMatchObject({ householdId: h.id, memberId: m.id, task: TASK, createdAt: NOW });
+    // Nothing about the Telegram message is kept: nothing reads it.
+    expect(Object.keys(draft).sort()).toEqual([
+      'createdAt',
+      'householdId',
+      'id',
+      'memberId',
+      'task',
+    ]);
   });
 
   it('does not find a draft of another household', async () => {

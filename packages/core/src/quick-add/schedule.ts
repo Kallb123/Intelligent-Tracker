@@ -31,14 +31,25 @@ function weekdayOf(date: LocalDate): WeekdayCode {
   return WEEKDAY_BY_INDEX[new Date(`${date}T00:00:00Z`).getUTCDay()] as WeekdayCode;
 }
 
+/** The number of days in the month of a calendar date (`YYYY-MM-DD`). */
+function daysInMonthOf(date: LocalDate): number {
+  return new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)), 0)).getUTCDate();
+}
+
 /**
  * An "every N units" rule on the day of `anchor`: weekly on its weekday, monthly on its day of
  * the month, yearly on its date. Built with `rrules`, so the editor can read it back.
+ *
+ * `dayNamed` says whether the text named that day (a date, "on the 30th"). When it did not, the
+ * anchor is only today, and a monthly rule typed on the last day of a month of 29 to 31 days
+ * means "the last day" rather than a `BYMONTHDAY` that short months would skip. A named day is
+ * kept as it is, and so is a yearly 29 Feb (the builder documents that it is leap years only).
  */
 export function anchoredRule(
   unit: 'day' | 'week' | 'month' | 'year',
   interval: number,
   anchor: LocalDate,
+  dayNamed = true,
 ): string {
   const month = Number(anchor.slice(5, 7));
   const day = Number(anchor.slice(8, 10));
@@ -48,7 +59,10 @@ export function anchoredRule(
     case 'week':
       return rrules.weekly([weekdayOf(anchor)], interval);
     case 'month':
-      return rrules.monthlyOnDay(day, interval);
+      return rrules.monthlyOnDay(
+        !dayNamed && day > 28 && day === daysInMonthOf(anchor) ? -1 : day,
+        interval,
+      );
     case 'year':
       return rrules.yearly(month, day, interval);
   }
@@ -115,7 +129,9 @@ export function buildSchedule(
   }
 
   const rrule =
-    pattern.kind === 'rrule' ? pattern.rrule : anchoredRule(pattern.unit, pattern.interval, anchor);
+    pattern.kind === 'rrule'
+      ? pattern.rrule
+      : anchoredRule(pattern.unit, pattern.interval, anchor, date !== undefined);
   const from =
     date === undefined ? now : start.allDay ? startOfLocalDay(start.date, timezone) : start.at;
   const [first] = previewDates({ kind: 'fixed', rrule, start }, from, 1, { timezone });

@@ -1,6 +1,11 @@
 import type { SnoozeOption, SnoozeOptionKey } from '@tracker/core';
 import { DEFAULT_OUTBOX_MESSAGE_SIZE, type OccurrenceState } from '@tracker/db';
-import { describeReminder, instantToWall, OPEN_OCCURRENCE_STATUSES } from '@tracker/shared';
+import {
+  describeReminder,
+  instantToWall,
+  OPEN_OCCURRENCE_STATUSES,
+  sliceWhole,
+} from '@tracker/shared';
 import type { ReminderPayload } from '@tracker/shared';
 import { encodeCallback } from './callback-data.js';
 
@@ -63,10 +68,7 @@ export const MAX_NAME_LENGTH = 40;
  */
 export function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
-  let end = max - 1;
-  const last = text.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${text.slice(0, end).trimEnd()}…`;
+  return `${sliceWhole(text, max - 1).trimEnd()}…`;
 }
 
 /** One reminder line of a message. */

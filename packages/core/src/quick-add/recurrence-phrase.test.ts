@@ -79,6 +79,11 @@ describe('findRecurrence', () => {
     ['on the last day of every month', 'on the last day of every month', rrules.monthlyOnDay(-1)],
     ['on the 15th of every month', 'on the 15th of every month', rrules.monthlyOnDay(15)],
     ['every month on the 1st', 'every month on the 1st', rrules.monthlyOnDay(1)],
+    ['Pay rent on the 1st every month', 'on the 1st every month', rrules.monthlyOnDay(1)],
+    ['Pay rent the 1st every month', 'the 1st every month', rrules.monthlyOnDay(1)],
+    ['rent on the 3rd each month', 'on the 3rd each month', rrules.monthlyOnDay(3)],
+    ['on the 15th each month', 'on the 15th each month', rrules.monthlyOnDay(15)],
+    ['the 20th of each month', 'the 20th of each month', rrules.monthlyOnDay(20)],
     ['monthly on the 28th', 'monthly on the 28th', rrules.monthlyOnDay(28)],
   ])('reads %j as a rule', (text, phrase, rrule) => {
     const found = findRecurrence(text);

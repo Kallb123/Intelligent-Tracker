@@ -1,4 +1,9 @@
-import { describeQuickAdd, parseQuickAdd, RecurrenceError } from '@tracker/core';
+import {
+  describeQuickAdd,
+  parseQuickAdd,
+  RecurrenceError,
+  withDefaultAssignee,
+} from '@tracker/core';
 import {
   createQuickAddDraft,
   createTask,
@@ -8,7 +13,6 @@ import {
   listMembers,
   listTemplates,
   normaliseBody,
-  recordQuickAddCard,
   takeQuickAddDraft,
   taskColumns,
   type Household,
@@ -67,11 +71,7 @@ export async function sendQuickAddCard(
     members: members.map(({ id, name }) => ({ id, name })),
     templates: await listTemplates(db, household.id),
   });
-  // Nobody named: it is the author's.
-  const task = {
-    ...parse.task,
-    assigneeIds: parse.task.assigneeIds.length > 0 ? parse.task.assigneeIds : [author.id],
-  };
+  const task = withDefaultAssignee(parse.task, author.id);
   const rows = describeQuickAdd(
     { ...parse, task },
     { members, timezone: household.timezone, now: at },
@@ -90,21 +90,16 @@ export async function sendQuickAddCard(
         ...NO_PREVIEW,
         reply_markup: { inline_keyboard: quickAddKeyboard(draft.id, edit) },
       });
-    let sent;
     try {
-      sent = await send(publicBaseUrl ? { publicBaseUrl, text } : undefined);
+      await send(publicBaseUrl ? { publicBaseUrl, text } : undefined);
     } catch (error) {
       // Telegram refuses a link button whose address it does not accept (a local one, say). The
       // card is still worth sending without it.
       if (!publicBaseUrl || !(error instanceof GrammyError) || error.error_code !== 400)
         throw error;
       logger.warn('quick-add card refused with its link, sending without', errorFields(error));
-      sent = await send(undefined);
+      await send(undefined);
     }
-    await recordQuickAddCard(db, draft.id, {
-      telegramChatId: sent.chat.id,
-      telegramMessageId: sent.message_id,
-    });
   } catch (error) {
     // No card, so nobody can press its buttons.
     await takeQuickAddDraft(db, { id: draft.id, householdId: household.id, now: at });

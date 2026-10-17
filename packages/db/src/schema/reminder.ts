@@ -138,7 +138,7 @@ export const telegramDigest = pgTable(
  * A task the Telegram `/add` understood and is waiting for a button press to save: the parsed
  * fields behind the confirmation card. Buttons carry at most 64 bytes, so they carry this row's
  * id. Only its author may save or cancel it; a draft is deleted when it is saved, cancelled or
- * has expired (`pruneQuickAddDrafts`). The card's chat and message id are stamped once it is sent.
+ * has expired (`pruneQuickAddDrafts`).
  */
 export const quickAddDraft = pgTable('quick_add_draft', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -151,9 +151,6 @@ export const quickAddDraft = pgTable('quick_add_draft', {
     .references(() => member.id, { onDelete: 'cascade' }),
   // Checked against `taskBodySchema` again when it is saved.
   task: jsonb('task').$type<QuickAddTask>().notNull(),
-  // bigint: see household.telegram_group_chat_id.
-  telegramChatId: bigint('telegram_chat_id', { mode: 'number' }),
-  telegramMessageId: integer('telegram_message_id'),
   createdAt: createdAt(),
 });
 

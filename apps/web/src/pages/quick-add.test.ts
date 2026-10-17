@@ -178,6 +178,39 @@ describe('Quick-add bar', () => {
     expect(input(wrapper).element.value).toBe(EXAMPLE);
   });
 
+  it('says so, and opens no preview, when the household’s members cannot be loaded', async () => {
+    const { wrapper } = await open('/', {
+      'GET /api/members': apiError(500, 'server_error', 'Members are unavailable'),
+    });
+
+    await add(wrapper, 'Put the bins out every Monday @Sam');
+
+    expect(wrapper.get('.quick-add [role="alert"]').text()).toContain('Members are unavailable');
+    expect(card(wrapper).exists()).toBe(false);
+    expect(input(wrapper).element.value).toBe('Put the bins out every Monday @Sam');
+  });
+
+  it('shows an error instead of throwing when the parsed task cannot go in the editor', async () => {
+    const broken = {
+      id: 'broken',
+      title: 'Broken',
+      keywords: ['zzz'],
+      builtIn: false,
+      defaults: { leadTimeDays: 99_999 },
+    };
+    const { wrapper, router } = await open('/', {
+      'GET /api/templates': json({ templates: [broken] }),
+    });
+    await add(wrapper, 'zzz');
+
+    await button(wrapper, 'Edit details').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('.quick-add [role="alert"]').text()).toContain('cannot be opened');
+    expect(router.currentRoute.value.name).not.toBe('task-new');
+    expect(card(wrapper).exists()).toBe(true);
+  });
+
   it('keeps the preview in step with the text, and closes it when the text is cleared', async () => {
     const { wrapper } = await open('/');
     await add(wrapper, 'Water the plants every week');

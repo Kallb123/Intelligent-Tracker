@@ -88,6 +88,12 @@ export function useQuickAdd(onSaved: () => void) {
     } finally {
       busy.value = false;
     }
+    // Without the members "@Sam" would quietly be left in the title, so say so instead.
+    if (membersStore.error) {
+      preview.value = null;
+      error.value = `Could not load the household's members, so names cannot be matched. ${membersStore.error}`;
+      return;
+    }
     parse();
   }
 
@@ -118,8 +124,14 @@ export function useQuickAdd(onSaved: () => void) {
   async function editDetails(): Promise<void> {
     const current = preview.value;
     if (!current) return;
-    drafts.set(quickAddForm(current.parse, session.member?.id, session.timeZone));
-    await router.push({ name: 'task-new' });
+    error.value = '';
+    try {
+      drafts.set(quickAddForm(current.parse, session.member?.id, session.timeZone));
+      await router.push({ name: 'task-new' });
+    } catch {
+      // The parsed task is not one the editor can show (a template's default out of range, say).
+      error.value = 'That task cannot be opened in the editor. Check the text and try again.';
+    }
   }
 
   /** Closes the preview, keeping the text to adjust. */

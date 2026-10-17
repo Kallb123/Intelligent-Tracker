@@ -106,10 +106,11 @@ const RULES: Rule[] = [
     pattern: /\b(?:on\s+)?(?:the\s+)?last\s+day\s+of\s+(?:the|every|each)\s+month\b/iu,
     build: () => ({ kind: 'rrule', rrule: rrules.monthlyOnDay(-1) }),
   },
-  // "on the 15th of every month", "every month on the 15th", "monthly on the 15th".
+  // "on the 15th of every month", "the 1st every month", "every month on the 15th", "monthly on
+  // the 15th".
   {
     pattern:
-      /\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)\s+of\s+(?:every|each)\s+month\b|\b(?:(?:every|each)\s+month|monthly)\s+on\s+the\s+(\d{1,2})(?:st|nd|rd|th)\b/iu,
+      /\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)\s+(?:of\s+)?(?:every|each)\s+month\b|\b(?:(?:every|each)\s+month|monthly)\s+on\s+the\s+(\d{1,2})(?:st|nd|rd|th)\b/iu,
     build: (m) => ({
       kind: 'rrule',
       rrule: rrules.monthlyOnDay(Number(m[1] ?? m[2])),

@@ -111,8 +111,6 @@ describe.skipIf(!adminUrl)('/add confirmation cards (integration)', () => {
       expect(draft).toMatchObject({
         householdId: h.id,
         memberId: alex.id,
-        telegramChatId: CHAT_ID,
-        telegramMessageId: 1001,
         createdAt: NOW,
         task: {
           title: 'Car insurance renews',

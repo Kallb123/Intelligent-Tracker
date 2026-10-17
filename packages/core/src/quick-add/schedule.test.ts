@@ -17,6 +17,29 @@ describe('anchoredRule', () => {
   });
 });
 
+describe('anchoredRule on the last days of a month', () => {
+  it('keeps a monthly day up to the 30th when it is not the last day of its month', () => {
+    expect(anchoredRule('month', 1, '2027-01-29', false)).toBe(rrules.monthlyOnDay(29));
+    expect(anchoredRule('month', 1, '2027-01-30', false)).toBe(rrules.monthlyOnDay(30));
+    expect(anchoredRule('month', 1, '2027-02-28', false)).toBe(rrules.monthlyOnDay(28));
+  });
+
+  it('means the last day when an unnamed day is the last of a 29, 30 or 31 day month', () => {
+    expect(anchoredRule('month', 1, '2027-01-31', false)).toBe(rrules.monthlyOnDay(-1));
+    expect(anchoredRule('month', 2, '2027-04-30', false)).toBe(rrules.monthlyOnDay(-1, 2));
+    expect(anchoredRule('month', 1, '2028-02-29', false)).toBe(rrules.monthlyOnDay(-1));
+  });
+
+  it('keeps a day the text named', () => {
+    expect(anchoredRule('month', 1, '2027-01-31')).toBe(rrules.monthlyOnDay(31));
+    expect(anchoredRule('month', 1, '2027-04-30', true)).toBe(rrules.monthlyOnDay(30));
+  });
+
+  it('leaves a yearly 29 Feb as the leap day', () => {
+    expect(anchoredRule('year', 1, '2028-02-29', false)).toBe(rrules.yearly(2, 29));
+  });
+});
+
 describe('anchorTemplateRule', () => {
   it('turns a bare frequency into a rule for the due date', () => {
     expect(anchorTemplateRule('FREQ=YEARLY', '2027-03-14')).toBe(rrules.yearly(3, 14));
@@ -96,6 +119,31 @@ describe('buildSchedule', () => {
       rrule: rrules.weekly(['SA']),
       dueDate: TODAY,
     });
+  });
+
+  it('repeats "every month" typed on the 31st on the last day of each month', () => {
+    const month = { kind: 'interval', unit: 'month', interval: 1 } as const;
+    const thirtyFirst = new Date('2027-01-31T12:00:00Z');
+    expect(build({ pattern: month }, thirtyFirst)).toMatchObject({
+      rrule: rrules.monthlyOnDay(-1),
+      dueDate: '2027-01-31',
+    });
+    // The 30th is the last day of April but not of January.
+    expect(build({ pattern: month }, new Date('2027-04-30T12:00:00Z'))).toMatchObject({
+      rrule: rrules.monthlyOnDay(-1),
+    });
+    expect(build({ pattern: month }, new Date('2027-01-30T12:00:00Z'))).toMatchObject({
+      rrule: rrules.monthlyOnDay(30),
+    });
+    expect(build({ pattern: month }, new Date('2027-01-29T12:00:00Z'))).toMatchObject({
+      rrule: rrules.monthlyOnDay(29),
+    });
+  });
+
+  it('keeps the 31st when a date named it', () => {
+    expect(
+      build({ date: '2027-01-31', pattern: { kind: 'interval', unit: 'month', interval: 1 } }),
+    ).toMatchObject({ rrule: rrules.monthlyOnDay(31), dueDate: '2027-01-31' });
   });
 
   it('repeats an interval rule on the date it names', () => {

@@ -3,8 +3,6 @@ CREATE TABLE "quick_add_draft" (
 	"household_id" uuid NOT NULL,
 	"member_id" uuid NOT NULL,
 	"task" jsonb NOT NULL,
-	"telegram_chat_id" bigint,
-	"telegram_message_id" integer,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint

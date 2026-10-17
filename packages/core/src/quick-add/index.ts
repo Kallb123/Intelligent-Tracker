@@ -1,4 +1,4 @@
-export { parseQuickAdd } from './parse.js';
+export { parseQuickAdd, withDefaultAssignee } from './parse.js';
 export { describeQuickAdd, type QuickAddRow } from './summary.js';
 export type {
   QuickAddContext,

@@ -1,5 +1,5 @@
 {
-  "id": "10bd8624-da0a-4e66-b69c-32cc3e3d4c40",
+  "id": "a705078d-24b7-4d6f-bc95-b2041162abf7",
   "prevId": "856a9c5a-04df-4e0f-81a2-cc60eb6d1838",
   "version": "7",
   "dialect": "postgresql",
@@ -1019,18 +1019,6 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
-        },
-        "telegram_chat_id": {
-          "name": "telegram_chat_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "telegram_message_id": {
-          "name": "telegram_message_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",

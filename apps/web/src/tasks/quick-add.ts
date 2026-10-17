@@ -1,4 +1,9 @@
-import type { QuickAddMatch, QuickAddMatchKind, QuickAddParse, QuickAddTask } from '@tracker/core';
+import {
+  withDefaultAssignee,
+  type QuickAddMatch,
+  type QuickAddMatchKind,
+  type QuickAddParse,
+} from '@tracker/core';
 import { taskBodySchema } from '@tracker/shared';
 import type { TaskInput } from '../api/types.js';
 import { formFromTask, type TaskForm } from './task-form.js';
@@ -8,19 +13,12 @@ import { formFromTask, type TaskForm } from './task-form.js';
  * is unit-tested without a DOM.
  */
 
-/** The parsed task, assigned to the person adding it when the text named nobody. */
-export function quickAddTask(parse: QuickAddParse, memberId: string | undefined): QuickAddTask {
-  const { assigneeIds } = parse.task;
-  if (assigneeIds.length > 0 || !memberId) return parse.task;
-  return { ...parse.task, assigneeIds: [memberId] };
-}
-
-/** The body for `POST /api/tasks`: the parsed task, assigned as `quickAddTask` says. */
+/** The body for `POST /api/tasks`: the parsed task, for the person adding it if it names nobody. */
 export function quickAddBody(parse: QuickAddParse, memberId: string | undefined): TaskInput {
   // The parser leaves unset optional fields out rather than setting them to undefined, which its
   // type cannot say; the api's request type is stricter about that. The parse always passes
   // `taskBodySchema`.
-  return quickAddTask(parse, memberId) as TaskInput;
+  return withDefaultAssignee(parse.task, memberId) as TaskInput;
 }
 
 /** The task editor's form for the parsed task, so "Edit details" starts from what was understood. */
@@ -29,7 +27,7 @@ export function quickAddForm(
   memberId: string | undefined,
   timeZone: string,
 ): TaskForm {
-  return formFromTask(taskBodySchema.parse(quickAddTask(parse, memberId)), timeZone);
+  return formFromTask(taskBodySchema.parse(withDefaultAssignee(parse.task, memberId)), timeZone);
 }
 
 /** A stretch of the typed text; `kind` is set when the parser understood it. */

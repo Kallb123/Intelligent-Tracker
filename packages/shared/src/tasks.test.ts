@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_TITLE_LENGTH,
   occurrenceListQuerySchema,
   snoozeBodySchema,
   taskBodySchema,
@@ -44,6 +45,16 @@ describe('taskBodySchema', () => {
       assigneeIds: [],
       milestones: [],
     });
+  });
+
+  it('accepts a title of exactly MAX_TITLE_LENGTH and no more', () => {
+    const body = { scheduleKind: 'once' };
+    expect(taskBodySchema.safeParse({ ...body, title: 'a'.repeat(MAX_TITLE_LENGTH) }).success).toBe(
+      true,
+    );
+    expect(
+      taskBodySchema.safeParse({ ...body, title: 'a'.repeat(MAX_TITLE_LENGTH + 1) }).success,
+    ).toBe(false);
   });
 
   it('accepts an undated one-off task', () => {

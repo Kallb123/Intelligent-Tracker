@@ -1,4 +1,5 @@
 import type { QuickAddRow } from '@tracker/core';
+import { MAX_TITLE_LENGTH } from '@tracker/shared';
 import type { InlineKeyboardButton } from 'grammy/types';
 import { encodeQuickAddCallback } from './callback-data.js';
 import { plain } from './digest.js';
@@ -13,8 +14,6 @@ import { MAX_NAME_LENGTH, truncate } from './render.js';
  * (4096 characters): a title and at most eight rows.
  */
 
-/** A task title is at most this long (the api's limit), so the card never cuts a real title. */
-const MAX_TITLE_LENGTH = 200;
 /** A row's value (a long milestone list, say) is cut to this. */
 const MAX_ROW_LENGTH = 400;
 

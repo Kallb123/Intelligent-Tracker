@@ -1,7 +1,7 @@
-import { taskBodySchema, type Template } from '@tracker/shared';
+import { MAX_TITLE_LENGTH, taskBodySchema, type Template } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
 import { RecurrenceError } from '../recurrence/errors.js';
-import { parseQuickAdd } from './parse.js';
+import { parseQuickAdd, withDefaultAssignee } from './parse.js';
 import { ALEX, context, SAM } from './test-util.js';
 
 const parse = (text: string, overrides = {}) => parseQuickAdd(text, context(overrides));
@@ -108,7 +108,18 @@ describe('parseQuickAdd', () => {
   });
 
   it('limits the title to what the api accepts', () => {
-    expect(parse(`${'a'.repeat(250)} tomorrow`).task.title).toHaveLength(200);
+    expect(parse(`${'a'.repeat(250)} tomorrow`).task.title).toHaveLength(MAX_TITLE_LENGTH);
+  });
+
+  it('does not split an emoji when it cuts a long title', () => {
+    // The emoji's two halves sit at indexes 199 and 200, right on the limit.
+    const { title } = parse(`${'a'.repeat(199)}😀${'b'.repeat(50)} tomorrow`).task;
+    expect(title).toBe('a'.repeat(199));
+    expect(() => encodeURIComponent(title)).not.toThrow();
+    const { task } = parse(`${'a'.repeat(198)}😀${'b'.repeat(50)} tomorrow`);
+    expect(task.title).toBe(`${'a'.repeat(198)}😀`);
+    expect(taskBodySchema.safeParse(task).success).toBe(true);
+    expect(() => JSON.stringify(task)).not.toThrow();
   });
 
   it('names the assignee but leaves unknown names in the title', () => {
@@ -138,5 +149,23 @@ describe('parseQuickAdd', () => {
 
   it('throws for an unknown time zone', () => {
     expect(() => parse('bins', { timezone: 'Mars/Olympus' })).toThrow(RecurrenceError);
+  });
+});
+
+describe('withDefaultAssignee', () => {
+  const task = parse('bins tomorrow').task;
+
+  it('gives a task nobody was named for to the author', () => {
+    expect(withDefaultAssignee(task, ALEX.id).assigneeIds).toEqual([ALEX.id]);
+  });
+
+  it('keeps an assignee named in the text', () => {
+    const named = parse('bins tomorrow @Sam').task;
+    expect(withDefaultAssignee(named, ALEX.id)).toBe(named);
+  });
+
+  it('leaves the task alone when there is no author', () => {
+    expect(withDefaultAssignee(task, undefined)).toBe(task);
+    expect(task.assigneeIds).toEqual([]);
   });
 });

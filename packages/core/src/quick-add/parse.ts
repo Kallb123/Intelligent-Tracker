@@ -1,3 +1,4 @@
+import { MAX_TITLE_LENGTH, sliceWhole } from '@tracker/shared';
 import { findAssignee } from './assignee.js';
 import { findDateTime } from './date.js';
 import { findLeadTime, findReminderOffset } from './lead.js';
@@ -12,9 +13,6 @@ import type {
   QuickAddParse,
   QuickAddTask,
 } from './types.js';
-
-/** The longest title the api accepts. */
-const MAX_TITLE = 200;
 
 /**
  * Turns one line of typed text into a task, in the stages of PLAN 4.8: recurrence phrase, lead
@@ -76,7 +74,8 @@ export function parseQuickAdd(text: string, ctx: QuickAddContext): QuickAddParse
   }
 
   const task: QuickAddTask = {
-    title: title.slice(0, MAX_TITLE).trim(),
+    // Cut without splitting an emoji: a lone surrogate would not survive Postgres' jsonb.
+    title: sliceWhole(title, MAX_TITLE_LENGTH).trim(),
     ...schedule,
     assigneeIds: assignee ? [assignee.member.id] : [],
     workingDaysOnly: false,
@@ -90,4 +89,16 @@ export function parseQuickAdd(text: string, ctx: QuickAddContext): QuickAddParse
       : {}),
   };
   return { task, template, matched };
+}
+
+/**
+ * `task`, assigned to `authorId` when the text named nobody: a job nobody was asked to do is the
+ * one who added it. A task that names someone, or no author to give it to, comes back unchanged.
+ */
+export function withDefaultAssignee(
+  task: QuickAddTask,
+  authorId: string | undefined,
+): QuickAddTask {
+  if (task.assigneeIds.length > 0 || !authorId) return task;
+  return { ...task, assigneeIds: [authorId] };
 }

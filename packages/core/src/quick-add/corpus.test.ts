@@ -17,7 +17,7 @@ import { ALEX, context, MEMBERS, NOW, SAM, TZ } from './test-util.js';
  * - a recurring task with no date starts on its first match from now, and "every month" with
  *   no date repeats on today's date;
  * - what the parser does not understand ("Feed cat every morning", "Call dentist at 5") stays in
- *   the title, and "for mum" is not an assignee because mum is not a member.
+ *   the title (so does the unclear hour of "tomorrow at 5", while "tomorrow" is read), and "for mum" is not an assignee because mum is not a member.
  */
 interface Expected {
   title: string;
@@ -444,6 +444,49 @@ const CORPUS: [text: string, expected: Expected][] = [
     },
   ],
   ['Feed cat every morning', { title: 'Feed cat every morning' }],
+  ['Buy 3/4 inch bolts', { title: 'Buy 3/4 inch bolts' }],
+  ['Buy 1/2 kg flour', { title: 'Buy 1/2 kg flour' }],
+  ['Check the 1/2 price offers', { title: 'Check the 1/2 price offers' }],
+  ['Cancel the 24/7 helpline', { title: 'Cancel the 24/7 helpline' }],
+  ['Fix boiler tomorrow at 5', { title: 'Fix boiler at 5', due: '2026-10-18' }],
+  ['Call plumber at 5 tomorrow', { title: 'Call plumber at 5', due: '2026-10-18' }],
+  ['Fix boiler tomorrow at 5pm', { title: 'Fix boiler', due: '2026-10-18T16:00:00.000Z' }],
+  [
+    'Pay rent on the 1st every month',
+    {
+      title: 'Pay rent',
+      kind: 'fixed',
+      due: '2026-11-01',
+      rrule: 'FREQ=MONTHLY;INTERVAL=1;BYMONTHDAY=1',
+    },
+  ],
+  [
+    'Pay rent every month on the 1st',
+    {
+      title: 'Pay rent',
+      kind: 'fixed',
+      due: '2026-11-01',
+      rrule: 'FREQ=MONTHLY;INTERVAL=1;BYMONTHDAY=1',
+    },
+  ],
+  [
+    'Meter reading the 20th of each month',
+    {
+      title: 'Meter reading',
+      kind: 'fixed',
+      due: '2026-10-20',
+      rrule: 'FREQ=MONTHLY;INTERVAL=1;BYMONTHDAY=20',
+    },
+  ],
+  [
+    'Insurance renews 1/11 every year',
+    {
+      title: 'Insurance renews',
+      kind: 'fixed',
+      due: '2026-11-01',
+      rrule: 'FREQ=YEARLY;INTERVAL=1;BYMONTH=11;BYMONTHDAY=1',
+    },
+  ],
   ['Flu jab 2 Nov 9am', { title: 'Flu jab', due: '2026-11-02T09:00:00.000Z' }],
   ['Call HMRC by Friday', { title: 'Call HMRC', due: '2026-10-23' }],
   ['Do taxes @sam', { title: 'Do taxes', who: 'sam' }],
