@@ -57,7 +57,13 @@ describe('findDateTime: numeric dates', () => {
       'Sale 1/2 price tomatoes',
       'Get 1/3 off',
       'Eat 1/4 of the cake',
+      'Buy 3/4 in decking',
+      'Buy 1/4 in marble top',
+      'Buy 3/4 in. bolts',
       'Open 24/7 shop',
+      'Shop available at 24/7',
+      'Helpline from 24/7',
+      'Helpline by 24/7',
       'Call the 24/7 helpline',
     ]) {
       expect(read(text), text).toMatchObject({ date: undefined, pieces: [] });
@@ -71,6 +77,11 @@ describe('findDateTime: numeric dates', () => {
     expect(read('Party 1/11 in London').date).toBe('2026-11-01');
     expect(read('Party 3/4 in March').date).toBe('2027-04-03');
     expect(read('Dentist due 24/7').date).toBe('2027-07-24');
+    expect(read('Dentist on 24/7').date).toBe('2027-07-24');
+    expect(read('Dentist before 24/7').date).toBe('2027-07-24');
+    expect(read('Passport expires 24/7').date).toBe('2027-07-24');
+    expect(read('Party 3/4 in april').date).toBe('2027-04-03');
+    expect(read('Party 3/4 in sept').date).toBe('2027-04-03');
   });
 
   it('takes the connector word with the date', () => {
@@ -179,6 +190,15 @@ describe('findDateTime: spoken dates', () => {
       time: undefined,
       pieces: ['date:25th December'],
     });
+  });
+
+  it('keeps a leading day number, which is not an hour', () => {
+    expect(read('Boiler 25 december at 5')).toMatchObject({
+      date: '2026-12-25',
+      time: undefined,
+      pieces: ['date:25 december'],
+    });
+    expect(read('Boiler 12 oct at 5')).toMatchObject({ date: '2027-10-12', time: undefined });
   });
 
   it('still takes an hour that is clear along with its day', () => {

@@ -33,7 +33,8 @@ const BARE_DURATION =
   /^(?:\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:second|minute|hour|day|week|fortnight|month|year)s?$/i;
 // An hour with no am/pm, on the end or start of a phrase: "tomorrow at 5", "at 5 tomorrow".
 const UNCLEAR_HOUR_END = /\s+(?:at\s+|@\s*)?\d{1,2}$/i;
-const UNCLEAR_HOUR_START = /^(?:at\s+|@\s*)?\d{1,2}\s+/i;
+// Only with its "at": a leading number may be the day ("25 december at 5").
+const UNCLEAR_HOUR_START = /^(?:at\s+|@\s*)\d{1,2}\s+/i;
 // A clock time that is clear: "5pm", "17:30", "9.15", "noon", "tomorrow morning".
 const CLEAR_TIME =
   /\d\s*(?:am|pm|a\.m\.|p\.m\.)|\d[:.h]\d|o'?clock|noon|midnight|morning|afternoon|evening|night/i;
@@ -42,8 +43,14 @@ const CLEAR_TIME =
 // Units may be stuck to the number ("1/2kg") or be a quote mark ("3/4\"").
 const MEASURE =
   /^\s*(?:["”″]|(?:inch(?:es)?|cm|mm|ft|foot|feet|yards?|m|metres?|meters?|miles?|kg|g|lbs?|oz|ml|l|litres?|liters?|pints?|cups?|tsp|tbsp|teaspoons?|tablespoons?|packs?|tins?|hours?|hrs?|minutes?|mins?|days?|weeks?|price|full|off|of)\b)/i;
-// "in" is a unit only after a plain fraction ("3/4 in bolts"): "1/11 in London" is a date.
-const INCH_ABBREVIATION = /^\s*in\b(?!\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))/i;
+// "in" is a unit only after a plain fraction ("3/4 in bolts"): "1/11 in London" is a date. A month
+// name after it ("3/4 in March") keeps it one.
+const MONTH_NAME =
+  /(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/
+    .source;
+const INCH_ABBREVIATION = new RegExp(`^\\s*in\\b(?!\\s+${MONTH_NAME})`, 'i');
+// Words that clearly mark "24/7" as 24 July; "at 24/7" or "from 24/7" is the idiom.
+const DATE_ONLY_CONNECTOR = /\b(?:due(?:\s+(?:on|by))?|on|until|till|before|renews|expires)\s+$/i;
 const FRACTION_DENOMINATORS = new Set([2, 4, 8, 16, 32, 64]);
 
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -88,7 +95,7 @@ function notADate(text: string, m: RegExpMatchArray): boolean {
   const denominator = Number(m[3]);
   // "open 24/7", but "due 24/7" is 24 July.
   if (numerator === 24 && denominator === 7) {
-    return !DATE_CONNECTOR.test(text.slice(0, m.index));
+    return !DATE_ONLY_CONNECTOR.test(text.slice(0, m.index));
   }
   if (numerator >= denominator) return false;
   return (

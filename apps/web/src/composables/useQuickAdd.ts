@@ -6,6 +6,7 @@ import {
 } from '@tracker/core';
 import { UK_TEMPLATES, type Template } from '@tracker/shared';
 import { ref, watch } from 'vue';
+import { ZodError } from 'zod';
 import { useRouter } from 'vue-router';
 import { describeError, getApi } from '../api/index.js';
 import { useMembersStore } from '../stores/members.js';
@@ -88,8 +89,9 @@ export function useQuickAdd(onSaved: () => void) {
     } finally {
       busy.value = false;
     }
-    // Without the members "@Sam" would quietly be left in the title, so say so instead.
-    if (membersStore.error) {
+    // Without the members "@Sam" would quietly be left in the title, so say so instead. (A failed
+    // reload elsewhere leaves the list it had, which is still good.)
+    if (membersStore.error && !membersStore.loaded) {
       preview.value = null;
       error.value = `Could not load the household's members, so names cannot be matched. ${membersStore.error}`;
       return;
@@ -128,7 +130,8 @@ export function useQuickAdd(onSaved: () => void) {
     try {
       drafts.set(quickAddForm(current.parse, session.member?.id, session.timeZone));
       await router.push({ name: 'task-new' });
-    } catch {
+    } catch (err) {
+      if (!(err instanceof ZodError)) throw err;
       // The parsed task is not one the editor can show (a template's default out of range, say).
       error.value = 'That task cannot be opened in the editor. Check the text and try again.';
     }

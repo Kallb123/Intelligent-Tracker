@@ -2,6 +2,8 @@ import type { MemberDto } from '@tracker/shared';
 import { UK_TEMPLATES } from '@tracker/shared';
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useMembersStore } from '../stores/members.js';
+import { useTaskDraftStore } from '../stores/task-draft.js';
 import { apiError, fakeServer, json, mountApp, session, type Handler } from '../test-util.js';
 
 // Sunday 11 October 2026, 11:00 in London (BST).
@@ -188,6 +190,34 @@ describe('Quick-add bar', () => {
     expect(wrapper.get('.quick-add [role="alert"]').text()).toContain('Members are unavailable');
     expect(card(wrapper).exists()).toBe(false);
     expect(input(wrapper).element.value).toBe('Put the bins out every Monday @Sam');
+  });
+
+  it('still previews when a reload of the members failed but the list is there', async () => {
+    const { wrapper, pinia } = await open('/');
+    const members = useMembersStore(pinia);
+    expect(members.loaded).toBe(true);
+    members.error = 'Reload failed';
+
+    await add(wrapper, 'Put the bins out every Monday @Sam');
+
+    expect(card(wrapper).exists()).toBe(true);
+    expect(rows(wrapper)['For']).toBe('Sam');
+  });
+
+  it('does not hide a failure other than an unreadable task', async () => {
+    const { wrapper, pinia } = await open('/');
+    const failures: unknown[] = [];
+    wrapper.vm.$.appContext.config.errorHandler = (err) => failures.push(err);
+    vi.spyOn(useTaskDraftStore(pinia), 'set').mockImplementation(() => {
+      throw new Error('storage broke');
+    });
+    await add(wrapper, 'Water the plants every week');
+
+    await button(wrapper, 'Edit details').trigger('click');
+    await flushPromises();
+
+    expect(failures).toEqual([new Error('storage broke')]);
+    expect(wrapper.find('.quick-add [role="alert"]').exists()).toBe(false);
   });
 
   it('shows an error instead of throwing when the parsed task cannot go in the editor', async () => {

@@ -22,7 +22,7 @@ import { MAX_NAME_LENGTH, TELEGRAM_MESSAGE_LIMIT, truncate } from './render.js';
  */
 
 /** A task title is cut to this in a line. */
-const MAX_TITLE_LENGTH = 120;
+const DIGEST_TITLE_LENGTH = 120;
 /** A bank holiday's name is cut to this. */
 const MAX_HOLIDAY_LENGTH = 60;
 
@@ -73,7 +73,7 @@ function startsText(item: AgendaItem, { today, timeZone }: Context): string {
 /** `• Title — Name (when)`. */
 function itemLine(item: AgendaItem, when: string): string {
   const who = item.assigneeName ? plain(item.assigneeName, MAX_NAME_LENGTH) : 'Anyone';
-  return `• ${plain(item.title, MAX_TITLE_LENGTH)} — ${who}${when ? ` (${when})` : ''}`;
+  return `• ${plain(item.title, DIGEST_TITLE_LENGTH)} — ${who}${when ? ` (${when})` : ''}`;
 }
 
 /** A line of a section: a job (counted when left out) or a note (never left out). */

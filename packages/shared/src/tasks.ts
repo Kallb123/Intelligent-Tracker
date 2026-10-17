@@ -43,7 +43,7 @@ const MAX_MILESTONES = 20;
 const MAX_DAYS = 3650;
 
 export const milestoneInputSchema = z.object({
-  title: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
   offsetDaysBeforeDue: z.number().int().min(0).max(MAX_DAYS),
 });
 
