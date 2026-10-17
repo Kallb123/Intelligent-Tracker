@@ -53,6 +53,8 @@ export function toTaskDto(
     dueAt: t.dueAt?.toISOString() ?? null,
     rrule: t.rrule,
     intervalAfterCompletionDays: t.intervalAfterCompletionDays,
+    workingDaysOnly: t.workingDaysOnly,
+    remindOffsetDays: t.remindOffsetDays,
     leadTimeDays: t.leadTimeDays,
     reminderProfile: t.reminderProfile,
     assignmentMode: t.assignmentMode,

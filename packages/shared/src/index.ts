@@ -25,3 +25,5 @@ export * from './tasks.js';
 export * from './telegram.js';
 export * from './ticker.js';
 export * from './wall-time.js';
+export * from './templates.js';
+export * from './bank-holidays.js';

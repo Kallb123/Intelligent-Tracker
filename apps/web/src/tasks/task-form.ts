@@ -1,5 +1,6 @@
 import {
   previewDates,
+  onWorkingDay,
   RecurrenceError,
   scheduleFromTask,
   type Due,
@@ -48,6 +49,8 @@ export interface TaskForm {
   /** `HH:MM`, only for a timed task. */
   dueTime: string;
   recurrence: RecurrenceState;
+  workingDaysOnly: boolean;
+  remindOffsetDays: number;
   leadTimeDays: number | null;
   milestones: MilestoneForm[];
   /** '' lets the api use the household's default profile. */
@@ -81,6 +84,8 @@ export function newTaskForm(today: string, memberId: string): TaskForm {
     dueDate: today,
     dueTime: '09:00',
     recurrence: defaultRecurrence('once'),
+    workingDaysOnly: false,
+    remindOffsetDays: 0,
     leadTimeDays: null,
     milestones: [],
     reminderProfile: '',
@@ -106,6 +111,8 @@ export function formFromTask(task: TaskDto, timeZone: string): TaskForm {
     dueDate: wall?.date ?? task.dueDate ?? '',
     dueTime: wall?.time ?? '09:00',
     recurrence: parseRecurrence(task),
+    workingDaysOnly: task.workingDaysOnly,
+    remindOffsetDays: task.remindOffsetDays,
     leadTimeDays: task.leadTimeDays,
     milestones: task.milestones.map((m) => ({ title: m.title, days: m.offsetDaysBeforeDue })),
     reminderProfile: task.reminderProfile,
@@ -189,6 +196,8 @@ export function taskBody(form: TaskForm, timeZone: string): TaskInput {
     dueAt: schedule.dueAt ? schedule.dueAt.toISOString() : null,
     rrule: schedule.rrule,
     intervalAfterCompletionDays: schedule.intervalAfterCompletionDays,
+    workingDaysOnly: form.workingDaysOnly,
+    remindOffsetDays: form.remindOffsetDays,
     leadTimeDays: form.leadTimeDays,
     ...(form.reminderProfile !== '' && { reminderProfile: form.reminderProfile }),
     assignmentMode: form.assignmentMode,
@@ -226,6 +235,7 @@ export function previewSchedule(
   timeZone: string,
   from: Date,
   count = 5,
+  holidays: ReadonlySet<string> = new Set(),
 ): DatesPreview {
   try {
     const fields = scheduleFields(form, timeZone);
@@ -243,7 +253,20 @@ export function previewSchedule(
           : 'Choose a due date and time to see the next dates.',
       };
     }
-    const dues = previewDates(scheduleFromTask(fields), from, count, { timezone: timeZone });
+    const raw = previewDates(
+      scheduleFromTask(fields),
+      from,
+      form.workingDaysOnly ? count * 7 : count,
+      { timezone: timeZone },
+    );
+    const shifted = raw.map((due) =>
+      form.workingDaysOnly ? onWorkingDay({ due, startAt: null }, holidays, timeZone).due : due,
+    );
+    const dues = [
+      ...new Map(
+        shifted.map((due) => [due.allDay ? due.date : due.at.toISOString(), due]),
+      ).values(),
+    ].slice(0, count);
     return fields.scheduleKind === 'after_completion'
       ? { dues, note: 'Later dates are set when each one is completed.' }
       : { dues };

@@ -29,6 +29,8 @@ describe('taskBodySchema', () => {
     const parsed = taskBodySchema.parse({ ...weekly, title: '  Bins  ', category: ' Home ' });
     expect(parsed).toEqual({
       title: 'Bins',
+      workingDaysOnly: false,
+      remindOffsetDays: 0,
       notes: '',
       category: 'Home',
       tags: [],

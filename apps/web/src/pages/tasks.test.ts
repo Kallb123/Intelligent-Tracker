@@ -1,4 +1,5 @@
 import type { MemberDto, OccurrenceDto, TaskDto } from '@tracker/shared';
+import { UK_TEMPLATES } from '@tracker/shared';
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -66,6 +67,8 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     dueAt: null,
     rrule: 'FREQ=WEEKLY;INTERVAL=1;BYDAY=MO',
     intervalAfterCompletionDays: null,
+    workingDaysOnly: false,
+    remindOffsetDays: 0,
     leadTimeDays: null,
     reminderProfile: 'standard',
     assignmentMode: 'fixed',
@@ -83,6 +86,8 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
 
 const base: Record<string, Handler> = {
   'GET /api/auth/me': json(session()),
+  'GET /api/templates': json({ templates: [] }),
+  'GET /api/bank-holidays': json({ holidays: [] }),
   'GET /api/members': json({ members: [alex, sam] }),
 };
 
@@ -615,6 +620,38 @@ describe('Task editor', () => {
   };
   const previewDates = (wrapper: VueWrapper) => texts(wrapper, '.preview ol li');
 
+  it('suggests a template without applying it, then saves explicitly accepted milestones', async () => {
+    const { wrapper, server } = await open(
+      {
+        'GET /api/templates': json({ templates: UK_TEMPLATES }),
+        'POST /api/tasks': json({ task: task() }, 201),
+        'GET /api/tasks': json({ tasks: [] }),
+      },
+      '/tasks/new',
+    );
+    await fillTitle(wrapper, 'Renew car insurance');
+    expect(wrapper.get('#task-lead').element).toHaveProperty('value', '');
+    const suggested = wrapper.findAll('button').find((b) => b.text() === 'Car insurance renewal');
+    expect(suggested).toBeDefined();
+    await suggested!.trigger('click');
+    expect(wrapper.get('#task-lead').element).toHaveProperty('value', '');
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'Apply template')!
+      .trigger('click');
+    expect(wrapper.get('#task-lead').element).toHaveProperty('value', '30');
+    await save(wrapper);
+    expect(lastBody(server, 'POST /api/tasks')).toMatchObject({
+      title: 'Renew car insurance',
+      leadTimeDays: 30,
+      milestones: [
+        { title: 'Get quotes', offsetDaysBeforeDue: 30 },
+        { title: 'Decide', offsetDaysBeforeDue: 14 },
+        { title: 'Renew', offsetDaysBeforeDue: 7 },
+      ],
+    });
+  });
+
   it('labels its controls for assistive technology', async () => {
     const { wrapper } = await open({}, '/tasks/new');
     await wrapper.get('#repeat-kind').setValue('weekly');
@@ -673,6 +710,8 @@ describe('Task editor', () => {
 
     expect(lastBody(server, 'POST /api/tasks')).toEqual({
       title: 'Put the bins out',
+      workingDaysOnly: false,
+      remindOffsetDays: 0,
       notes: '',
       category: null,
       tags: [],
@@ -906,6 +945,8 @@ describe('Task editor', () => {
   it('marks members who are away in the pickers', async () => {
     const { wrapper } = await open(
       {
+        'GET /api/templates': json({ templates: [] }),
+        'GET /api/bank-holidays': json({ holidays: [] }),
         'GET /api/members': json({ members: [alex, { ...sam, awayUntil: '2026-10-14' }] }),
       },
       '/tasks/new',

@@ -1,9 +1,12 @@
 import {
   localToday,
+  dueKey,
+  onWorkingDay,
   occurrencesToMaterialise,
   RecurrenceError,
   scheduleFromTask,
   startOfLocalDay,
+  startAtFor,
   type Due,
   type MaterialisedDue,
 } from '@tracker/core';
@@ -11,7 +14,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from 'dr
 import type { DbOrTransaction } from './client.js';
 import { dueInstant, dueOf } from './due.js';
 import { assigneeIdsOf, replanRotation } from './rotation.js';
-import { household, occurrence, task } from './schema/index.js';
+import { bankHoliday, household, occurrence, task } from './schema/index.js';
 import type { NewOccurrence, Task } from './schema/index.js';
 
 /*
@@ -138,11 +141,11 @@ async function hasOpenOccurrence(db: DbOrTransaction, taskId: string): Promise<b
 export async function materialiseTask(
   db: DbOrTransaction,
   taskId: string,
-  options: { now: Date },
+  options: { now: Date; additionalDues?: readonly Due[] },
 ): Promise<MaterialiseTaskResult> {
   const { now } = options;
   const [row] = await db
-    .select({ task, timezone: household.timezone })
+    .select({ task, timezone: household.timezone, region: household.bankHolidayRegion })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId))
@@ -165,8 +168,57 @@ export async function materialiseTask(
     timezone,
     lastCompleted,
   });
+  planned.push(
+    ...(options.additionalDues ?? []).map((due) => ({
+      due,
+      startAt: startAtFor(due, t.leadTimeDays, { timezone }),
+    })),
+  );
   const assigneeId = assigneeFor(t.assignmentMode, await assigneeIdsOf(db, t.id));
-  const rows = planned.map((p) => occurrenceRow(t.id, assigneeId, now, timezone, p));
+  const holidays = t.workingDaysOnly
+    ? new Set(
+        (
+          await db
+            .select({ date: bankHoliday.date })
+            .from(bankHoliday)
+            .where(eq(bankHoliday.region, row.region))
+        ).map((h) => h.date),
+      )
+    : new Set<string>();
+  const existing = await db.select().from(occurrence).where(eq(occurrence.taskId, t.id));
+  const covered = new Set(existing.flatMap((o) => o.sourceDueKeys));
+  const byDue = new Map(
+    existing.flatMap((o) => {
+      const due = dueOf(o);
+      return due ? [[dueKey(due), o] as const] : [];
+    }),
+  );
+  const grouped = new Map<string, { planned: MaterialisedDue; sources: Set<string> }>();
+  for (const p of planned) {
+    const source = dueKey(p.due);
+    if (covered.has(source)) continue;
+    const shifted = t.workingDaysOnly ? onWorkingDay(p, holidays, timezone) : p;
+    const key = dueKey(shifted.due);
+    const group = grouped.get(key) ?? { planned: shifted, sources: new Set<string>() };
+    group.sources.add(source);
+    grouped.set(key, group);
+  }
+  const rows: NewOccurrence[] = [];
+  for (const [key, group] of grouped) {
+    const stored = byDue.get(key);
+    if (stored) {
+      // A horizon may grow to include another source date that coalesces into an existing due.
+      await db
+        .update(occurrence)
+        .set({ sourceDueKeys: [...new Set([...stored.sourceDueKeys, ...group.sources])] })
+        .where(eq(occurrence.id, stored.id));
+    } else {
+      rows.push({
+        ...occurrenceRow(t.id, assigneeId, now, timezone, group.planned),
+        sourceDueKeys: [...group.sources],
+      });
+    }
+  }
   // An undated one-off task has nothing to plan but still needs its one occurrence.
   if (schedule.kind === 'once' && schedule.due === null) {
     rows.push(occurrenceRow(t.id, assigneeId, now, timezone, null));
@@ -274,13 +326,13 @@ export async function clearFutureOpenOccurrences(
   db: DbOrTransaction,
   taskId: string,
   options: { now: Date },
-): Promise<{ deleted: number }> {
+): Promise<{ deleted: number; sourceDueKeys: string[] }> {
   const [row] = await db
     .select({ timezone: household.timezone })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId));
-  if (!row) return { deleted: 0 };
+  if (!row) return { deleted: 0, sourceDueKeys: [] };
   const today = localToday(options.now, row.timezone);
   const rows = await db
     .delete(occurrence)
@@ -295,8 +347,18 @@ export async function clearFutureOpenOccurrences(
         ),
       ),
     )
-    .returning({ id: occurrence.id });
-  return { deleted: rows.length };
+    .returning({
+      sourceDueKeys: occurrence.sourceDueKeys,
+      dueDate: occurrence.dueDate,
+      dueAt: occurrence.dueAt,
+    });
+  return {
+    deleted: rows.length,
+    sourceDueKeys: rows.flatMap((row) => {
+      const due = dueOf(row);
+      return row.sourceDueKeys.length ? row.sourceDueKeys : due ? [dueKey(due)] : [];
+    }),
+  };
 }
 
 /**

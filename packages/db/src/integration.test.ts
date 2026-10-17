@@ -85,6 +85,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
       expect(tables.map((t) => t.table_name)).toEqual([
         'activity',
         'bank_holiday',
+        'bank_holiday_sync',
         'household',
         'member',
         'notification',
@@ -96,6 +97,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
         'task',
         'task_assignee',
         'task_milestone',
+        'template',
       ]);
 
       const enums = await handle.sql<{ typname: string }[]>`

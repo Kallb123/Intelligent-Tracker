@@ -135,6 +135,12 @@ export const bankHoliday = pgTable(
   (t) => [primaryKey({ columns: [t.region, t.date] })],
 );
 
+export const bankHolidaySync = pgTable('bank_holiday_sync', {
+  region: bankHolidayRegion('region').primaryKey(),
+  syncedAt: timestamp('synced_at', { withTimezone: true }),
+  attemptedAt: timestamp('attempted_at', { withTimezone: true }),
+});
+
 export type Household = typeof household.$inferSelect;
 export type NewHousehold = typeof household.$inferInsert;
 export type Member = typeof member.$inferSelect;

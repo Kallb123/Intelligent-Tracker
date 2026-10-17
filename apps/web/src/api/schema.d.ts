@@ -873,6 +873,8 @@ export interface paths {
                                 dueAt: string | null;
                                 rrule: string | null;
                                 intervalAfterCompletionDays: number | null;
+                                workingDaysOnly: boolean;
+                                remindOffsetDays: number;
                                 leadTimeDays: number | null;
                                 /** @enum {string} */
                                 reminderProfile: "silent" | "gentle" | "standard" | "persistent";
@@ -954,6 +956,10 @@ export interface paths {
                         dueAt?: string | null;
                         rrule?: string | null;
                         intervalAfterCompletionDays?: number | null;
+                        /** @default false */
+                        workingDaysOnly?: boolean;
+                        /** @default 0 */
+                        remindOffsetDays?: number;
                         leadTimeDays?: number | null;
                         /** @enum {string} */
                         reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
@@ -1000,6 +1006,8 @@ export interface paths {
                                 dueAt: string | null;
                                 rrule: string | null;
                                 intervalAfterCompletionDays: number | null;
+                                workingDaysOnly: boolean;
+                                remindOffsetDays: number;
                                 leadTimeDays: number | null;
                                 /** @enum {string} */
                                 reminderProfile: "silent" | "gentle" | "standard" | "persistent";
@@ -1117,6 +1125,8 @@ export interface paths {
                                 dueAt: string | null;
                                 rrule: string | null;
                                 intervalAfterCompletionDays: number | null;
+                                workingDaysOnly: boolean;
+                                remindOffsetDays: number;
                                 leadTimeDays: number | null;
                                 /** @enum {string} */
                                 reminderProfile: "silent" | "gentle" | "standard" | "persistent";
@@ -1270,6 +1280,8 @@ export interface paths {
                         dueAt?: string | null;
                         rrule?: string | null;
                         intervalAfterCompletionDays?: number | null;
+                        workingDaysOnly?: boolean;
+                        remindOffsetDays?: number;
                         leadTimeDays?: number | null;
                         /** @enum {string} */
                         reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
@@ -1312,6 +1324,8 @@ export interface paths {
                                 dueAt: string | null;
                                 rrule: string | null;
                                 intervalAfterCompletionDays: number | null;
+                                workingDaysOnly: boolean;
+                                remindOffsetDays: number;
                                 leadTimeDays: number | null;
                                 /** @enum {string} */
                                 reminderProfile: "silent" | "gentle" | "standard" | "persistent";
@@ -1335,6 +1349,448 @@ export interface paths {
                                 createdAt: string;
                                 /** Format: date-time */
                                 updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/bank-holidays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List cached household bank holidays */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            holidays: {
+                                /** Format: date */
+                                date: string;
+                                title: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List UK and household templates */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            templates: {
+                                title: string;
+                                /** @default [] */
+                                keywords: string[];
+                                defaults: {
+                                    notes?: string;
+                                    category?: string | null;
+                                    /** @enum {string} */
+                                    scheduleKind?: "once" | "fixed" | "after_completion";
+                                    rrule?: string | null;
+                                    intervalAfterCompletionDays?: number | null;
+                                    leadTimeDays?: number | null;
+                                    milestones?: {
+                                        title: string;
+                                        offsetDaysBeforeDue: number;
+                                    }[];
+                                    /** @enum {string} */
+                                    reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
+                                    /** @enum {string} */
+                                    reminderSlot?: "evening" | "morning" | "custom_time";
+                                    reminderCustomTime?: string | null;
+                                    remindOffsetDays?: number;
+                                    workingDaysOnly?: boolean;
+                                };
+                                id: string;
+                                builtIn: boolean;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a household template */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        title: string;
+                        /** @default [] */
+                        keywords?: string[];
+                        defaults: {
+                            notes?: string;
+                            category?: string | null;
+                            /** @enum {string} */
+                            scheduleKind?: "once" | "fixed" | "after_completion";
+                            rrule?: string | null;
+                            intervalAfterCompletionDays?: number | null;
+                            leadTimeDays?: number | null;
+                            milestones?: {
+                                title: string;
+                                offsetDaysBeforeDue: number;
+                            }[];
+                            /** @enum {string} */
+                            reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
+                            /** @enum {string} */
+                            reminderSlot?: "evening" | "morning" | "custom_time";
+                            reminderCustomTime?: string | null;
+                            remindOffsetDays?: number;
+                            workingDaysOnly?: boolean;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            template: {
+                                title: string;
+                                /** @default [] */
+                                keywords: string[];
+                                defaults: {
+                                    notes?: string;
+                                    category?: string | null;
+                                    /** @enum {string} */
+                                    scheduleKind?: "once" | "fixed" | "after_completion";
+                                    rrule?: string | null;
+                                    intervalAfterCompletionDays?: number | null;
+                                    leadTimeDays?: number | null;
+                                    milestones?: {
+                                        title: string;
+                                        offsetDaysBeforeDue: number;
+                                    }[];
+                                    /** @enum {string} */
+                                    reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
+                                    /** @enum {string} */
+                                    reminderSlot?: "evening" | "morning" | "custom_time";
+                                    reminderCustomTime?: string | null;
+                                    remindOffsetDays?: number;
+                                    workingDaysOnly?: boolean;
+                                };
+                                id: string;
+                                builtIn: boolean;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a household template */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Replace a household template */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        title: string;
+                        /** @default [] */
+                        keywords?: string[];
+                        defaults: {
+                            notes?: string;
+                            category?: string | null;
+                            /** @enum {string} */
+                            scheduleKind?: "once" | "fixed" | "after_completion";
+                            rrule?: string | null;
+                            intervalAfterCompletionDays?: number | null;
+                            leadTimeDays?: number | null;
+                            milestones?: {
+                                title: string;
+                                offsetDaysBeforeDue: number;
+                            }[];
+                            /** @enum {string} */
+                            reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
+                            /** @enum {string} */
+                            reminderSlot?: "evening" | "morning" | "custom_time";
+                            reminderCustomTime?: string | null;
+                            remindOffsetDays?: number;
+                            workingDaysOnly?: boolean;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            template: {
+                                title: string;
+                                /** @default [] */
+                                keywords: string[];
+                                defaults: {
+                                    notes?: string;
+                                    category?: string | null;
+                                    /** @enum {string} */
+                                    scheduleKind?: "once" | "fixed" | "after_completion";
+                                    rrule?: string | null;
+                                    intervalAfterCompletionDays?: number | null;
+                                    leadTimeDays?: number | null;
+                                    milestones?: {
+                                        title: string;
+                                        offsetDaysBeforeDue: number;
+                                    }[];
+                                    /** @enum {string} */
+                                    reminderProfile?: "silent" | "gentle" | "standard" | "persistent";
+                                    /** @enum {string} */
+                                    reminderSlot?: "evening" | "morning" | "custom_time";
+                                    reminderCustomTime?: string | null;
+                                    remindOffsetDays?: number;
+                                    workingDaysOnly?: boolean;
+                                };
+                                id: string;
+                                builtIn: boolean;
                             };
                         };
                     };

@@ -10,7 +10,7 @@ export {
   type MaterialiseTaskResult,
 } from './materialise.js';
 export { uniqueViolation } from './errors.js';
-export { dueInstant, dueOrder } from './due.js';
+export { dueFromKey, dueInstant, dueOrder } from './due.js';
 export { recordHeartbeat, WORKER_SERVICE } from './heartbeat.js';
 export {
   DEFAULT_OUTBOX_BATCH_SIZE,
@@ -86,3 +86,5 @@ export { generateToken, hashToken } from './tokens.js';
 export * as schema from './schema/index.js';
 export * from './schema/index.js';
 export * from './seed/index.js';
+export * from './bank-holidays.js';
+export * from './digest.js';

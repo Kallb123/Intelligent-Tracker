@@ -218,7 +218,9 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
     await runTick(handle.db, { now: at('2026-07-06T09:00:00Z'), logger });
 
     const rows = await handle.sql`
-      select count(*)::int as n from pg_locks where locktype = 'advisory' and objid = ${TICK_LOCK_KEY}`;
+      select count(*)::int as n from pg_locks
+      where locktype = 'advisory' and objid = ${TICK_LOCK_KEY}
+        and database = (select oid from pg_database where datname = current_database())`;
     expect(rows[0]?.['n']).toBe(0);
   });
 

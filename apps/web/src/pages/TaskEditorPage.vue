@@ -12,6 +12,7 @@ import { describeError, getApi } from '../api/index.js';
 import FormField from '../components/FormField.vue';
 import NumberInput from '../components/NumberInput.vue';
 import RecurrenceBuilder from '../components/RecurrenceBuilder.vue';
+import TemplatePicker from '../components/TemplatePicker.vue';
 import SelectField from '../components/SelectField.vue';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
@@ -53,6 +54,19 @@ const errors = ref<FieldErrors>({});
 const saveError = ref('');
 const saving = ref(false);
 const confirmingDelete = ref(false);
+const holidays = ref<ReadonlySet<string>>(new Set());
+const holidayWarning = ref('');
+onMounted(async () => {
+  try {
+    const { data } = await getApi().GET('/api/bank-holidays');
+    if (data) holidays.value = new Set(data.holidays.map((h) => h.date));
+    if (!data?.holidays.length)
+      holidayWarning.value =
+        'No cached bank holidays yet. The preview currently excludes weekends only.';
+  } catch {
+    holidayWarning.value = 'Bank holidays could not be loaded for the preview.';
+  }
+});
 
 function startNew(): void {
   const today = localToday(new Date(), timeZone.value);
@@ -140,7 +154,7 @@ const rotationNames = computed(() =>
 // The live "next 5 dates".
 const now = new Date();
 const preview = computed(() =>
-  form.value ? previewSchedule(form.value, timeZone.value, now) : { dues: [] },
+  form.value ? previewSchedule(form.value, timeZone.value, now, 5, holidays.value) : { dues: [] },
 );
 
 /** Said by the live region after a move, since the list itself is not announced. */
@@ -260,6 +274,8 @@ async function remove(): Promise<void> {
     <form v-else novalidate @submit.prevent="save">
       <Message v-if="saveError" severity="error" role="alert">{{ saveError }}</Message>
 
+      <TemplatePicker v-model="form" :timezone="timeZone" />
+
       <section class="panel" aria-labelledby="basics-heading">
         <h2 id="basics-heading">The task</h2>
         <FormField id="task-title" label="Title" :error="errors['title']">
@@ -295,6 +311,13 @@ async function remove(): Promise<void> {
 
       <section class="panel" aria-labelledby="when-heading">
         <h2 id="when-heading">When</h2>
+        <p v-if="form.workingDaysOnly && holidayWarning" role="status">{{ holidayWarning }}</p>
+        <div class="checkbox-row">
+          <Checkbox v-model="form.workingDaysOnly" input-id="working-days" binary />
+          <label for="working-days"
+            >Working days only (move past weekends and cached bank holidays)</label
+          >
+        </div>
         <div class="checkbox-row">
           <Checkbox v-model="form.allDay" input-id="task-all-day" binary />
           <label for="task-all-day">All day</label>
@@ -344,6 +367,19 @@ async function remove(): Promise<void> {
 
       <section class="panel" aria-labelledby="prep-heading">
         <h2 id="prep-heading">Prep and reminders</h2>
+        <FormField
+          id="remind-offset"
+          label="Days before due for the due reminder"
+          hint="Use 1 for the evening before bin collection. Other reminders keep their own dates."
+        >
+          <NumberInput
+            id="remind-offset"
+            :model-value="-form.remindOffsetDays"
+            :min="0"
+            :max="3650"
+            @update:model-value="form.remindOffsetDays = -($event ?? 0)"
+          />
+        </FormField>
         <FormField
           id="task-lead"
           label="Lead time (days)"

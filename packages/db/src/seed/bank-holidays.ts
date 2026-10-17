@@ -4,7 +4,7 @@ import type { NewBankHoliday } from '../schema/index.js';
  * England and Wales bank holidays (the household default region).
  *
  * Source: the `england-and-wales` division of https://www.gov.uk/bank-holidays.json.
- * PR 16 replaces this static list with a live gov.uk sync that caches into `bank_holiday`.
+ * Offline bootstrap data; the worker refreshes the cache weekly from the live gov.uk feed.
  * Sorted by date; dates are ISO `YYYY-MM-DD`. Where the feed marks an entry as a substitute
  * day (the holiday fell on a weekend), the title says so.
  */

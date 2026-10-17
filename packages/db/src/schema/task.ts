@@ -53,13 +53,14 @@ export const task = pgTable(
     allDay: boolean('all_day').notNull().default(true),
     rrule: text('rrule'),
     intervalAfterCompletionDays: integer('interval_after_completion_days'),
+    workingDaysOnly: boolean('working_days_only').notNull().default(false),
+    remindOffsetDays: integer('remind_offset_days').notNull().default(0),
     leadTimeDays: integer('lead_time_days'),
     reminderProfile: reminderProfile('reminder_profile')
       .notNull()
       .default(HOUSEHOLD_DEFAULTS.defaultReminderProfile),
     assignmentMode: assignmentMode('assignment_mode').notNull().default('fixed'),
     rotationCursor: integer('rotation_cursor').notNull().default(0),
-    // template_id arrives with the template table in a later PR.
     createdBy: uuid('created_by').references(() => member.id, { onDelete: 'set null' }),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: createdAt(),
@@ -140,6 +141,11 @@ export const occurrence = pgTable(
     dueAt: timestamp('due_at', { withTimezone: true }),
     // due minus the task's lead time; before this the occurrence is only "coming up".
     startAt: timestamp('start_at', { withTimezone: true }),
+    // Original recurrence dates covered by this occurrence, before working-day shifts/coalescing.
+    sourceDueKeys: text('source_due_keys')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     assigneeId: uuid('assignee_id').references(() => member.id, { onDelete: 'set null' }),
     status: occurrenceStatus('status').notNull().default('upcoming'),
     completedAt: timestamp('completed_at', { withTimezone: true }),

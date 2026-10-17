@@ -585,7 +585,7 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
         now: at('2026-07-06T09:00:00Z'),
       });
 
-      expect(result).toEqual({ deleted: 4 });
+      expect(result).toMatchObject({ deleted: 4 });
       expect((await occurrencesOf(t.id)).map((r) => [r.dueDate, r.status])).toEqual([
         ['2026-07-05', 'active'],
         ['2026-07-20', 'started'],
@@ -629,7 +629,7 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
         '00000000-0000-4000-8000-000000000000',
         { now: at('2026-07-06T09:00:00Z') },
       );
-      expect(result).toEqual({ deleted: 0 });
+      expect(result).toEqual({ deleted: 0, sourceDueKeys: [] });
     });
   });
 
