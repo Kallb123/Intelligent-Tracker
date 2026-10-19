@@ -25,6 +25,8 @@ export interface ReminderData {
   milestoneId?: string;
   milestoneTitle?: string;
   overdueDays?: number;
+  /** Workload-smoothing offset retained when validating/re-planning a heads-up. */
+  headsUpDelayDays?: number;
 }
 
 /**

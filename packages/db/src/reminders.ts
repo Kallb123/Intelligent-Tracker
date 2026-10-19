@@ -2,6 +2,7 @@ import {
   isEscalated,
   localToday,
   planReminders,
+  smoothReminderPlans,
   RecurrenceError,
   type PlannedReminder,
   type PlanRemindersInput,
@@ -49,12 +50,15 @@ import type { NewNotification, NewReminder, Reminder, ReminderData } from './sch
  *      One whose inputs did not change only gets the overdue reminders it lacks (the overdue
  *      horizon rolling forward).
  *
- * "Changed" is judged by a fingerprint of the planner's inputs (everything but `now`), stored on
+ * "Changed" is judged by a fingerprint of the task/occurrence/settings inputs, stored on
  * the occurrence as `reminder_plan_hash`. That is what lets a hold outlive its condition: a
  * snooze or away period moves a reminder to a later instant, and once the snooze or away period
  * is over a fresh plan no longer knows of the move (the original time is past, so it drops the
  * reminder). Re-planning only on change keeps the persisted row, moved time and all, until it
  * fires.
+ * Workload smoothing runs on changed plans only, reserving existing heads-ups. Its chosen
+ * offset is saved in the heads-up's data, outside the input fingerprint: it survives ticks and
+ * can be reapplied before the planner drops past reminders, including during send validation.
  *
  * Both are idempotent and safe to repeat or race: `sent` reminders are never touched or re-sent,
  * an unchanged plan writes nothing, and the outbox's unique `dedupe_key` turns a repeated queue
@@ -203,7 +207,11 @@ export async function queueDueReminders(
     let plan = plans.get(planKey);
     if (!plan) {
       try {
-        plan = new Map(planFor(context, new Date(rem.fireAt.getTime() - 1)).map((p) => [p.key, p]));
+        plan = new Map(
+          planFor(context, new Date(rem.fireAt.getTime() - 1), rem.data.headsUpDelayDays).map(
+            (p) => [p.key, p],
+          ),
+        );
       } catch (error) {
         if (!(error instanceof RecurrenceError)) throw error;
         failed.add(rem.occurrenceId);
@@ -395,7 +403,7 @@ async function loadPlanContexts(
   return contexts;
 }
 
-/** Everything `planReminders` reads about an occurrence except the clock. */
+/** Task/occurrence/settings inputs, before the saved workload-smoothing offset is applied. */
 function planInputs(context: PlanContext): Omit<PlanRemindersInput, 'now'> {
   const { occurrence: occ, task: t, household: h } = context;
   return {
@@ -425,12 +433,17 @@ function planInputs(context: PlanContext): Omit<PlanRemindersInput, 'now'> {
 }
 
 /** The reminders the planner wants for one occurrence at `now`. May throw `RecurrenceError`. */
-function planFor(context: PlanContext, now: Date): PlannedReminder[] {
-  return planReminders({ ...planInputs(context), now });
+function planFor(context: PlanContext, now: Date, headsUpDelayDays?: number): PlannedReminder[] {
+  return planReminders({
+    ...planInputs(context),
+    now,
+    ...(headsUpDelayDays !== undefined ? { headsUpDelayDays } : {}),
+  });
 }
 
 /**
- * A fingerprint of everything the planner reads about an occurrence except `now`: the
+ * A fingerprint of the task/occurrence/settings inputs, excluding the clock and saved smoothing
+ * offset (which is planner output, persisted on the reminder): the
  * occurrence's due, status, assignee, snooze and ticked milestones, the task's lead time,
  * profile, slot, custom time and milestones, the assignee's away date, and the household's time
  * zone, slots and quiet hours. The SHA-256 of a JSON document whose keys are always written in
@@ -479,6 +492,9 @@ function dataOf(planned: PlannedReminder): ReminderData {
     ...(planned.milestoneId !== undefined ? { milestoneId: planned.milestoneId } : {}),
     ...(planned.milestoneTitle !== undefined ? { milestoneTitle: planned.milestoneTitle } : {}),
     ...(planned.overdueDays !== undefined ? { overdueDays: planned.overdueDays } : {}),
+    ...(planned.headsUpDelayDays !== undefined
+      ? { headsUpDelayDays: planned.headsUpDelayDays }
+      : {}),
   };
 }
 
@@ -486,7 +502,8 @@ function sameData(a: ReminderData, b: ReminderData): boolean {
   return (
     a.milestoneId === b.milestoneId &&
     a.milestoneTitle === b.milestoneTitle &&
-    a.overdueDays === b.overdueDays
+    a.overdueDays === b.overdueDays &&
+    a.headsUpDelayDays === b.headsUpDelayDays
   );
 }
 
@@ -612,16 +629,67 @@ export async function replanReminders(
   const inserts: NewReminder[] = [];
   const obsolete: string[] = [];
   const hashes: { id: string; hash: string }[] = [];
+  // Validate separately so a bad task cannot prevent the rest of the household being planned.
+  const plans = new Map<string, PlannedReminder[]>();
   for (const context of contexts.values()) {
     const { occurrence: occ } = context;
-    let plan: PlannedReminder[];
     try {
-      plan = planFor(context, now);
+      plans.set(
+        occ.id,
+        planFor(context, now, existing.get(occ.id)?.get('heads_up')?.data.headsUpDelayDays),
+      );
     } catch (error) {
       if (!(error instanceof RecurrenceError)) throw error;
       result.failures.push(planFailure(context, error));
       continue;
     }
+  }
+  const changing = [...contexts.values()].filter(
+    (c) =>
+      plans.has(c.occurrence.id) &&
+      !isPlanCurrent(c) &&
+      existing.get(c.occurrence.id)?.get('heads_up')?.status !== 'sent',
+  );
+  const changingIds = new Set(changing.map((c) => c.occurrence.id));
+  const reserved = existingRows.flatMap(({ reminder: r }) => {
+    if (
+      r.kind !== 'heads_up' ||
+      r.status === 'cancelled' ||
+      !plans.has(r.occurrenceId) ||
+      (r.status !== 'sent' && changingIds.has(r.occurrenceId))
+    )
+      return [];
+    const context = contexts.get(r.occurrenceId)!;
+    return [
+      {
+        householdId: context.task.householdId,
+        timezone: context.household.timezone,
+        memberId: r.memberId,
+        fireAt: r.fireAt,
+      },
+    ];
+  });
+  const smoothed = smoothReminderPlans(
+    changing.map((c) => {
+      const delay = existing.get(c.occurrence.id)?.get('heads_up')?.data.headsUpDelayDays;
+      return {
+        id: c.occurrence.id,
+        householdId: c.task.householdId,
+        input: {
+          ...planInputs(c),
+          now,
+          ...(delay !== undefined ? { headsUpDelayDays: delay } : {}),
+        },
+      };
+    }),
+    reserved,
+  );
+  for (const [id, plan] of smoothed) plans.set(id, plan);
+
+  for (const context of contexts.values()) {
+    const { occurrence: occ } = context;
+    const plan = plans.get(occ.id);
+    if (!plan) continue;
     result.occurrences += 1;
 
     const stored = existing.get(occ.id) ?? new Map<string, typeof reminder.$inferSelect>();

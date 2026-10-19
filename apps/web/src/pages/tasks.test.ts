@@ -845,6 +845,44 @@ describe('Task editor', () => {
     );
   });
 
+  it('offers an effort-based lead and applies it only when accepted', async () => {
+    const { wrapper, server } = await open(
+      { 'POST /api/tasks': () => json({ task: task() }, 201) },
+      '/tasks/new',
+    );
+    await fillTitle(wrapper, 'Clear the garage');
+    await wrapper.get('#task-effort').setValue('180');
+    expect(wrapper.text()).toContain('Allow 7 days to prepare?');
+    expect((wrapper.get('#task-lead').element as HTMLInputElement).value).toBe('');
+    await button(wrapper, 'Use 7-day lead time').trigger('click');
+    expect((wrapper.get('#task-lead').element as HTMLInputElement).value).toBe('7');
+    expect(wrapper.text()).not.toContain('days to prepare?');
+    await save(wrapper);
+    expect(lastBody(server, 'POST /api/tasks')).toMatchObject({
+      effortMinutes: 180,
+      leadTimeDays: 7,
+    });
+  });
+
+  it('keeps an unaccepted suggestion out of the saved task and respects an explicit zero', async () => {
+    const { wrapper, server } = await open(
+      { 'POST /api/tasks': () => json({ task: task() }, 201) },
+      '/tasks/new',
+    );
+    await fillTitle(wrapper, 'Sort paperwork');
+    await wrapper.get('#task-effort').setValue('60');
+    expect(wrapper.text()).toContain('Allow 3 days to prepare?');
+    await wrapper.get('#task-lead').setValue('0');
+    expect(wrapper.text()).not.toContain('days to prepare?');
+    await wrapper.get('#task-lead').setValue('');
+    expect(wrapper.text()).toContain('Allow 3 days to prepare?');
+    await save(wrapper);
+    expect(lastBody(server, 'POST /api/tasks')).toMatchObject({
+      effortMinutes: 60,
+      leadTimeDays: null,
+    });
+  });
+
   it('sends a timed due as an instant and the optional fields', async () => {
     const { wrapper, server } = await open(
       { 'POST /api/tasks': () => json({ task: task() }, 201) },

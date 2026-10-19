@@ -238,6 +238,12 @@ the event, so the reminder fires the evening before instead of on the due day.
   ("Bank holiday Monday: bin collection may be a day late").
 - **Workload smoothing:** when several prep windows open the same week, the planner
   staggers heads-ups across days so one person doesn't get a wall of reminders on the 1st.
+  It balances each person's heads-ups over the first seven local days of the prep window,
+  choosing the earliest least-busy day and giving narrow windows priority. Unassigned jobs
+  count against everyone. A heads-up never overtakes a milestone, nudge, due reminder or the
+  due day; a milestone at the window's start can therefore leave no room to stagger it.
+  Household slots, quiet hours and snooze/away holds still apply. Saved plans stay in place
+  when another task is added, and the chosen offset survives subsequent worker ticks.
 - **Away mode:** reminders for an away member go to the next person in a rotation, or are
   held until they're back.
 
@@ -267,6 +273,9 @@ the event, so the reminder fires the evening before instead of on the due day.
   lead time and milestones. Suggestions are always shown for the user to accept, never applied silently.
 - **Effort-aware lead time:** if there's no lead time but `effort_minutes` is large, a short
   prep window is proposed.
+  The task editor offers 3 days for jobs of 60–179 minutes and 7 days for jobs of 180 minutes
+  or more. Use the suggestion button to apply it, then save the task. An explicit lead time,
+  including zero, suppresses the suggestion; reminders never infer a lead silently.
 
 ### 4.7 Learning from history
 For each task series, the `activity` table records: completion offset vs due (median),

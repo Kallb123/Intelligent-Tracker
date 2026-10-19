@@ -8,3 +8,4 @@ export * from './working-days.js';
 export * from './recurrence-form.js';
 export * from './describe.js';
 export * from './quick-add/index.js';
+export { suggestLeadTime } from './effort.js';

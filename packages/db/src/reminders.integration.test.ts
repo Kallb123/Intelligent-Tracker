@@ -121,6 +121,95 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
   const keys = (rows: { key: string }[]) => rows.map((r) => r.key).sort();
   const notifications = () => db.select().from(notification).orderBy(asc(notification.createdAt));
 
+  describe('workload smoothing', () => {
+    async function cluster() {
+      const first = await setup({ reminderProfile: 'gentle' });
+      const tasks = [first.t];
+      const occurrences = [first.o];
+      for (let i = 0; i < 2; i++) {
+        const t = await newTask(first.h.id, { reminderProfile: 'gentle' });
+        tasks.push(t);
+        occurrences.push(await newOccurrence(t.id, { assigneeId: first.alex.id }));
+      }
+      return { ...first, tasks, occurrences };
+    }
+
+    it('persists a staggered cluster and keeps it stable over ticks, additions and sends', async () => {
+      const { h, alex } = await cluster();
+      await replanReminders(db, { now: NOW });
+      const heads = (await reminders()).filter((r) => r.kind === 'heads_up');
+      expect(heads.map((r) => r.fireAt.toISOString())).toEqual([
+        '2026-07-10T18:00:00.000Z',
+        '2026-07-11T18:00:00.000Z',
+        '2026-07-12T18:00:00.000Z',
+      ]);
+      expect(heads.map((r) => r.data.headsUpDelayDays ?? 0)).toEqual([0, 1, 2]);
+      expect(await replanReminders(db, { now: at('2026-07-11T09:00:00Z') })).toMatchObject({
+        planned: 0,
+        cancelled: 0,
+      });
+      const t = await newTask(h.id, { reminderProfile: 'gentle' });
+      await newOccurrence(t.id, { assigneeId: alex.id });
+      await replanReminders(db, { now: NOW });
+      const allHeads = (await reminders()).filter((r) => r.kind === 'heads_up');
+      expect(allHeads.slice(0, 3)).toEqual(heads);
+      expect(allHeads[3]?.fireAt.toISOString()).toBe('2026-07-13T18:00:00.000Z');
+      for (const head of allHeads) {
+        const now = new Date(head.fireAt.getTime() + 1000);
+        expect(await queueDueReminders(db, { now })).toMatchObject({ queued: 1, failures: [] });
+        expect(await replanReminders(db, { now })).toMatchObject({ planned: 0, cancelled: 0 });
+      }
+      expect(await notifications()).toHaveLength(4);
+      expect(await queueDueReminders(db, { now: at('2026-07-13T18:01:00Z') })).toMatchObject({
+        queued: 0,
+      });
+    });
+
+    it('validates a delayed heads-up on an input change just as it becomes due', async () => {
+      await cluster();
+      await replanReminders(db, { now: NOW });
+      const delayed = (await reminders()).find((r) => r.data.headsUpDelayDays === 2)!;
+      await db
+        .update(occurrence)
+        .set({ status: 'started' })
+        .where(eq(occurrence.id, delayed.occurrenceId));
+      const now = new Date(delayed.fireAt.getTime() + 1000);
+      await queueDueReminders(db, { now });
+      expect((await reminders()).find((r) => r.id === delayed.id)?.status).toBe('sent');
+      await replanReminders(db, { now });
+      expect((await reminders()).find((r) => r.id === delayed.id)?.status).toBe('sent');
+    });
+
+    it('retains a delayed heads-up across an edit after the original start, and honours a changed lead', async () => {
+      await cluster();
+      await replanReminders(db, { now: NOW });
+      const delayed = (await reminders()).find((r) => r.data.headsUpDelayDays === 2)!;
+      await db
+        .update(occurrence)
+        .set({ status: 'started' })
+        .where(eq(occurrence.id, delayed.occurrenceId));
+      await replanReminders(db, { now: at('2026-07-11T19:00:00Z') });
+      expect((await reminders()).find((r) => r.id === delayed.id)).toMatchObject({
+        status: 'planned',
+        fireAt: delayed.fireAt,
+      });
+      const occ = (
+        await db.select().from(occurrence).where(eq(occurrence.id, delayed.occurrenceId))
+      )[0]!;
+      await db.update(task).set({ leadTimeDays: 0 }).where(eq(task.id, occ.taskId));
+      await queueDueReminders(db, { now: new Date(delayed.fireAt.getTime() + 1000) });
+      expect((await reminders()).find((r) => r.id === delayed.id)?.status).toBe('planned');
+      await replanReminders(db, { now: new Date(delayed.fireAt.getTime() + 1000) });
+      expect((await reminders()).find((r) => r.id === delayed.id)?.status).toBe('cancelled');
+    });
+
+    it('does not silently give a high-effort task a lead time', async () => {
+      await setup({ effortMinutes: 240, leadTimeDays: null });
+      await replanReminders(db, { now: NOW });
+      expect((await reminders()).some((r) => r.kind === 'heads_up')).toBe(false);
+    });
+  });
+
   describe('replanReminders', () => {
     it('persists the planner`s reminders for an open occurrence', async () => {
       const { alex, o } = await setup();
@@ -1154,7 +1243,8 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       const mot = await newTask(h.id, { title: 'MOT' });
       await newOccurrence(mot.id, { assigneeId: alex.id });
       await replanReminders(db, { now: NOW });
-      const now = DUE_NOW;
+      // Smoothing puts the heads-ups one day apart. Both are due and within the 24h grace.
+      const now = at('2026-07-11T18:00:00Z');
 
       // A crash mid-run: the queue ran inside the transaction, then the process died.
       await expect(
@@ -1185,7 +1275,8 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
       const mot = await newTask(h.id, { title: 'MOT' });
       await newOccurrence(mot.id);
       await replanReminders(db, { now: NOW });
-      const now = DUE_NOW;
+      // Smoothing puts the heads-ups one day apart. Both are due and within the 24h grace.
+      const now = at('2026-07-11T18:00:00Z');
 
       const results = await Promise.all(
         [1, 2, 3, 4].map(() => db.transaction((tx) => queueDueReminders(tx, { now }))),
