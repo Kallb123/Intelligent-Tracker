@@ -28,13 +28,13 @@ import { linkFirst, memberInHousehold, replyPlain } from './sender.js';
 
 /** The commands in Telegram's command menu (`setMyCommands`), and so the ones registered below. */
 export const BOT_COMMANDS = [
-  { command: 'suggestions', description: 'Ideas from task history: accept or dismiss' },
   { command: 'today', description: "What's on today" },
   { command: 'week', description: 'What is on in the next 7 days' },
   { command: 'mine', description: 'Your jobs in the next 7 days' },
   { command: 'digest', description: "Post this morning's digest" },
   { command: 'away', description: 'Set when you are away until: /away 24/12, or /away off' },
   { command: 'add', description: 'Add a job: /add MOT due 14/03, remind me a month before' },
+  { command: 'suggestions', description: 'Ideas from task history: accept or dismiss' },
 ] as const;
 
 /** Words after `/away` that clear the away date. */

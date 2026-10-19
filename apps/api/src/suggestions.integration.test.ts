@@ -1,6 +1,7 @@
-import { activity, occurrence, task, type DbHandle } from '@tracker/db';
+import { activity, occurrence, resolveSuggestion, task, type DbHandle } from '@tracker/db';
 import { seedSuggestionHistory } from '@tracker/db/test-db';
 import type { SessionInfo, SuggestionDto, TaskDto } from '@tracker/shared';
+import { MS_PER_DAY } from '@tracker/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -32,7 +33,7 @@ describe.skipIf(!adminUrl)('history suggestions (integration)', () => {
   beforeEach(async () => {
     await t?.app.close();
     await handle.sql`truncate household cascade`;
-    t = createTestApp(handle);
+    t = createTestApp(handle, { sessionTtlMs: 100 * MS_PER_DAY });
     admin = await setUpAdmin(t.app);
     me = (await admin.get('/api/auth/me')).json<SessionInfo>();
   });
@@ -116,7 +117,7 @@ describe.skipIf(!adminUrl)('history suggestions (integration)', () => {
     expect((await list()).map((s) => s.kind)).toEqual(['snoozes']);
   });
 
-  it('persists dismissal across settings changes until the history sample changes', async () => {
+  it('persists dismissal across settings changes and backfilled completions before the decision', async () => {
     const created = await setup();
     const card = (await list()).find((s) => s.kind === 'lateness')!;
     expect(
@@ -132,8 +133,108 @@ describe.skipIf(!adminUrl)('history suggestions (integration)', () => {
       dates: ['2026-02-28'],
       snoozes: 0,
     });
-    expect((await list()).map((s) => s.kind)).toEqual(['lateness']);
+    expect((await list()).map((s) => s.kind)).toEqual([]);
   });
+
+  for (const action of ['accept', 'dismiss'] as const) {
+    for (const kind of ['lateness', 'snoozes'] as const) {
+      it(`${action} of ${kind} waits for three completions strictly after the latest same-kind decision`, async () => {
+        const created = await setup();
+        const card = (await list()).find((s) => s.kind === kind)!;
+        expect((await admin.post(`/api/suggestions/${card.id}`, { action })).statusCode).toBe(204);
+        // Restore the morning slot after accepting it, without resetting the decision window.
+        if (kind === 'snoozes')
+          await admin.patch(`/api/tasks/${created.id}`, { reminderSlot: 'morning' });
+        for (const day of [1, 2, 3, 4]) {
+          const date = `2026-03-0${day}`;
+          await seedSuggestionHistory(handle.db, {
+            householdId: me.household.id,
+            memberId: me.member.id,
+            taskId: created.id,
+            dates: [date],
+          });
+          t.clock.set(`${date}T13:00:00Z`);
+          expect((await list()).some((s) => s.kind === kind)).toBe(day === 4);
+        }
+        const fresh = (await list()).find((s) => s.kind === kind)!;
+        expect(fresh.id).not.toBe(card.id);
+        // The most recent resolution resets the window again.
+        expect(
+          (await admin.post(`/api/suggestions/${fresh.id}`, { action: 'dismiss' })).statusCode,
+        ).toBe(204);
+        expect((await list()).some((s) => s.kind === kind)).toBe(false);
+      });
+    }
+  }
+
+  it('keeps independent cards usable across task edits but rejects changed proposed values', async () => {
+    const created = await setup();
+    const cards = await list();
+    const late = cards.find((s) => s.kind === 'lateness')!;
+    const snooze = cards.find((s) => s.kind === 'snoozes')!;
+    const sam = await addMember(t.app, admin);
+    await admin.patch(`/api/tasks/${created.id}`, {
+      notes: 'Unrelated edit',
+      assigneeIds: [sam.id],
+    });
+    expect((await list()).map((s) => s.id)).toEqual(cards.map((s) => s.id));
+    expect((await admin.post(`/api/suggestions/${late.id}`, { action: 'accept' })).statusCode).toBe(
+      204,
+    );
+    expect((await list()).find((s) => s.kind === 'snoozes')?.id).toBe(snooze.id);
+    expect(
+      (await admin.post(`/api/suggestions/${snooze.id}`, { action: 'accept' })).statusCode,
+    ).toBe(204);
+    expect(await list()).toEqual([]);
+    expect(await stored(created.id)).toMatchObject({
+      leadTimeDays: 14,
+      reminderSlot: 'evening',
+      notes: 'Unrelated edit',
+      assigneeIds: [sam.id],
+    });
+  });
+
+  it('omits frequent-series leads and rechecks changed recurrence limits on acceptance', async () => {
+    for (const rrule of ['FREQ=DAILY', 'FREQ=WEEKLY']) {
+      const created = await setup({ rrule });
+      expect((await list()).filter((s) => s.taskId === created.id).map((s) => s.kind)).toEqual([
+        'snoozes',
+      ]);
+    }
+    const created = await setup();
+    const card = (await list()).find((s) => s.taskId === created.id && s.kind === 'lateness')!;
+    await admin.patch(`/api/tasks/${created.id}`, { rrule: 'FREQ=WEEKLY' });
+    expect((await admin.post(`/api/suggestions/${card.id}`, { action: 'accept' })).statusCode).toBe(
+      409,
+    );
+    expect((await stored(created.id)).leadTimeDays).toBe(7);
+  });
+
+  for (const action of ['accept', 'dismiss'] as const) {
+    it(`${action} of fairness waits for five new completions this month`, async () => {
+      t.clock.set('2026-03-10T12:00:00Z');
+      const sam = await addMember(t.app, admin);
+      const created = await setup(
+        { assignmentMode: 'rotation', assigneeIds: [me.member.id, sam.id] },
+        ['2026-03-01', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05'],
+      );
+      const card = (await list()).find((s) => s.kind === 'fairness')!;
+      expect((await admin.post(`/api/suggestions/${card.id}`, { action })).statusCode).toBe(204);
+      // The cursor can return to Alex as later turns are consumed; old evidence still stays out.
+      await handle.db.update(task).set({ rotationCursor: 0 }).where(eq(task.id, created.id));
+      for (const day of [10, 11, 12, 13, 14, 15]) {
+        const date = `2026-03-${day}`;
+        await seedSuggestionHistory(handle.db, {
+          householdId: me.household.id,
+          memberId: me.member.id,
+          taskId: created.id,
+          dates: [date],
+        });
+        t.clock.set(`${date}T13:00:00Z`);
+        expect((await list()).some((s) => s.kind === 'fairness')).toBe(day === 15);
+      }
+    });
+  }
 
   it('accepts a snooze suggestion once under concurrent presses', async () => {
     const created = await setup();
@@ -146,6 +247,24 @@ describe.skipIf(!adminUrl)('history suggestions (integration)', () => {
     expect(
       await handle.db.select().from(activity).where(eq(activity.kind, 'suggestion.accepted')),
     ).toHaveLength(1);
+  });
+
+  it('sees a committed decision even when another request captured an earlier clock value', async () => {
+    const created = await setup();
+    const card = (await list()).find((s) => s.kind === 'lateness')!;
+    const request = { householdId: me.household.id, memberId: me.member.id, id: card.id };
+    const earlier = t.clock.now();
+    expect(
+      await resolveSuggestion(handle.db, {
+        ...request,
+        now: new Date(earlier.getTime() + 1),
+        action: 'dismiss',
+      }),
+    ).toBe(true);
+    expect(await resolveSuggestion(handle.db, { ...request, now: earlier, action: 'accept' })).toBe(
+      false,
+    );
+    expect((await stored(created.id)).leadTimeDays).toBe(7);
   });
 
   it('isolates households and refuses changed, archived or deleted cards', async () => {

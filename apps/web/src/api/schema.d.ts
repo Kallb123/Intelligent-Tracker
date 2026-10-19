@@ -1472,7 +1472,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Accept or dismiss a history-based suggestion */
+        /**
+         * Accept or dismiss a history-based suggestion
+         * @description Requires a household session and CSRF token. Missing or invalid CSRF tokens return 403.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1524,7 +1527,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Default Response */
+                /** @description Missing or invalid CSRF token, or cross-origin request */
                 403: {
                     headers: {
                         [name: string]: unknown;

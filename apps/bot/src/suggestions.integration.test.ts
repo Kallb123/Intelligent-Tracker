@@ -16,7 +16,7 @@ import {
 
 describe.skipIf(!adminUrl)('Telegram suggestion cards (integration)', () => {
   const test = useTestDatabase();
-  async function setup() {
+  async function setup(morning = false) {
     const h = await newHousehold(test.db);
     const alex = await newMember(test.db, h.id, 'Alex', 1001);
     const [series] = await test.db
@@ -28,6 +28,7 @@ describe.skipIf(!adminUrl)('Telegram suggestion cards (integration)', () => {
         rrule: 'FREQ=YEARLY',
         dueDate: '2026-12-01',
         leadTimeDays: 7,
+        reminderSlot: morning ? 'morning' : 'evening',
       })
       .returning();
     await seedSuggestionHistory(test.db, {
@@ -93,6 +94,36 @@ describe.skipIf(!adminUrl)('Telegram suggestion cards (integration)', () => {
       7,
     );
     expect(telegram.to('editMessageText')[0]?.['text']).toContain('dismissed');
+  });
+
+  it('accepts both Telegram cards for one task without refreshing, in reverse order', async () => {
+    const { h, series, command, bot, telegram } = await setup(true);
+    await command();
+    const cards = telegram.to('sendMessage');
+    expect(cards).toHaveLength(2);
+    for (const index of [1, 0]) {
+      const markup = cards[index]!['reply_markup'] as {
+        inline_keyboard: { callback_data: string }[][];
+      };
+      await bot.handleUpdate(
+        pressUpdate({
+          chatId: CHAT_ID,
+          fromId: 1001,
+          messageId: 1001 + index,
+          data: markup.inline_keyboard[0]![0]!.callback_data,
+        }),
+      );
+    }
+    expect(telegram.to('answerCallbackQuery').map((t) => t['text'])).toEqual([
+      '✅ Suggestion accepted. Task updated.',
+      '✅ Suggestion accepted. Task updated.',
+    ]);
+    expect(telegram.to('editMessageText')).toHaveLength(2);
+    expect((await test.db.select().from(task).where(eq(task.id, series.id)))[0]).toMatchObject({
+      leadTimeDays: 14,
+      reminderSlot: 'evening',
+    });
+    expect(await listSuggestions(test.db, h.id, NOW)).toEqual([]);
   });
 
   it('refuses unlinked users, foreign members/groups, stale cards, and malformed callbacks', async () => {

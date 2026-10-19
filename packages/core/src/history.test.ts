@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MS_PER_DAY } from '@tracker/shared';
 import { analyseHistory, type HistoryCompletion, type HistoryInput } from './history.js';
+import { addLocalDays } from './day.js';
 
 const now = new Date('2026-03-30T12:00:00Z');
 const completion = (n: number, overrides: Partial<HistoryCompletion> = {}): HistoryCompletion => ({
@@ -17,6 +18,9 @@ const base: HistoryInput = {
   timezone: 'Europe/London',
   task: {
     scheduleKind: 'fixed',
+    rrule: 'FREQ=YEARLY',
+    intervalAfterCompletionDays: null,
+    workingDaysOnly: false,
     leadTimeDays: 7,
     reminderSlot: 'morning',
     reminderProfile: 'standard',
@@ -66,8 +70,10 @@ describe('history rules (synthetic histories)', () => {
     const completions = [completion(1), completion(2), completion(3, { dueDate: '2025-01-01' })];
     expect(analyseHistory({ ...base, completions })[0]?.patch.leadTimeDays).toBe(14);
     expect(
-      analyseHistory({ ...base, task: { ...base.task, leadTimeDays: 3649 } })[0]?.patch
-        .leadTimeDays,
+      analyseHistory({
+        ...base,
+        task: { ...base.task, rrule: 'FREQ=YEARLY;INTERVAL=20', leadTimeDays: 3649 },
+      })[0]?.patch.leadTimeDays,
     ).toBe(3650);
     expect(kinds({ ...base, task: { ...base.task, leadTimeDays: 3650 } })).toEqual(['snoozes']);
   });
@@ -84,6 +90,81 @@ describe('history rules (synthetic histories)', () => {
       c.completedAt = new Date('2026-03-29T23:30:00Z');
     });
     expect(analyseHistory({ ...base, completions })[0]?.message).toContain('median 2 days');
+  });
+  it('uses singular day in the lateness message', () => {
+    const completions = base.completions.map((c) => ({
+      ...c,
+      completedAt: new Date(`${addLocalDays(c.dueDate!, 1)}T12:00:00Z`),
+    }));
+    expect(analyseHistory({ ...base, completions })[0]?.message).toContain('median 1 day)');
+  });
+  it.each([
+    ['FREQ=DAILY', undefined],
+    ['FREQ=DAILY;INTERVAL=13', undefined],
+    ['FREQ=WEEKLY', undefined],
+    ['FREQ=WEEKLY;INTERVAL=2', 13],
+    ['FREQ=WEEKLY;INTERVAL=3;BYDAY=MO,FR', undefined],
+    ['FREQ=WEEKLY;INTERVAL=2;BYMONTHDAY=1,2', undefined],
+    ['FREQ=WEEKLY;INTERVAL=5;BYMONTHDAY=1', undefined],
+    ['FREQ=DAILY;INTERVAL=14', 13],
+    ['FREQ=MONTHLY', 14],
+    ['FREQ=MONTHLY;BYMONTHDAY=-1', 14],
+    ['FREQ=MONTHLY;BYDAY=-1FR', 14],
+    ['FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1', 14],
+    ['FREQ=MONTHLY;BYMONTHDAY=1,2', undefined],
+    ['FREQ=YEARLY;BYMONTHDAY=1', undefined],
+    ['FREQ=YEARLY;BYMONTH=1,2;BYMONTHDAY=1', undefined],
+  ])('bounds the lead for %s', (rrule, lead) => {
+    expect(
+      analyseHistory({ ...base, task: { ...base.task, rrule } }).find((p) => p.kind === 'lateness')
+        ?.patch.leadTimeDays,
+    ).toBe(lead);
+  });
+  it('caps monthly and yearly leads below their shortest cycle instead of adding whole weeks indefinitely', () => {
+    for (const [rrule, current, cap] of [
+      ['FREQ=MONTHLY', 26, 27],
+      ['FREQ=YEARLY', 363, 364],
+    ] as const) {
+      expect(
+        analyseHistory({ ...base, task: { ...base.task, rrule, leadTimeDays: current } })[0]?.patch
+          .leadTimeDays,
+      ).toBe(cap);
+      expect(kinds({ ...base, task: { ...base.task, rrule, leadTimeDays: cap } })).not.toContain(
+        'lateness',
+      );
+    }
+  });
+  it('uses after-completion intervals and skips uncertain working-day gaps', () => {
+    for (const [interval, expected] of [
+      [7, undefined],
+      [14, 13],
+      [30, 14],
+    ] as const) {
+      expect(
+        analyseHistory({
+          ...base,
+          task: {
+            ...base.task,
+            scheduleKind: 'after_completion',
+            rrule: null,
+            intervalAfterCompletionDays: interval,
+          },
+        }).find((p) => p.kind === 'lateness')?.patch.leadTimeDays,
+      ).toBe(expected);
+    }
+    expect(kinds({ ...base, task: { ...base.task, workingDaysOnly: true } })).not.toContain(
+      'lateness',
+    );
+  });
+  it('uses an independent decision cutoff per kind and excludes completions at the cutoff', () => {
+    const cutoff = new Date('2026-03-07T12:00:00Z');
+    expect(kinds({ ...base, decidedAt: { lateness: cutoff } })).toEqual(['snoozes']);
+    expect(kinds({ ...base, decidedAt: { snoozes: cutoff } })).toEqual(['lateness']);
+    const completions = [1, 2, 3, 4, 5, 6].map((n) => completion(n));
+    expect(kinds({ ...base, completions, decidedAt: { fairness: cutoff } })).not.toContain(
+      'fairness',
+    );
+    expect(kinds({ ...base, completions, decidedAt: { lateness: cutoff } })).toContain('lateness');
   });
   it('uses elapsed days for timed tasks', () => {
     const completions = base.completions.map((c) => ({

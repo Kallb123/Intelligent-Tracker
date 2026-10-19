@@ -8,16 +8,25 @@ to a member of that household.
 
 Nothing changes automatically. Every card describes its proposed change and offers **Accept**
 and **Dismiss**. Any household member can act, as with editing a task. A decision in one interface
-also resolves the card in the other. If the task or relevant history changes before a press,
+also resolves the card in the other. Independent cards survive unrelated task edits and accepting
+another kind of suggestion. If a card's relevant evidence or proposed change changes before a press,
 the old card is refused: refresh the inbox or send `/suggestions` again.
 
 ## Rules
 
 The rules use up to the latest 20 logged, completed occurrences per repeating task. They ignore
 one-off tasks, skipped occurrences, future completions and completions without an activity entry.
+Each kind uses only completions strictly after its latest accept or dismiss for that task.
+Resolving lateness or snoozes therefore requires three fresh completions before that kind can
+return; fairness requires five fresh completions in the current month. Decisions of other kinds
+do not reset that history window.
 
 - **Lateness:** each of the latest three completions must be at least a day late. Add the median
-  delay, rounded up to whole weeks, to the current lead (zero when absent), capped at 3,650 days.
+  delay, rounded up to whole weeks, to the current lead (zero when absent). Skip cycles under
+  14 days and cap the proposed lead below the cycle's shortest safe interval, and at 3,650 days.
+  Use the configured interval for after-completion tasks and conservative bounds for regular
+  daily, weekly, monthly and yearly rules (including ordinal weekdays). Clustered or complex
+  selectors and working-day shifts get no lateness card when a safe gap cannot be established.
   All-day dues use household calendar dates, so DST and completion on the due date do not create
   false lateness; timed dues use elapsed days. The card states the median and the new lead.
 - **Snoozes:** each of the latest three completed occurrences must have at least two recorded
@@ -41,9 +50,9 @@ not-started assignments using the existing away-aware rotation rules. Started jo
 current assignee. Existing milestones and assignee lists are preserved.
 
 Decisions are recorded as `suggestion.accepted` or `suggestion.dismissed` in the activity log,
-with the actor, task, evidence fingerprint and accepted patch. Resolving a card suppresses that
-kind of suggestion for the same history sample, including after a manual settings change. New
-completion evidence can produce a new card. This keeps the rules explainable without a model,
+with the actor, task, evidence fingerprint and accepted patch. The latest decision time is the
+cutoff for that kind's new evidence, including after manual settings changes. Old completions
+are never reused to renew a resolved suggestion. This keeps the rules explainable without a model,
 external service, background suggestion queue or additional database migration.
 
 Both interfaces use the same household-scoped database operation. It recomputes the suggestion

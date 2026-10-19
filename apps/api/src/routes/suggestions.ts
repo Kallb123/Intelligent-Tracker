@@ -42,13 +42,17 @@ export function registerSuggestionRoutes(app: FastifyInstance, ctx: ApiContext):
       schema: {
         tags,
         summary: 'Accept or dismiss a history-based suggestion',
+        description:
+          'Requires a household session and CSRF token. Missing or invalid CSRF tokens return 403.',
         params: z.object({ id: suggestionIdSchema }),
         body: suggestionActionSchema,
         response: {
           204: z.null(),
           400: errorResponseSchema,
           401: errorResponseSchema,
-          403: errorResponseSchema,
+          403: errorResponseSchema.describe(
+            'Missing or invalid CSRF token, or cross-origin request',
+          ),
           409: errorResponseSchema,
         },
       },

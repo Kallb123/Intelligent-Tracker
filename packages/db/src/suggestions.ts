@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { analyseHistory } from '@tracker/core';
-import type { SuggestionAction, SuggestionDto } from '@tracker/shared';
+import type { SuggestionAction, SuggestionDto, SuggestionKind } from '@tracker/shared';
 import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { Database, DbOrTransaction } from './client.js';
@@ -93,8 +93,13 @@ async function candidates(db: DbOrTransaction, householdId: string, now: Date, t
             ),
           )
           .groupBy(snooze.occurrenceId);
-  const resolved = await db
-    .select({ data: activity.data })
+  const decisionKind = sql<SuggestionKind>`${activity.data}->>'kind'`;
+  const decisions = await db
+    .select({
+      taskId: activity.taskId,
+      kind: decisionKind,
+      at: sql`max(${activity.createdAt})`.mapWith(activity.createdAt),
+    })
     .from(activity)
     .where(
       and(
@@ -102,8 +107,8 @@ async function candidates(db: DbOrTransaction, householdId: string, now: Date, t
         inArray(activity.taskId, ids),
         inArray(activity.kind, ['suggestion.accepted', 'suggestion.dismissed']),
       ),
-    );
-  const evidence = new Set(resolved.map((r) => r.data['evidenceKey']));
+    )
+    .groupBy(activity.taskId, decisionKind);
 
   return tasks.flatMap((t) => {
     const members = assignees.filter((a) => a.taskId === t.id);
@@ -111,6 +116,9 @@ async function candidates(db: DbOrTransaction, householdId: string, now: Date, t
       now,
       timezone: settings.timezone,
       task: t,
+      decidedAt: Object.fromEntries(
+        decisions.filter((d) => d.taskId === t.id).map((d) => [d.kind, d.at]),
+      ),
       assignees: members,
       completions: history
         .filter((c) => c.taskId === t.id && c.completedAt !== null)
@@ -122,9 +130,15 @@ async function candidates(db: DbOrTransaction, householdId: string, now: Date, t
     });
     return proposals.flatMap((p) => {
       const evidenceKey = fingerprint([t.id, p.kind, p.evidence]);
-      if (evidence.has(evidenceKey)) return [];
-      // Any task edit invalidates cards already displayed, including cross-channel cards.
-      const id = fingerprint([evidenceKey, t.updatedAt, members, settings.timezone, p]);
+      // Independent cards survive unrelated edits; changed evidence, wording or proposed
+      // values still invalidate them, and acceptance always recomputes under the task lock.
+      const id = fingerprint([
+        evidenceKey,
+        t.title,
+        p.kind === 'fairness' ? members : null,
+        settings.timezone,
+        p,
+      ]);
       return [
         {
           id,

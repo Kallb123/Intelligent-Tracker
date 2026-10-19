@@ -3263,6 +3263,7 @@
         "tags": [
           "Suggestions"
         ],
+        "description": "Requires a household session and CSRF token. Missing or invalid CSRF tokens return 403.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3364,7 +3365,7 @@
             }
           },
           "403": {
-            "description": "Default Response",
+            "description": "Missing or invalid CSRF token, or cross-origin request",
             "content": {
               "application/json": {
                 "schema": {
@@ -3381,7 +3382,8 @@
                     "error",
                     "message"
                   ],
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "description": "Missing or invalid CSRF token, or cross-origin request"
                 }
               }
             }
