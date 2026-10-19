@@ -52,6 +52,8 @@ export interface PlannedReminder {
   milestoneTitle?: string;
   /** Kind `overdue` only: whole local days past the due date. */
   overdueDays?: number;
+  /** Heads-up only: persisted smoothing offset, so a later plan can retain it. */
+  headsUpDelayDays?: number;
 }
 
 export interface PlanRemindersInput {
@@ -90,10 +92,14 @@ export interface PlanRemindersInput {
   now: Date;
   /** How far past `now` overdue reminders are planned (the worker re-plans). */
   overdueHorizonDays?: number;
+  /** Saved workload-smoothing offset. Never moves a heads-up beyond another reminder. */
+  headsUpDelayDays?: number;
 }
 
 /** Overdue reminders are planned this many days past `now` unless the caller says otherwise. */
 export const DEFAULT_OVERDUE_HORIZON_DAYS = 14;
+/** Heads-ups may spread over the first seven local days of their prep window. */
+export const MAX_HEADS_UP_DELAY_DAYS = 6;
 const MAX_DAYS = 3650;
 /** Standard-profile overdue reminders repeat this often; persistent ones are daily. */
 const STANDARD_OVERDUE_INTERVAL_DAYS = 3;
@@ -143,6 +149,9 @@ function validate(input: PlanRemindersInput): void {
   if (overdueHorizonDays !== undefined) {
     assertInteger(overdueHorizonDays, 0, MAX_DAYS, 'overdueHorizonDays');
   }
+  if (input.headsUpDelayDays !== undefined) {
+    assertInteger(input.headsUpDelayDays, 0, MAX_HEADS_UP_DELAY_DAYS, 'headsUpDelayDays');
+  }
 }
 
 /** The task's reminder time of day, in milliseconds after local midnight. */
@@ -186,6 +195,8 @@ const slotOn = (clock: Clock, day: LocalDate): number =>
  *   0) there is no heads-up and no nudges.
  * - `heads_up` on the start day, and one `milestone` per milestone not yet completed on its due
  *   day minus `offsetDaysBeforeDue`; the milestones are kept once the occurrence is Started.
+ *   A saved `headsUpDelayDays` can stagger the heads-up within the first seven days, strictly
+ *   before the next reminder and due day. Workload smoothing chooses this offset across tasks.
  * - `nudge`s at fractions of the window: `persistent` 25/50/75/90%, `standard` 50/75/90%,
  *   `gentle` none, on day start + round(window days x fraction). Only days strictly between the
  *   start and due days count, and a day that already has another reminder gets no nudge, so
@@ -245,11 +256,33 @@ export function planReminders(input: PlanRemindersInput): PlannedReminder[] {
 
   // Past reminders go first: they were sent (or are stale) and must not be held or resent, and
   // must not take the place of the upcoming reminder a hold is meant to move.
-  const upcoming = sortReminders(planned).filter(
+  const upcoming = sortReminders(delayHeadsUp(input, clock, dueDay, planned)).filter(
     (reminder) => reminder.fireAt.getTime() > now.getTime(),
   );
   const held = applyHold(zone, dueDay, dedupeNudges(zone, upcoming), holdInstant(input, clock));
   return dedupeNudges(zone, sortReminders(held));
+}
+
+/** Apply a saved offset before dropping past reminders or applying snooze/away holds. */
+function delayHeadsUp(
+  input: PlanRemindersInput,
+  clock: Clock,
+  dueDay: LocalDate,
+  reminders: PlannedReminder[],
+): PlannedReminder[] {
+  const delay = input.headsUpDelayDays ?? 0;
+  const head = reminders.find((r) => r.kind === 'heads_up');
+  if (delay === 0 || !head) return reminders;
+  const startDay = addDays(dueDay, -input.task.leadTimeDays!);
+  const fireAt = new Date(clock.quietAdjust(slotOn(clock, addDays(startDay, delay))));
+  // A narrow window, a milestone at its start, or an evening-before due reminder can leave no
+  // room. Keep the original heads-up rather than overtake a reminder or the due day.
+  if (
+    localDateOf(clock.zone, fireAt) >= dueDay ||
+    reminders.some((r) => r !== head && r.fireAt >= head.fireAt && r.fireAt <= fireAt)
+  )
+    return reminders;
+  return reminders.map((r) => (r === head ? { ...r, fireAt, headsUpDelayDays: delay } : r));
 }
 
 const draft = (
@@ -335,20 +368,35 @@ function overdueReminders(
   }
 }
 
+/** The active holds, shared by the single-task planner and workload smoothing. */
+export function activeReminderHolds(
+  input: PlanRemindersInput,
+  zone: IANAZone,
+): {
+  snoozedUntil: Date | null;
+  awayUntil: LocalDate | null;
+} {
+  const { now, occurrence, assignee } = input;
+  const { snoozedUntil } = occurrence;
+  const awayUntil = assignee?.awayUntil;
+  return {
+    snoozedUntil: snoozedUntil !== null && snoozedUntil > now ? snoozedUntil : null,
+    awayUntil: awayUntil != null && isAwayOn(awayUntil, localDateOf(zone, now)) ? awayUntil : null,
+  };
+}
+
 /**
  * The instant before which reminders are held, or `null`: the later of the snooze end (when it
  * is still ahead) and the slot time on the day after the assignee's `awayUntil` (when they are
  * away today), each moved out of the quiet hours.
  */
 function holdInstant(input: PlanRemindersInput, clock: Clock): number | null {
-  const { now, occurrence, assignee } = input;
+  const { snoozedUntil, awayUntil } = activeReminderHolds(input, clock.zone);
   const holds: number[] = [];
-  const { snoozedUntil } = occurrence;
-  if (snoozedUntil !== null && snoozedUntil > now) {
+  if (snoozedUntil !== null) {
     holds.push(clock.quietAdjust(snoozedUntil.getTime()));
   }
-  const awayUntil = assignee?.awayUntil;
-  if (awayUntil != null && isAwayOn(awayUntil, localDateOf(clock.zone, now))) {
+  if (awayUntil !== null) {
     holds.push(clock.quietAdjust(slotOn(clock, addDays(awayUntil, 1))));
   }
   return holds.length > 0 ? Math.max(...holds) : null;

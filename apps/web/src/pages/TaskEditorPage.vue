@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defaultRecurrence, localToday, RecurrenceError } from '@tracker/core';
+import { defaultRecurrence, localToday, RecurrenceError, suggestLeadTime } from '@tracker/core';
 import { taskBodySchema, type MemberDto } from '@tracker/shared';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
@@ -46,6 +46,7 @@ const timeZone = computed(() => session.timeZone);
 const isNew = computed(() => props.id === undefined);
 
 const form = ref<TaskForm | null>(null);
+const suggestedLead = computed(() => (form.value === null ? null : suggestLeadTime(form.value)));
 const archived = ref(false);
 /** Whose turn it is on the stored task, when it takes turns. */
 const nextUpId = ref<string | null>(null);
@@ -396,6 +397,17 @@ async function remove(): Promise<void> {
             :invalid="!!errors['leadTimeDays']"
           />
         </FormField>
+
+        <Message v-if="suggestedLead !== null" severity="info" :closable="false">
+          This job takes {{ form.effortMinutes }} minutes. Allow {{ suggestedLead }} days to
+          prepare?
+          <Button
+            type="button"
+            :label="`Use ${suggestedLead}-day lead time`"
+            severity="secondary"
+            @click="form.leadTimeDays = suggestedLead"
+          />
+        </Message>
 
         <fieldset class="field milestones">
           <legend>Milestones</legend>
