@@ -20,6 +20,7 @@ import { registerSetupRoutes } from './routes/setup.js';
 import { registerTemplateRoutes } from './routes/templates.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerTelegramRoutes } from './routes/telegram.js';
+import { registerSuggestionRoutes } from './routes/suggestions.js';
 import { registerSecurity } from './security.js';
 
 /** The worker counts as stale when it has not ticked for this long (it ticks every minute). */
@@ -94,6 +95,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       registerMemberRoutes(app, ctx);
       registerLinkRoutes(app, ctx);
       registerTaskRoutes(app, ctx);
+      registerSuggestionRoutes(app, ctx);
       registerTemplateRoutes(app, ctx);
       registerOccurrenceRoutes(app, ctx);
       registerNotificationRoutes(app, ctx);

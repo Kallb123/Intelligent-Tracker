@@ -11,6 +11,7 @@ import type { Bot, Context } from 'grammy';
 import type { BotDeps } from './deps.js';
 import { plain, renderMorningDigest, renderWeekAhead } from './digest.js';
 import { sendQuickAddCard } from './quick-add.js';
+import { sendSuggestions } from './suggestions.js';
 import { MAX_NAME_LENGTH } from './render.js';
 import { linkFirst, memberInHousehold, replyPlain } from './sender.js';
 
@@ -27,6 +28,7 @@ import { linkFirst, memberInHousehold, replyPlain } from './sender.js';
 
 /** The commands in Telegram's command menu (`setMyCommands`), and so the ones registered below. */
 export const BOT_COMMANDS = [
+  { command: 'suggestions', description: 'Ideas from task history: accept or dismiss' },
   { command: 'today', description: "What's on today" },
   { command: 'week', description: 'What is on in the next 7 days' },
   { command: 'mine', description: 'Your jobs in the next 7 days' },
@@ -62,6 +64,11 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     if (!member) await replyPlain(ctx, linkFirst('send the command again'));
     return member;
   };
+
+  command('suggestions', async (ctx, household) => {
+    if (!(await senderOf(ctx, household))) return;
+    await sendSuggestions(ctx, deps, household);
+  });
 
   // /today and /digest show the same thing; /digest is the name of what the group gets at 08:00.
   const today: Handler = async (ctx, household) => {

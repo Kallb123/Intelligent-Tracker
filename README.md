@@ -219,10 +219,16 @@ in any other group it stays silent):
 | `/digest`      | The morning digest on demand (the same text as `/today`)                                  |
 | `/away <date>` | Away until that date, as `24/12` or `24/12/2026`; `/away off` clears it, `/away` shows it |
 | `/add <text>`  | Quick-add a job, e.g. `/add MOT due 14/03, remind me a month before`; confirm with Save   |
+| `/suggestions` | History-based ideas for reminder lead, slot and rotation fairness; accept or dismiss      |
 
 `/add` runs the rule-based quick-add parser (below) and replies with a confirmation card showing
 what it understood, with ✅ Save, ✏️ Edit in app (opens the web app's quick-add preview) and ✖️ Cancel.
 Nothing is saved until the member who sent it taps Save; an unsaved card goes out of date after a day.
+
+History-based suggestions are available from **Tasks → Suggestions**, the account menu, and
+`/suggestions` in the linked Telegram group. They use completion lateness, repeated snoozes and
+rotation fairness; nothing changes until a household member accepts. Decisions are shared across
+the app and Telegram. See [the rules and acceptance behaviour](docs/history-suggestions.md).
 
 The bot posts a morning digest at the household's morning slot every day and a "week ahead" at the
 evening slot on Sundays (each at most once a day, and only when there is something on; a digest

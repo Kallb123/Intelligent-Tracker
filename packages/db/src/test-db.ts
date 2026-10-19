@@ -1,5 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
+import { MS_PER_DAY } from '@tracker/shared';
+import type { Database } from './client.js';
+import { activity, occurrence } from './schema/index.js';
 
 export interface TestDatabase {
   url: string;
@@ -33,4 +36,45 @@ export async function createTestDatabase(adminUrl: string): Promise<TestDatabase
       }
     },
   };
+}
+
+/** Shared synthetic completion/activity history for suggestion API and Telegram tests. */
+export async function seedSuggestionHistory(
+  db: Database,
+  input: {
+    householdId: string;
+    taskId: string;
+    memberId: string;
+    dates: string[];
+    snoozes?: number;
+  },
+): Promise<void> {
+  for (const date of input.dates) {
+    const completedAt = new Date(`${date}T12:00:00Z`);
+    const dueDate = new Date(completedAt.getTime() - 4 * MS_PER_DAY).toISOString().slice(0, 10);
+    const [row] = await db
+      .insert(occurrence)
+      .values({
+        taskId: input.taskId,
+        dueDate,
+        status: 'done',
+        completedAt,
+        completedBy: input.memberId,
+      })
+      .returning();
+    const base = {
+      householdId: input.householdId,
+      taskId: input.taskId,
+      memberId: input.memberId,
+      occurrenceId: row!.id,
+      createdAt: completedAt,
+    };
+    await db.insert(activity).values([
+      { ...base, kind: 'occurrence.completed' },
+      ...Array.from({ length: input.snoozes ?? 2 }, () => ({
+        ...base,
+        kind: 'occurrence.snoozed',
+      })),
+    ]);
+  }
 }

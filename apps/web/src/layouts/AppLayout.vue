@@ -50,6 +50,11 @@ async function logout(): Promise<void> {
 }
 
 const items: MenuItem[] = [
+  {
+    label: 'Suggestions',
+    icon: 'pi pi-lightbulb',
+    command: () => void router.push({ name: 'suggestions' }),
+  },
   { label: 'Account', icon: 'pi pi-user', command: () => void router.push({ name: 'account' }) },
   { label: 'Log out', icon: 'pi pi-sign-out', command: () => void logout() },
 ];
