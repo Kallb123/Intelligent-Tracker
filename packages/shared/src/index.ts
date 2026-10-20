@@ -28,3 +28,4 @@ export * from './ticker.js';
 export * from './wall-time.js';
 export * from './templates.js';
 export * from './bank-holidays.js';
+export * from './suggestions.js';

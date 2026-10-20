@@ -93,6 +93,12 @@ export const routes = [
         meta: { title: 'People' },
       },
       {
+        path: 'suggestions',
+        name: 'suggestions',
+        component: () => import('./pages/SuggestionsPage.vue'),
+        meta: { title: 'Suggestions' },
+      },
+      {
         path: 'account',
         name: 'account',
         component: () => import('./pages/AccountPage.vue'),

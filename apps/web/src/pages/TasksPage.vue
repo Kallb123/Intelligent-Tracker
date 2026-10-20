@@ -93,6 +93,7 @@ const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
   <div class="page">
     <header class="page-header">
       <h1>All tasks</h1>
+      <router-link :to="{ name: 'suggestions' }">Suggestions</router-link>
       <Button label="New task" icon="pi pi-plus" @click="router.push({ name: 'task-new' })" />
     </header>
 

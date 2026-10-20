@@ -11,6 +11,7 @@ import type { Bot, Context } from 'grammy';
 import type { BotDeps } from './deps.js';
 import { plain, renderMorningDigest, renderWeekAhead } from './digest.js';
 import { sendQuickAddCard } from './quick-add.js';
+import { sendSuggestions } from './suggestions.js';
 import { MAX_NAME_LENGTH } from './render.js';
 import { linkFirst, memberInHousehold, replyPlain } from './sender.js';
 
@@ -33,6 +34,7 @@ export const BOT_COMMANDS = [
   { command: 'digest', description: "Post this morning's digest" },
   { command: 'away', description: 'Set when you are away until: /away 24/12, or /away off' },
   { command: 'add', description: 'Add a job: /add MOT due 14/03, remind me a month before' },
+  { command: 'suggestions', description: 'Ideas from task history: accept or dismiss' },
 ] as const;
 
 /** Words after `/away` that clear the away date. */
@@ -62,6 +64,11 @@ export function registerCommands(bot: Bot, deps: BotDeps): void {
     if (!member) await replyPlain(ctx, linkFirst('send the command again'));
     return member;
   };
+
+  command('suggestions', async (ctx, household) => {
+    if (!(await senderOf(ctx, household))) return;
+    await sendSuggestions(ctx, deps, household);
+  });
 
   // /today and /digest show the same thing; /digest is the name of what the group gets at 08:00.
   const today: Handler = async (ctx, household) => {

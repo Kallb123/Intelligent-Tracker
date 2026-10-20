@@ -117,3 +117,4 @@ export * from './schema/index.js';
 export * from './seed/index.js';
 export * from './bank-holidays.js';
 export * from './digest.js';
+export { listSuggestions, resolveSuggestion } from './suggestions.js';
