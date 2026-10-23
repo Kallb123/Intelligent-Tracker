@@ -13,11 +13,17 @@ import PersonFilter from '../components/PersonFilter.vue';
 import QuickAddBar from '../components/QuickAddBar.vue';
 import SelectField from '../components/SelectField.vue';
 import { usePersonFilter } from '../composables/usePersonFilter.js';
+import { useTaskSort } from '../composables/useTaskSort.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
+import { describeNextDue } from '../tasks/occurrences.js';
 import { describeAssignees, nextUpName } from '../tasks/rotation.js';
+import { sortTasks, TASK_SORT_OPTIONS } from '../tasks/sort.js';
 
-/** All tasks: every task definition, with search, person / category / tag filters and quick-add. */
+/**
+ * All tasks: every task definition, with search, person / category / tag filters, a sort order
+ * (next due by default, remembered per browser) and quick-add.
+ */
 const session = useSessionStore();
 const membersStore = useMembersStore();
 const router = useRouter();
@@ -52,6 +58,7 @@ const search = ref('');
 const { person } = usePersonFilter();
 const category = ref('');
 const tag = ref('');
+const sort = useTaskSort();
 
 const distinct = (values: string[]) => [...new Set(values)].sort((a, b) => a.localeCompare(b));
 const categories = computed(() =>
@@ -70,7 +77,7 @@ const tagOptions = computed(() => [
 
 const visible = computed(() => {
   const needle = search.value.trim().toLowerCase();
-  return tasks.value.filter((t) => {
+  const matching = tasks.value.filter((t) => {
     if (person.value && !t.assigneeIds.includes(person.value)) return false;
     if (category.value && t.category !== category.value) return false;
     if (tag.value && !t.tags.includes(tag.value)) return false;
@@ -79,6 +86,7 @@ const visible = computed(() => {
       text.toLowerCase().includes(needle),
     );
   });
+  return sortTasks(matching, sort.value);
 });
 
 const filtering = computed(
@@ -87,6 +95,7 @@ const filtering = computed(
 
 const assignees = (t: TaskDto) => describeAssignees(t, membersStore.nameOf);
 const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
+const nextDue = (t: TaskDto) => describeNextDue(t, new Date(), session.timeZone);
 </script>
 
 <template>
@@ -119,6 +128,10 @@ const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
         <label for="filter-tag">Tag</label>
         <SelectField id="filter-tag" v-model="tag" :options="tagOptions" />
       </div>
+      <div class="field">
+        <label for="task-sort">Sort by</label>
+        <SelectField id="task-sort" v-model="sort" :options="TASK_SORT_OPTIONS" />
+      </div>
       <div class="checkbox-row filters-archived">
         <Checkbox v-model="showArchived" input-id="show-archived" binary />
         <label for="show-archived">Show archived</label>
@@ -149,6 +162,7 @@ const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
               t.title
             }}</router-link>
             <span class="muted">{{ describeSchedule(t, session.timeZone) }}</span>
+            <span v-if="nextDue(t)" class="muted">{{ nextDue(t) }}</span>
             <span class="muted">For {{ assignees(t) }}</span>
             <span v-if="nextUp(t)" class="muted">Next: {{ nextUp(t) }}</span>
           </div>
