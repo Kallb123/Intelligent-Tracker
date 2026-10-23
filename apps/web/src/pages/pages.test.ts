@@ -701,6 +701,25 @@ describe('AccountPage', () => {
   });
 });
 
+describe('Push notifications on the AccountPage', () => {
+  it('shows the panel above Telegram, with the rest of the page working without push', async () => {
+    const { wrapper } = await open(
+      { [ME]: json(session()), [TELEGRAM]: json(notLinked) },
+      '/account',
+    );
+
+    const headings = wrapper.findAll('section.panel h2').map((h) => h.text());
+    expect(headings.indexOf('Notifications on this device')).toBeGreaterThan(-1);
+    expect(headings.indexOf('Notifications on this device')).toBeLessThan(
+      headings.indexOf('Telegram'),
+    );
+    // happy-dom has no Push API, so the panel explains that and asks the server nothing.
+    expect(wrapper.get('[aria-labelledby="push-heading"]').text()).toContain(
+      'cannot show notifications',
+    );
+  });
+});
+
 describe('Telegram on the AccountPage', () => {
   const expiresAt = '2026-10-15T13:00:00.000Z';
   const buttonLabelled = (wrapper: VueWrapper, label: string) =>

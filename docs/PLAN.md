@@ -44,7 +44,8 @@ attention yet.
 
 ### Non-goals (for v1)
 - Two-way Google Calendar sync. Read-only ICS is enough to start (see backlog).
-- Native mobile apps. The web UI is responsive and installable as a PWA; Telegram covers push.
+- Native mobile apps. The web UI is responsive and installable as a PWA, with Web Push
+  notifications next to Telegram.
 - Multi-tenant SaaS hosting. The data model has a `household` so this stays possible later.
 
 ---
@@ -366,7 +367,9 @@ Everything goes to **one house group chat**.
   The first-run wizard creates the admin, and the admin invites the other members with one-time
   invite links in which they set their own password. Admins can reset passwords. Login attempts
   are rate-limited. "Remember me" sessions last 30 days.
-- **PWA** manifest so it installs to phone home screens.
+- **PWA**: manifest so it installs to phone home screens, a service worker that keeps the app
+  shell working offline, and opt-in **Web Push** reminders per browser (Account page). On iPhone,
+  push needs the app added to the home screen first (iOS 16.4+).
 
 ---
 
@@ -430,6 +433,7 @@ deployable. Milestones mark points where the app is usable.
 | 17 | **Rule-based quick-add (en-GB)** | `chrono.en.GB` + recurrence grammar + lead-time phrases + assignee + template match (section 4.8); quick-add bar in UI and `/add` in Telegram with confirm card | Corpus of ~80 UK-phrased examples with expected parses |
 | 18 | **Workload smoothing + effort-aware leads** | Stagger heads-ups across days; propose lead time from effort | Planner tests for clustered windows |
 | 19 | **History-based suggestions** | Activity analytics (lateness, snoozes, fairness); suggestions inbox in UI + Telegram; accept → updates task | Tests with synthetic histories |
+| 19a | **PWA + Web Push** | Service worker (offline app shell, push and click handling); push subscriptions per browser; `web_push` outbox channel delivered by the worker (VAPID); enable/disable on the Account page | A due reminder shows as a browser notification on a subscribed device |
 
 ### Milestone 1.0: hardening
 
@@ -442,7 +446,6 @@ deployable. Milestones mark points where the app is usable.
 - Two-way Google Calendar sync via the Calendar API (OAuth); create events in a dedicated calendar for near-real-time updates.
 - Optional personal Telegram DMs for private tasks (e.g. gift buying you don't want the group to see).
 - Private tasks hidden from other members in the UI and feeds.
-- Web Push notifications (PWA) as a second channel next to Telegram.
 - Points/streaks for chores; weekly fairness report.
 - Shopping list / pantry as a task type.
 - Home Assistant integration (sensors for "overdue chores", trigger tasks from automations).

@@ -1,5 +1,6 @@
 import { createMemoryHistory, type Router } from 'vue-router';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setUpdatePending } from './pwa.js';
 import { createAppRouter, safeRedirect } from './router.js';
 import { apiError, fakeServer, json, session, setupApp, type Handler } from './test-util.js';
 
@@ -89,6 +90,46 @@ describe('router guards', () => {
     expect((await visit(handlers, '/unavailable')).currentRoute.value.name).toBe('unavailable');
     // Nothing is wrong, so there is nothing to show here.
     expect((await visit(loggedIn, '/unavailable')).currentRoute.value.name).toBe('home');
+  });
+});
+
+describe('after a new version of the app has taken over', () => {
+  const assign = vi.fn();
+  afterEach(() => {
+    setUpdatePending(false);
+    assign.mockClear();
+    vi.unstubAllGlobals();
+  });
+
+  it('loads the next page from the server instead of navigating inside the old one', async () => {
+    const router = await visit(loggedIn, '/tasks');
+    vi.stubGlobal('location', { ...window.location, assign });
+    setUpdatePending();
+
+    await router.push('/people?sort=name#top');
+
+    expect(assign).toHaveBeenCalledExactlyOnceWith('/people?sort=name#top');
+    // The client-side navigation is cancelled: the page stays as it was until the load replaces it.
+    expect(router.currentRoute.value.fullPath).toBe('/tasks');
+  });
+
+  it('leaves the page alone until it navigates', async () => {
+    const router = await visit(loggedIn, '/tasks');
+    vi.stubGlobal('location', { ...window.location, assign });
+
+    setUpdatePending();
+    expect(assign).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.name).toBe('tasks');
+  });
+
+  it('navigates normally when no update is pending', async () => {
+    const router = await visit(loggedIn, '/tasks');
+    vi.stubGlobal('location', { ...window.location, assign });
+
+    await router.push('/people');
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.name).toBe('people');
   });
 });
 

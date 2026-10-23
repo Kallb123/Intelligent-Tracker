@@ -1,6 +1,8 @@
 import {
   activateDue,
+  createWebPushHandler,
   deliverOutbox,
+  giveUpStaleNotifications,
   materialiseAll,
   pruneDigests,
   pruneNotifications,
@@ -11,6 +13,7 @@ import {
   type Database,
   type MaterialiseFailure,
   type OutboxHandler,
+  type PushSender,
   type ReminderPlanFailure,
 } from '@tracker/db';
 import { sql } from 'drizzle-orm';
@@ -62,8 +65,30 @@ function uniqueFailures(failures: ReminderPlanFailure[]): ReminderPlanFailure[] 
  * How each outbox channel is delivered. An in-app notification is the outbox row itself, so
  * delivering it only stamps `sent_at` (which makes it show up in the member's bell). The
  * `telegram_group` channel has no handler here: the bot owns it, so the worker never claims it.
+ * `web_push` is delivered only when the tick is given a `webPush` sender (the server has VAPID
+ * keys); otherwise the worker does not claim those rows either.
  */
-const HANDLERS: Record<'in_app', OutboxHandler> = { in_app: async () => {} };
+function handlersFor(
+  db: Database,
+  now: Date,
+  webPush: PushSender | undefined,
+  logger: TickLogger,
+): Partial<Record<'in_app' | 'web_push', OutboxHandler>> {
+  return {
+    in_app: async () => {},
+    ...(webPush
+      ? {
+          web_push: createWebPushHandler(db, {
+            send: webPush,
+            now,
+            // Delivered to some of the member's browsers: not retried, so say what failed.
+            onPartialFailure: (failure) =>
+              logger.warn({ ...failure }, 'push not accepted by some browsers of a member'),
+          }),
+        }
+      : {}),
+  };
+}
 
 /**
  * One worker tick. Inside a single transaction, serialised across workers by a transaction-scoped
@@ -80,6 +105,8 @@ const HANDLERS: Record<'in_app', OutboxHandler> = { in_app: async () => {} };
  * when `prune` is set (the default), deletes notifications past their retention
  * (`pruneNotifications` and `pruneDigests`; the worker passes `prune` about once an hour, see `PruneSchedule`). The
  * heartbeat is also recorded when another worker holds the lock.
+ * With a `webPush` sender, the tick also queues a `web_push` notification for each recipient
+ * who has a push subscription, gives up the stale ones and delivers them to the browsers.
  * Idempotent. A task that cannot be materialised, or an occurrence that cannot be planned, is
  * logged and left to the next tick.
  */
@@ -90,9 +117,11 @@ export async function runTick(
     logger: TickLogger;
     /** Run the retention sweep after delivering. Defaults to true. */
     prune?: boolean;
+    /** Deliver Web Push through this sender. Without it, push is off and `web_push` is untouched. */
+    webPush?: PushSender;
   },
 ): Promise<TickResult> {
-  const { now, logger, prune = true } = options;
+  const { now, logger, prune = true, webPush } = options;
   const result = await db.transaction(async (tx): Promise<TickResult> => {
     const rows = await tx.execute<{ locked: boolean }>(
       sql`select pg_try_advisory_xact_lock(${TICK_LOCK_KEY}::bigint) as locked`,
@@ -100,7 +129,7 @@ export async function runTick(
     if (!rows[0]?.locked) return { skipped: true };
     const materialised = await materialiseAll(tx, { now });
     const activated = await activateDue(tx, { now });
-    const queued = await queueDueReminders(tx, { now });
+    const queued = await queueDueReminders(tx, { now, webPush: webPush !== undefined });
     const replanned = await replanReminders(tx, { now });
     return {
       skipped: false,
@@ -125,7 +154,15 @@ export async function runTick(
   for (const failure of result.planFailures) {
     logger.warn({ ...failure }, 'could not plan reminders');
   }
-  const delivery = await deliverOutbox(db, { now, handlers: HANDLERS });
+  // A push left over from a long outage is not worth waking a phone for (as for Telegram).
+  if (webPush) {
+    const stale = await giveUpStaleNotifications(db, { now, channel: 'web_push' });
+    if (stale > 0) logger.warn({ count: stale }, 'stale push notifications not sent');
+  }
+  const delivery = await deliverOutbox(db, {
+    now,
+    handlers: handlersFor(db, now, webPush, logger),
+  });
   for (const failure of delivery.failures) {
     logger.warn(
       { ...failure },

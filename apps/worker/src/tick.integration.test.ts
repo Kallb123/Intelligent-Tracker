@@ -4,6 +4,7 @@ import {
   member,
   notification,
   occurrence,
+  pushSubscription,
   queueDueReminders,
   reminder,
   runMigrations,
@@ -12,6 +13,7 @@ import {
   taskAssignee,
   taskMilestone,
   type DbHandle,
+  type PushSender,
 } from '@tracker/db';
 import { createTestDatabase, type TestDatabase } from '@tracker/db/test-db';
 import { asc, eq } from 'drizzle-orm';
@@ -635,6 +637,154 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       const pruning = await runTick(handle.db, { now: long, logger, prune: true });
       expect(pruning).toMatchObject({ skipped: false, pruned: 1 });
       expect(await notifications()).toEqual([]);
+    });
+
+    describe('Web Push', () => {
+      const subscribe = (memberId: string) =>
+        handle.db.insert(pushSubscription).values({
+          memberId,
+          endpoint: `https://fcm.googleapis.com/fcm/send/${memberId}`,
+          p256dh: 'p',
+          auth: 'a',
+        });
+      const pushTick = (now: Date, webPush: PushSender) =>
+        runTick(handle.db, { now, logger, webPush });
+      const pushRows = async () => (await notifications()).filter((n) => n.channel === 'web_push');
+
+      it('queues and delivers a push to a subscribed assignee next to the in-app one', async () => {
+        const { people } = await setup({ assignees: 1, members: 2 });
+        await subscribe(people[0]?.id ?? '');
+        await subscribe(people[1]?.id ?? '');
+        const send = vi.fn<PushSender>(async () => {});
+        await pushTick(NOW, send);
+
+        const result = await pushTick(HEADS_UP_TICK, send);
+
+        expect(result).toMatchObject({ queued: 1, delivered: 2 });
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            endpoint: `https://fcm.googleapis.com/fcm/send/${people[0]?.id}`,
+          }),
+          expect.objectContaining({
+            body: 'Coming up: Bins (due 20 Jul 2026)',
+            url: '/',
+          }),
+          { ttlSeconds: 86_400, urgency: 'normal' },
+        );
+        const rows = await pushRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ memberId: people[0]?.id, sentAt: HEADS_UP_TICK });
+        // Ticking again sends nothing more.
+        await pushTick(HEADS_UP_TICK, send);
+        expect(send).toHaveBeenCalledTimes(1);
+      });
+
+      it('is off without a sender: no rows are queued, and none already queued are touched', async () => {
+        const { people } = await setup({ assignees: 1 });
+        await subscribe(people[0]?.id ?? '');
+        await tick(NOW);
+
+        await tick(HEADS_UP_TICK);
+        expect(await pushRows()).toEqual([]);
+
+        // A row left from when push was on stays pending until it is turned on again.
+        const [inApp] = await notifications();
+        await handle.db.insert(notification).values({
+          ...(inApp as typeof notification.$inferInsert),
+          id: undefined,
+          channel: 'web_push',
+          dedupeKey: 'left-over',
+          sentAt: null,
+        });
+        const later = at('2026-07-10T18:05:00Z');
+        const result = await tick(later);
+        expect(result).toMatchObject({ delivered: 0 });
+        expect(await pushRows()).toMatchObject([{ sentAt: null, failedAt: null, attempts: 0 }]);
+      });
+
+      it('gives up on stale pushes instead of sending them, and logs it', async () => {
+        const { people } = await setup({ assignees: 1 });
+        await subscribe(people[0]?.id ?? '');
+        const send = vi.fn<PushSender>(async () => {});
+        await pushTick(NOW, send);
+        await pushTick(HEADS_UP_TICK, send);
+        send.mockClear();
+        // Another push for the same reminder that the worker was too late to send.
+        const [inApp] = await notifications();
+        await handle.db.insert(notification).values({
+          ...(inApp as typeof notification.$inferInsert),
+          id: undefined,
+          channel: 'web_push',
+          dedupeKey: 'stale',
+          sentAt: null,
+        });
+        const late = new Date(HEADS_UP_TICK.getTime() + 25 * 60 * 60 * 1000);
+
+        await pushTick(late, send);
+
+        expect(send).not.toHaveBeenCalled();
+        expect(
+          await handle.db.select().from(notification).where(eq(notification.dedupeKey, 'stale')),
+        ).toMatchObject([{ sentAt: null, failedAt: late }]);
+        expect(logger.warn).toHaveBeenCalledWith({ count: 1 }, 'stale push notifications not sent');
+      });
+
+      it('logs the browsers that failed when another one accepted the push', async () => {
+        const { people } = await setup({ assignees: 1 });
+        const memberId = people[0]?.id ?? '';
+        await subscribe(memberId);
+        await handle.db.insert(pushSubscription).values({
+          memberId,
+          endpoint: 'https://fcm.googleapis.com/fcm/send/flaky',
+          p256dh: 'p',
+          auth: 'a',
+        });
+        const send = vi.fn<PushSender>(async (target) => {
+          if (target.endpoint.endsWith('/flaky')) throw new Error('push service busy');
+        });
+        await pushTick(NOW, send);
+
+        await pushTick(HEADS_UP_TICK, send);
+
+        const [row] = await pushRows();
+        expect(row).toMatchObject({ sentAt: HEADS_UP_TICK, attempts: 0 });
+        expect(logger.warn).toHaveBeenCalledWith(
+          {
+            notificationId: row?.id,
+            memberId,
+            accepted: 1,
+            failed: 1,
+            errors: ['push service busy'],
+          },
+          'push not accepted by some browsers of a member',
+        );
+      });
+
+      it('logs a push that could not be delivered, and retries it', async () => {
+        const { people } = await setup({ assignees: 1 });
+        await subscribe(people[0]?.id ?? '');
+        const send = vi.fn<PushSender>(async () => {
+          throw new Error('push service busy');
+        });
+        await pushTick(NOW, send);
+
+        const result = await pushTick(HEADS_UP_TICK, send);
+
+        expect(result).toMatchObject({ queued: 1, delivered: 1 });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ channel: 'web_push', attempts: 1, gaveUp: false }),
+          'could not deliver notification',
+        );
+        const [row] = await pushRows();
+        expect(row).toMatchObject({ sentAt: null, attempts: 1 });
+
+        // Once the backoff has passed the retry goes out.
+        send.mockImplementation(async () => {});
+        const retry = await pushTick(new Date(HEADS_UP_TICK.getTime() + 60_000), send);
+        expect(retry).toMatchObject({ delivered: 1 });
+        expect((await pushRows())[0]?.sentAt).not.toBeNull();
+      });
     });
 
     describe('heartbeat', () => {

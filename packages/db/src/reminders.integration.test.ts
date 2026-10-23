@@ -9,12 +9,14 @@ import {
   queueDueReminders,
   replanReminders,
   telegramGroupDedupeKey,
+  webPushDedupeKey,
 } from './reminders.js';
 import {
   household,
   member,
   notification,
   occurrence,
+  pushSubscription,
   reminder,
   task,
   taskMilestone,
@@ -1191,6 +1193,116 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         await queueDueReminders(db, { now: DUE_NOW });
 
         expect((await notifications()).map((n) => n.channel)).toEqual(['in_app']);
+      });
+    });
+
+    describe('Web Push', () => {
+      const subscribe = (
+        memberId: string,
+        endpoint = `https://fcm.googleapis.com/fcm/send/${memberId}`,
+      ) => db.insert(pushSubscription).values({ memberId, endpoint, p256dh: 'p', auth: 'a' });
+      const pushRows = async () => (await notifications()).filter((n) => n.channel === 'web_push');
+
+      it('queues a row next to the in-app one for a subscribed recipient, once', async () => {
+        const { h, alex, t, o } = await setup();
+        await subscribe(alex.id);
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        expect(result).toEqual({ queued: 1, notifications: 2, cancelled: 0, failures: [] });
+        const [rem] = await reminders();
+        const rows = await pushRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          householdId: h.id,
+          memberId: alex.id,
+          reminderId: rem?.id,
+          dedupeKey: webPushDedupeKey(rem?.id ?? '', alex.id),
+          attempts: 0,
+          sentAt: null,
+          failedAt: null,
+          nextAttemptAt: DUE_NOW,
+          payload: { kind: 'heads_up', taskId: t.id, occurrenceId: o.id, assigneeId: alex.id },
+        });
+        const inApp = (await notifications()).filter((n) => n.channel === 'in_app');
+        expect(inApp.map((n) => n.payload)).toEqual(rows.map((n) => n.payload));
+        expect(webPushDedupeKey('r', 'm')).toBe('reminder:r:web_push:m');
+      });
+
+      it('is not queued unless asked for, however many subscriptions there are', async () => {
+        const { alex } = await setup();
+        await subscribe(alex.id);
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        expect((await notifications()).map((n) => n.channel)).toEqual(['in_app']);
+      });
+
+      it('is not queued for a recipient without a subscription', async () => {
+        const { alex } = await setup();
+        const other = await setup();
+        await subscribe(other.alex.id);
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        expect(result).toMatchObject({ queued: 2, notifications: 3 });
+        expect((await pushRows()).map((n) => n.memberId)).toEqual([other.alex.id]);
+        expect(alex.id).not.toBe(other.alex.id);
+      });
+
+      it('is one row per member however many browsers they subscribed', async () => {
+        const { alex } = await setup();
+        await subscribe(alex.id, 'https://fcm.googleapis.com/fcm/send/phone');
+        await subscribe(alex.id, 'https://fcm.googleapis.com/fcm/send/laptop');
+        await replanReminders(db, { now: NOW });
+
+        await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        expect(await pushRows()).toHaveLength(1);
+      });
+
+      it('goes to the subscribed members of the household for an unassigned reminder', async () => {
+        const h = await newHousehold();
+        const [a, b] = [await newMember(h.id, 'a'), await newMember(h.id, 'b')];
+        await newMember(h.id, 'c');
+        await subscribe(a.id);
+        await subscribe(b.id);
+        await newOccurrence((await newTask(h.id)).id);
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 5 });
+        expect((await pushRows()).map((n) => n.memberId).sort()).toEqual([a.id, b.id].sort());
+      });
+
+      it('does not queue a reminder twice when the queue runs again', async () => {
+        const { alex } = await setup();
+        await subscribe(alex.id);
+        await replanReminders(db, { now: NOW });
+        await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+        // Put the reminder back as if a concurrent tick had queued it without marking it sent.
+        await db.update(reminder).set({ status: 'planned', sentAt: null });
+
+        const again = await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        expect(again).toMatchObject({ queued: 1, notifications: 0 });
+        expect(await pushRows()).toHaveLength(1);
+      });
+
+      it('does not replay reminders that were queued before the member subscribed', async () => {
+        const { alex } = await setup();
+        await replanReminders(db, { now: NOW });
+        await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        await subscribe(alex.id);
+        await queueDueReminders(db, { now: DUE_NOW, webPush: true });
+
+        expect(await pushRows()).toHaveLength(0);
       });
     });
 

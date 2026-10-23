@@ -5,6 +5,7 @@ import {
   type Router,
   type RouterHistory,
 } from 'vue-router';
+import { loadPendingUpdate } from './pwa.js';
 import { useSessionStore } from './stores/session.js';
 
 declare module 'vue-router' {
@@ -126,13 +127,19 @@ export function safeRedirect(value: unknown): string {
  * Router with the auth guards:
  *  - until the first member exists, everything goes to /setup (and /setup is only open then);
  *  - pages other than the public ones need a session, else /login?redirect=...;
- *  - /login is for logged-out visitors only.
+ *  - /login is for logged-out visitors only;
+ *  - when a new version of the app has taken over (see `registerServiceWorker`), the next
+ *    navigation is a full page load of the target, so the new code and its lazily loaded chunks
+ *    are used and nothing the member was doing on the current page is thrown away before then.
  * The session store must have a client registered (`setApi`) before the first navigation.
  */
 export function createAppRouter(history: RouterHistory = createWebHistory()): Router {
   const router = createRouter({ history, routes });
 
   router.beforeEach(async (to): Promise<boolean | RouteLocationRaw> => {
+    // Cancel the client-side navigation: the page is about to be replaced by the new version.
+    if (loadPendingUpdate(to.fullPath)) return false;
+
     const session = useSessionStore();
     await session.bootstrap();
 

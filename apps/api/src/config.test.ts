@@ -33,6 +33,14 @@ describe('configFromEnv', () => {
     expect(configFromEnv({ TELEGRAM_BOT_USERNAME: '@' }).auth).toEqual({ cookieSecure: false });
   });
 
+  it('reads VAPID_PUBLIC_KEY, and ignores an empty one', () => {
+    expect(configFromEnv({ VAPID_PUBLIC_KEY: ' BKey_-123 ' }).auth).toEqual({
+      cookieSecure: false,
+      vapidPublicKey: 'BKey_-123',
+    });
+    expect(configFromEnv({ VAPID_PUBLIC_KEY: ' ' }).auth).toEqual({ cookieSecure: false });
+  });
+
   it('ignores an empty PUBLIC_BASE_URL', () => {
     expect(configFromEnv({ PUBLIC_BASE_URL: '  ' }).auth).toEqual({ cookieSecure: false });
   });

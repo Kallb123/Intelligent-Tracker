@@ -16,6 +16,7 @@ import { registerLinkRoutes } from './routes/links.js';
 import { registerMemberRoutes } from './routes/members.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerOccurrenceRoutes } from './routes/occurrences.js';
+import { registerPushRoutes } from './routes/push.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerTemplateRoutes } from './routes/templates.js';
 import { registerTaskRoutes } from './routes/tasks.js';
@@ -99,6 +100,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       registerTemplateRoutes(app, ctx);
       registerOccurrenceRoutes(app, ctx);
       registerNotificationRoutes(app, ctx);
+      registerPushRoutes(app, ctx);
       registerTelegramRoutes(app, ctx);
     }
   });

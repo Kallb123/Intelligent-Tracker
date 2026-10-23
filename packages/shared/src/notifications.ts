@@ -10,8 +10,11 @@ import { z } from 'zod';
 
 export const REMINDER_KINDS = ['heads_up', 'milestone', 'nudge', 'due', 'overdue'] as const;
 export const REMINDER_STATUSES = ['planned', 'sent', 'cancelled'] as const;
-/** `in_app` feeds the web app's bell; `telegram_group` is delivered by the bot (PR 12). */
-export const NOTIFICATION_CHANNELS = ['in_app', 'telegram_group'] as const;
+/**
+ * `in_app` feeds the web app's bell; `telegram_group` is delivered by the bot (PR 12); `web_push`
+ * is delivered by the worker to the member's subscribed browsers (Web Push, see `push.ts`).
+ */
+export const NOTIFICATION_CHANNELS = ['in_app', 'telegram_group', 'web_push'] as const;
 
 /**
  * The scheduled Telegram digests: the `morning` digest of the day's jobs every day, and the

@@ -6,6 +6,8 @@ import { createApp } from 'vue';
 import 'primeicons/primeicons.css';
 import App from './App.vue';
 import { setApi } from './api/index.js';
+import { listenForInstallPrompt } from './composables/useInstallPrompt.js';
+import { registerServiceWorker } from './pwa.js';
 import { createAppRouter } from './router.js';
 import { createSessionApi } from './stores/session.js';
 import './style.css';
@@ -37,3 +39,8 @@ setApi(createSessionApi());
 app.use(createAppRouter());
 app.use(PrimeVue, { theme: { preset: Theme } });
 app.mount('#app');
+
+// The offline app shell and push notifications need the service worker (src/sw/sw.ts).
+registerServiceWorker();
+// The browser offers to install the app once, early, so it is caught here for the Account page.
+listenForInstallPrompt();

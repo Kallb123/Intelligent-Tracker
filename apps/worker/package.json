@@ -9,15 +9,18 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "node ../../scripts/bundle-backend.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "vapid:generate": "node scripts/vapid-generate.mjs"
   },
   "dependencies": {
     "@tracker/core": "workspace:*",
     "@tracker/db": "workspace:*",
     "@tracker/shared": "workspace:*",
-    "drizzle-orm": "^0.45.4"
+    "drizzle-orm": "^0.45.4",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.23.15"
   }
 }
