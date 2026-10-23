@@ -2,6 +2,7 @@ import type { MemberDto, OccurrenceDto } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
 import {
   describeDue,
+  describeNextDue,
   describePrepStart,
   dueDateOf,
   groupByAssignee,
@@ -72,6 +73,30 @@ describe('describeDue', () => {
       overdue: true,
     });
     expect(describeDue(timed, TODAY, TZ)).toBe('Overdue, was due today at 09:00');
+  });
+});
+
+describe('describeNextDue', () => {
+  // 11:00 on TODAY in London (BST).
+  const now = new Date('2026-10-11T10:00:00.000Z');
+  const allDay = (nextDue: string | null) => describeNextDue({ nextDue, allDay: true }, now, TZ);
+  const timed = (nextDue: string) => describeNextDue({ nextDue, allDay: false }, now, TZ);
+
+  it('words the date of the next occurrence relative to today, in the household zone', () => {
+    expect(allDay('2026-10-10T23:00:00.000Z')).toBe('Next due today');
+    expect(allDay('2026-10-11T23:00:00.000Z')).toBe('Next due tomorrow');
+    expect(allDay('2026-10-15T23:00:00.000Z')).toBe('Next due Fri 16 Oct');
+  });
+
+  it('flags an all-day date before today, and says nothing without one', () => {
+    expect(allDay('2026-10-04T23:00:00.000Z')).toBe('Next due Mon 5 Oct, overdue');
+    expect(allDay(null)).toBe('');
+  });
+
+  it('adds the time of a timed due, and flags it overdue once that has passed', () => {
+    expect(timed('2026-10-11T08:30:00.000Z')).toBe('Next due today at 09:30, overdue');
+    expect(timed('2026-10-11T14:00:00.000Z')).toBe('Next due today at 15:00');
+    expect(timed('2026-10-12T08:30:00.000Z')).toBe('Next due tomorrow at 09:30');
   });
 });
 

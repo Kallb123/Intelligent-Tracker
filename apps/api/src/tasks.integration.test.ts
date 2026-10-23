@@ -159,6 +159,7 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
         assignmentMode: 'fixed',
         assigneeIds: [],
         nextAssigneeId: null,
+        nextDue: '2026-03-05T00:00:00.000Z',
         milestones: [],
         archived: false,
         archivedAt: null,
@@ -332,6 +333,50 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
       expect(await titles('?archived=false')).toEqual(['Bins', 'Water the plants']);
       expect(await titles('?archived=true')).toEqual(['Old chore']);
       expect((await admin.get('/api/tasks?archived=maybe')).statusCode).toBe(400);
+    });
+
+    it('reports when the next open occurrence is due as nextDue', async () => {
+      // London is on GMT in March and on BST in July.
+      const timed = await createTask({
+        title: 'Call the plumber',
+        scheduleKind: 'once',
+        allDay: false,
+        dueAt: '2026-07-10T09:30:00Z',
+      });
+      const winterAllDay = await createTask({ ...onceBody, title: 'Winter all-day' });
+      const summerAllDay = await createTask({
+        ...onceBody,
+        title: 'Summer all-day',
+        dueDate: '2026-07-10',
+      });
+      const undated = await createTask({ title: 'Someday', scheduleKind: 'once' });
+      const weekly = await createTask(weeklyBody);
+
+      const nextDue = async () =>
+        Object.fromEntries(
+          (await admin.get('/api/tasks'))
+            .json<Json>()
+            .tasks.map((x: Json) => [x['id'], x['nextDue']]),
+        );
+      expect(await nextDue()).toEqual({
+        [timed['id']]: '2026-07-10T09:30:00.000Z',
+        [winterAllDay['id']]: '2026-03-05T00:00:00.000Z',
+        // Local midnight at the start of the 10th is 23:00 UTC on the 9th.
+        [summerAllDay['id']]: '2026-07-09T23:00:00.000Z',
+        [undated['id']]: null,
+        [weekly['id']]: '2026-03-02T00:00:00.000Z',
+      });
+
+      // Once the earliest open occurrence is done the next one is reported; with none left, null.
+      const [first] = await occurrencesOf(weekly['id']);
+      await admin.post(`/api/occurrences/${first?.id}/complete`);
+      const afterWeekly = (await admin.get(`/api/tasks/${weekly['id']}`)).json<Json>().task;
+      expect(afterWeekly['nextDue']).toBe('2026-03-09T00:00:00.000Z');
+
+      const [only] = await occurrencesOf(timed['id']);
+      await admin.post(`/api/occurrences/${only?.id}/complete`);
+      const afterTimed = (await admin.get(`/api/tasks/${timed['id']}`)).json<Json>().task;
+      expect(afterTimed['nextDue']).toBeNull();
     });
 
     it('answers 404 for an unknown task', async () => {

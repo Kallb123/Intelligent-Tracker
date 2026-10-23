@@ -1,5 +1,6 @@
 import { localToday } from '@tracker/core';
 import {
+  dueInstant,
   dueOrder,
   isPastDue,
   household,
@@ -36,7 +37,7 @@ export function toTaskDto(
   t: Task,
   assigneeIds: string[],
   milestones: TaskDto['milestones'],
-  nextAssigneeId: string | null,
+  next: NextOpenOccurrence | undefined,
 ): TaskDto {
   return {
     id: t.id,
@@ -60,7 +61,8 @@ export function toTaskDto(
     reminderProfile: t.reminderProfile,
     assignmentMode: t.assignmentMode,
     assigneeIds,
-    nextAssigneeId,
+    nextAssigneeId: next?.assigneeId ?? null,
+    nextDue: next?.due ?? null,
     milestones,
     archived: t.archivedAt !== null,
     archivedAt: t.archivedAt?.toISOString() ?? null,
@@ -70,18 +72,26 @@ export function toTaskDto(
   };
 }
 
+/** The earliest open occurrence of a task: who has it and when it is due (ISO instant). */
+export interface NextOpenOccurrence {
+  assigneeId: string | null;
+  due: string | null;
+}
+
 /**
- * For each of the tasks with an open occurrence, who has the earliest one: the same due order a
- * rotation is planned in (`dueOrder`, in the household's time zone), undated last.
+ * For each of the tasks with an open occurrence, its earliest one: the same due order a rotation
+ * is planned in (`dueOrder`, in the household's time zone), undated last. The due is the
+ * occurrence's due instant (`dueInstant`), `null` when undated.
  */
-async function nextAssigneeIds(
+async function nextOpenOccurrences(
   db: DbOrTransaction,
   taskIds: string[],
-): Promise<Map<string, string | null>> {
+): Promise<Map<string, NextOpenOccurrence>> {
   const rows = await db
     .selectDistinctOn([occurrence.taskId], {
       taskId: occurrence.taskId,
       assigneeId: occurrence.assigneeId,
+      due: dueInstant(household.timezone).mapWith(occurrence.dueAt),
     })
     .from(occurrence)
     .innerJoin(task, eq(task.id, occurrence.taskId))
@@ -93,11 +103,16 @@ async function nextAssigneeIds(
       ),
     )
     .orderBy(occurrence.taskId, dueOrder(household.timezone), asc(occurrence.id));
-  return new Map(rows.map((row) => [row.taskId, row.assigneeId]));
+  return new Map(
+    rows.map((row) => [
+      row.taskId,
+      { assigneeId: row.assigneeId, due: row.due?.toISOString() ?? null },
+    ]),
+  );
 }
 
 /**
- * Task DTOs for `rows` (in that order), loading their assignees, milestones and next assignees
+ * Task DTOs for `rows` (in that order), loading their assignees, milestones and next open occurrences
  * in three queries.
  */
 export async function loadTaskDtos(db: DbOrTransaction, rows: Task[]): Promise<TaskDto[]> {
@@ -114,7 +129,7 @@ export async function loadTaskDtos(db: DbOrTransaction, rows: Task[]): Promise<T
       .from(taskMilestone)
       .where(inArray(taskMilestone.taskId, ids))
       .orderBy(asc(taskMilestone.position)),
-    nextAssigneeIds(db, ids),
+    nextOpenOccurrences(db, ids),
   ]);
   return rows.map((t) =>
     toTaskDto(
@@ -123,7 +138,7 @@ export async function loadTaskDtos(db: DbOrTransaction, rows: Task[]): Promise<T
       milestones
         .filter((m) => m.taskId === t.id)
         .map((m) => ({ id: m.id, title: m.title, offsetDaysBeforeDue: m.offsetDaysBeforeDue })),
-      next.get(t.id) ?? null,
+      next.get(t.id),
     ),
   );
 }
