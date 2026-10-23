@@ -162,7 +162,10 @@ describe('serviceWorkerRegistration', () => {
       const pwa = await freshPwa();
       vi.stubEnv('PROD', true);
       push = fakePushSupport({ registered: false });
-      const ready = Promise.withResolvers<unknown>();
+      // Not `Promise.withResolvers`: it is ES2024, and the app's lib is ES2023.
+      let resolve!: (value: unknown) => void;
+      const promise = new Promise<unknown>((r) => (resolve = r));
+      const ready = { promise, resolve: (value: unknown) => resolve(value) };
       Object.defineProperty(navigator, 'serviceWorker', {
         configurable: true,
         value: {
