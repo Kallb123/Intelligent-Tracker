@@ -15,9 +15,11 @@
     "@tracker/core": "workspace:*",
     "@tracker/db": "workspace:*",
     "@tracker/shared": "workspace:*",
-    "drizzle-orm": "^0.45.4"
+    "drizzle-orm": "^0.45.4",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.23.15"
   }
 }
