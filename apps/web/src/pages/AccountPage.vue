@@ -6,6 +6,7 @@ import Password from 'primevue/password';
 import { reactive, ref } from 'vue';
 import { describeError, getApi } from '../api/index.js';
 import FormField from '../components/FormField.vue';
+import PushNotificationsPanel from '../components/PushNotificationsPanel.vue';
 import TelegramPanel from '../components/TelegramPanel.vue';
 import { useSessionStore } from '../stores/session.js';
 import { confirmationError, validateForm, type FieldErrors } from '../validation.js';
@@ -62,6 +63,8 @@ async function submit(): Promise<void> {
         <dd>{{ session.household?.name }}</dd>
       </dl>
     </section>
+
+    <PushNotificationsPanel v-if="session.member" />
 
     <TelegramPanel v-if="session.member" />
 

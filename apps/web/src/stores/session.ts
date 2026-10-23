@@ -4,6 +4,7 @@ import { computed, ref } from 'vue';
 import { ApiError, createApiClient, getApi, type ApiClient } from '../api/index.js';
 import type { LoginInput, SetPasswordInput, SetupInput } from '../api/types.js';
 import { DEFAULT_TIME_ZONE } from '../format.js';
+import { forgetPushSubscription } from '../pwa.js';
 
 /**
  * Who is logged in, and whether the household still needs its first-run setup.
@@ -94,6 +95,8 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function logout(): Promise<void> {
+    // While the session still works, as removing the subscription needs it.
+    await forgetPushSubscription();
     try {
       await getApi().POST('/api/auth/logout');
     } catch (err) {

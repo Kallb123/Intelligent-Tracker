@@ -249,6 +249,34 @@ The OpenAPI document is served at `GET /api/openapi.json` and committed as `apps
 (the web app's typed client is generated from it). After changing a route, run `pnpm openapi`;
 a test fails while the committed file is out of date.
 
+## Web app: installing, offline and push notifications
+
+The web app is a PWA. `apps/web/src/sw/sw.ts` is built by `vite-plugin-pwa` (`injectManifest`) into a
+single `/sw.js`, and the static `public/manifest.webmanifest` stays the install manifest. The worker
+precaches the built app shell so an installed app opens offline (page loads are answered with the
+cached `index.html`), and never touches `/api/*` or `/ical/*`, so data is always live and the
+calendar feed is never replaced by the app. A new version takes over straight away and an open page
+reloads. Caddy serves `/sw.js` with `Cache-Control: no-cache` like the other files outside
+`/assets`, so an update is noticed. The worker is registered in production builds only: the dev
+server (`pnpm --filter @tracker/web dev`) has none, so nothing is cached there and its Account
+page says notifications are not available. Try the real thing with `pnpm --filter @tracker/web
+build && pnpm --filter @tracker/web preview` (the browser treats `localhost` as secure; any other
+address needs https for service workers and push).
+
+Push notifications need `VAPID_PUBLIC_KEY` on the api (and the key pair on the worker, see above).
+`GET /api/push/config` gives the browser the public key (null when push is off), and
+`POST`/`DELETE /api/push/subscriptions` save and remove a browser's subscription for the logged-in
+member (an endpoint another member had saved, such as on a shared device, moves to the caller; at
+most 20 per member). The Account page's "Notifications on this device" switch asks permission,
+subscribes and saves it, and saves it again on every visit so the server stays in step with the
+browser. Logging out first deletes this browser's subscription on the server and unsubscribes the
+browser, so the next person on a shared device neither gets the previous member's reminders nor is
+subscribed without turning it on themselves. The service worker shows each push
+(`title`, `body`, `tag`, `url`; a push it cannot read still shows a generic notification, as browsers
+penalise silent ones) and opens or focuses the app at `url` when it is clicked. On iPhone and iPad,
+Web Push only works for an app added to the Home Screen (iOS 16.4 or later), which the panel
+explains; an "Install app" button appears where the browser offers installation.
+
 ## Running with Docker
 
 All commands run from the repo root. No `.env` is needed to try it out; to customise, copy

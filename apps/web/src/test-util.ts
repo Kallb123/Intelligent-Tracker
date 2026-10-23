@@ -2,6 +2,7 @@ import type { SessionInfo } from '@tracker/shared';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia, type Pinia } from 'pinia';
 import PrimeVue from 'primevue/config';
+import { vi, type Mock } from 'vitest';
 import { createMemoryHistory, type Router } from 'vue-router';
 import App from './App.vue';
 import { setApi } from './api/index.js';
@@ -105,4 +106,144 @@ export async function mountApp(server: FakeServer, path: string) {
   });
   await flushPromises();
   return { wrapper, router, pinia };
+}
+
+/** A real-looking VAPID public key (65 bytes, URL-safe base64) for the fake server's push config. */
+export const VAPID_KEY =
+  'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM';
+
+/** What `fakePushSupport` returns: the fake browser's parts, to set up and inspect. */
+export interface FakePush {
+  registration: { pushManager: FakePush['pushManager'] };
+  pushManager: {
+    getSubscription: Mock<() => Promise<FakeSubscription | null>>;
+    subscribe: Mock<
+      (options: {
+        userVisibleOnly: boolean;
+        applicationServerKey: Uint8Array;
+      }) => Promise<FakeSubscription>
+    >;
+  };
+  notification: Mock & {
+    permission: NotificationPermission;
+    requestPermission: Mock<() => Promise<NotificationPermission>>;
+  };
+  /** The browser's current subscription (null when not subscribed). */
+  readonly subscription: FakeSubscription | null;
+  /** Puts the test browser back as it was; call it after the test. */
+  restore(): void;
+}
+
+/** A browser push subscription, as far as the app uses one. */
+export interface FakeSubscription {
+  endpoint: string;
+  options: { applicationServerKey: ArrayBuffer | null };
+  toJSON(): { endpoint: string; keys: { p256dh: string; auth: string } };
+  unsubscribe: Mock<() => Promise<boolean>>;
+}
+
+export interface FakePushOptions {
+  /** `Notification.permission` to start with. */
+  permission?: NotificationPermission;
+  /** What `requestPermission()` answers. */
+  grants?: NotificationPermission;
+  /** Start out subscribed, with this application server key (default `VAPID_KEY`). */
+  subscribedWith?: string | null;
+  /** `navigator.userAgent`. */
+  userAgent?: string;
+  /** Running as an installed app (`display-mode: standalone`). */
+  installed?: boolean;
+  /** False leaves out `PushManager` and `Notification`, as Safari does outside an installed app. */
+  pushApi?: boolean;
+  /** Whether a service worker registration exists (a dev server has none). Default true. */
+  registered?: boolean;
+}
+
+const bytesOf = (base64url: string): ArrayBuffer => {
+  const raw = atob(base64url.replaceAll('-', '+').replaceAll('_', '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0)).buffer;
+};
+
+/**
+ * Makes the test browser look like one with the Push API: `navigator.serviceWorker` with a
+ * registration whose `pushManager` keeps one subscription, `PushManager`, `Notification`, and
+ * optionally an iPhone user agent or installed-app display mode. Returns the pieces to inspect;
+ * call `restore()` after the test.
+ */
+export function fakePushSupport(options: FakePushOptions = {}): FakePush {
+  const state = { subscription: null as FakeSubscription | null, nextId: 1 };
+
+  const makeSubscription = (key: ArrayBuffer | null): FakeSubscription => {
+    const id = state.nextId++;
+    const subscription: FakeSubscription = {
+      endpoint: `https://push.example/send/${id}`,
+      options: { applicationServerKey: key },
+      toJSON: () => ({
+        endpoint: subscription.endpoint,
+        keys: { p256dh: `p256dh-${id}`, auth: `auth-${id}` },
+      }),
+      unsubscribe: vi.fn(async () => {
+        state.subscription = null;
+        return true;
+      }),
+    };
+    return subscription;
+  };
+  if (options.subscribedWith !== undefined) {
+    state.subscription = makeSubscription(
+      options.subscribedWith === null ? null : bytesOf(options.subscribedWith),
+    );
+  }
+
+  const pushManager = {
+    getSubscription: vi.fn(async () => state.subscription),
+    subscribe: vi.fn(
+      async (subscribeOptions: { userVisibleOnly: boolean; applicationServerKey: Uint8Array }) => {
+        state.subscription = makeSubscription(subscribeOptions.applicationServerKey.slice().buffer);
+        return state.subscription;
+      },
+    ),
+  };
+  const registration = { pushManager };
+  const notification = Object.assign(vi.fn(), {
+    permission: options.permission ?? 'default',
+    requestPermission: vi.fn(async () => {
+      notification.permission = options.grants ?? 'granted';
+      return notification.permission;
+    }),
+  });
+
+  const replaced: PropertyKey[] = [];
+  const replace = (name: string, value: unknown) => {
+    replaced.push(name);
+    Object.defineProperty(navigator, name, { configurable: true, value });
+  };
+  replace('serviceWorker', {
+    getRegistration: vi.fn(async () => (options.registered === false ? undefined : registration)),
+    ready: Promise.resolve(registration),
+  });
+  if (options.userAgent) replace('userAgent', options.userAgent);
+  if (options.pushApi !== false) {
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('Notification', notification);
+  }
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: options.installed === true && query.includes('standalone'),
+    })),
+  );
+
+  return {
+    registration,
+    pushManager,
+    notification,
+    get subscription() {
+      return state.subscription;
+    },
+    restore() {
+      for (const name of replaced) Reflect.deleteProperty(navigator, name);
+      vi.unstubAllGlobals();
+    },
+  };
 }

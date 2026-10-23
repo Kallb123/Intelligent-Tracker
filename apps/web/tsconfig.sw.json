@@ -1,0 +1,13 @@
+{
+  // The service worker (src/sw) runs in a WebWorker, not a page, so it is checked apart from the
+  // app: its globals (`self`, `clients`, `registration`) exist, and the DOM's (`window`,
+  // `document`) do not.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": []
+  },
+  "include": ["src/sw/**/*.ts"]
+}

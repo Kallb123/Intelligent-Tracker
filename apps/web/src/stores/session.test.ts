@@ -1,5 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { apiError, fakeServer, json, session, setupApp } from '../test-util.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  VAPID_KEY,
+  apiError,
+  fakePushSupport,
+  fakeServer,
+  json,
+  session,
+  setupApp,
+  type FakePush,
+} from '../test-util.js';
 import { useSessionStore } from './session.js';
 
 const ME = 'GET /api/auth/me';
@@ -13,7 +22,12 @@ function store(handlers: Parameters<typeof fakeServer>[0]) {
 }
 
 describe('session store', () => {
+  let push: FakePush | undefined;
   beforeEach(() => document.body.replaceChildren());
+  afterEach(() => {
+    push?.restore();
+    push = undefined;
+  });
 
   it('loads the session on bootstrap and skips the setup check', async () => {
     const { server, session: s } = store({ [ME]: json(session()) });
@@ -116,6 +130,45 @@ describe('session store', () => {
     await failing.session.login({ identifier: 'a', password: 'b' });
     await expect(failing.session.logout()).rejects.toMatchObject({ status: 500 });
     expect(failing.session.isLoggedIn).toBe(true);
+  });
+
+  it('removes this browser`s push subscription before ending the session', async () => {
+    push = fakePushSupport({ permission: 'granted', subscribedWith: VAPID_KEY });
+    const { server, session: s } = store({
+      'POST /api/auth/login': json(session()),
+      'DELETE /api/push/subscriptions': new Response(null, { status: 204 }),
+      'POST /api/auth/logout': json({ ok: true }),
+    });
+    await s.login({ identifier: 'a', password: 'b' });
+    const endpoint = push.subscription?.endpoint;
+
+    await s.logout();
+
+    expect(server.calls.map((c) => `${c.method} ${c.path}`).slice(1)).toEqual([
+      'DELETE /api/push/subscriptions',
+      'POST /api/auth/logout',
+    ]);
+    expect(server.callsTo('DELETE /api/push/subscriptions')[0]?.body).toEqual({ endpoint });
+    expect(push.subscription).toBeNull();
+    expect(server.callsTo('DELETE /api/push/subscriptions')[0]?.headers.get('x-csrf-token')).toBe(
+      'csrf-abc',
+    );
+    expect(s.isLoggedIn).toBe(false);
+  });
+
+  it('logs out even when removing the push subscription fails', async () => {
+    push = fakePushSupport({ permission: 'granted', subscribedWith: VAPID_KEY });
+    const { server, session: s } = store({
+      'POST /api/auth/login': json(session()),
+      'DELETE /api/push/subscriptions': apiError(500, 'internal_error', 'Boom'),
+      'POST /api/auth/logout': json({ ok: true }),
+    });
+    await s.login({ identifier: 'a', password: 'b' });
+
+    await s.logout();
+
+    expect(server.callsTo('POST /api/auth/logout')).toHaveLength(1);
+    expect(s.isLoggedIn).toBe(false);
   });
 
   it('creates the household on setup and starts the session', async () => {

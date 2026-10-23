@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "api:generate": "openapi-typescript ../api/openapi.json -o src/api/schema.d.ts",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sw.json"
   },
   "dependencies": {
     "@primeuix/themes": "^2.0.3",

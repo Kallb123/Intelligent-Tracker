@@ -20,6 +20,9 @@
 		header @assets Cache-Control "public, max-age=31536000, immutable"
 		@pages not path /assets/*
 		header @pages Cache-Control "no-cache"
+		# This covers /sw.js (the service worker, which has to be revalidated on every visit so an
+		# update is noticed) and index.html. The worker is one self-contained file at the root, so
+		# its scope is already the whole app and it needs no Service-Worker-Allowed header.
 
 		# Not in every system mime table, and installable-app checks look at the type.
 		@manifest path /manifest.webmanifest
