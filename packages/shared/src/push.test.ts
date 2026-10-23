@@ -33,6 +33,12 @@ describe('isPushServiceEndpoint', () => {
     ['plain http', 'http://fcm.googleapis.com/x'],
     ['another scheme', 'ftp://fcm.googleapis.com/x'],
     ['an absolute host name with a trailing dot', 'https://fcm.googleapis.com./x'],
+    // Hosts Node's legacy `url.parse` (used by web-push to send) cuts short at these characters.
+    ['a semicolon in the host', 'https://evil.example;.fcm.googleapis.com/x'],
+    ['a quote in the host', "https://evil.example'.fcm.googleapis.com/x"],
+    ['a backtick in the host', 'https://evil.example`.fcm.googleapis.com/x'],
+    ['a brace in the host', 'https://evil.example{.fcm.googleapis.com/x'],
+    ['a backslash after the host', 'https://fcm.googleapis.com\\x'],
     ['an IP address', 'https://127.0.0.1/x'],
     ['not a URL', 'fcm.googleapis.com'],
     ['an empty string', ''],

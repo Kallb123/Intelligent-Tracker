@@ -32,6 +32,12 @@ export const PUSH_SERVICE_HOSTS: readonly string[] = [
  * is one of them or a `.`-separated subdomain (so `fcm.googleapis.com.attacker.example` and
  * `evilfcm.googleapis.com` are not), no `user:password@` and no port other than the default.
  * Anything that does not parse is refused.
+ *
+ * The worker's sender (`web-push`) parses the URL again with Node's legacy `url.parse`, which
+ * reads some hosts differently: `https://evil.example;.fcm.googleapis.com/` is a push-service
+ * host here but `evil.example` there. So the host must be plain DNS letters, digits, dots and
+ * hyphens, and the authority as written must be that host (an explicit `:443` and letter case
+ * aside), leaving both parsers nothing to disagree on.
  */
 export function isPushServiceEndpoint(url: string): boolean {
   let parsed: URL;
@@ -46,6 +52,9 @@ export function isPushServiceEndpoint(url: string): boolean {
   }
   // The parser has lower-cased the host, and a trailing dot (an absolute name) does not match.
   const host = parsed.hostname;
+  // The authority as written (`:443` aside, and case aside) must be exactly the parsed host.
+  const written = /^https:\/\/([^/?#]*)/i.exec(url)?.[1]?.toLowerCase().replace(/:443$/, '');
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(host) || written !== host) return false;
   return PUSH_SERVICE_HOSTS.some((service) => host === service || host.endsWith(`.${service}`));
 }
 
@@ -79,8 +88,11 @@ export const pushUnsubscribeBodySchema = z.object({
 export const pushMessageSchema = z.object({
   title: z.string(),
   body: z.string(),
-  /** Notifications with the same tag replace each other: one per occurrence. */
-  tag: z.string(),
+  /**
+   * Notifications with the same tag replace each other: one per occurrence. Never empty, as the
+   * service worker sets `renotify`, which browsers refuse without a tag.
+   */
+  tag: z.string().min(1),
   /** The app path to open when the notification is clicked, e.g. `/`. */
   url: z.string().startsWith('/'),
 });

@@ -64,6 +64,10 @@ describe('registerServiceWorker', () => {
     listeners['controllerchange']?.();
     expect(isUpdatePending()).toBe(false);
     expect(reload).not.toHaveBeenCalled();
+
+    // A deploy while the same tab stays open is an update.
+    listeners['controllerchange']?.();
+    expect(isUpdatePending()).toBe(true);
   });
 
   it('only notes an update when a new worker takes over a page the old one controlled', async () => {

@@ -38,15 +38,19 @@ export function loadPendingUpdate(path: string): boolean {
  * under the old worker keeps running its old code, whose lazily loaded chunks no longer exist, so
  * it only notes that an update is pending: the router then loads the new version at the next
  * navigation (`loadPendingUpdate`), rather than reloading under the member and losing a
- * half-filled form. The very first install also claims the page, which needs no update.
+ * half-filled form. The very first install also claims the page, which needs no update; a later
+ * deploy while that page stays open does.
  */
 export function registerServiceWorker(): void {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
   expected = true;
   const container = navigator.serviceWorker;
-  const hadWorker = container.controller !== null;
+  // A page loaded without a worker is claimed by the first one to install: that first change
+  // needs no update, but any later one (a deploy while the tab stays open) does.
+  let claimedOnInstall = container.controller === null;
   container.addEventListener('controllerchange', () => {
-    if (hadWorker) updatePending = true;
+    if (claimedOnInstall) claimedOnInstall = false;
+    else updatePending = true;
   });
   // A failure only means no offline shell and no push: the app itself is unaffected.
   container.register('/sw.js').catch(() => undefined);

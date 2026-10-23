@@ -26,7 +26,8 @@ export const NOTIFICATION_BADGE = '/badge-96.png';
 const isAppPath = (value: string): boolean => /^\/(?![/\\])/.test(value);
 
 /**
- * Checks a decoded push payload is a message: strings for the four fields, and a `url` that is a
+ * Checks a decoded push payload is a message: strings for the four fields (a non-empty `tag`,
+ * which `renotify` needs, or showing it would fail and the push would be silent), and a `url` that is a
  * path in this app. A `url` such as `//evil.example` (which a browser reads as another site) is
  * refused. Returns null for anything else.
  */
@@ -37,6 +38,7 @@ export function parsePushMessage(raw: unknown): PushMessage | null {
     typeof title !== 'string' ||
     typeof body !== 'string' ||
     typeof tag !== 'string' ||
+    tag === '' ||
     typeof url !== 'string' ||
     !isAppPath(url)
   ) {

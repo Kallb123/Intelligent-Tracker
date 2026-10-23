@@ -31,6 +31,7 @@ describe('parsePushMessage', () => {
     ['a missing title', { ...message, title: undefined }],
     ['a numeric body', { ...message, body: 5 }],
     ['a missing tag', { ...message, tag: undefined }],
+    ['an empty tag', { ...message, tag: '' }],
     ['a url that is not a path', { ...message, url: 'https://evil.example/' }],
     ['a protocol-relative url', { ...message, url: '//evil.example/' }],
     ['a backslash url', { ...message, url: '/\\evil.example' }],
@@ -45,6 +46,7 @@ describe('parsePushMessage', () => {
       { ...message, title: '', body: '' },
       { ...message, url: 'tasks' },
       { ...message, tag: 1 },
+      { ...message, tag: '' },
       { title: 'x' },
       {},
     ];
