@@ -54,6 +54,11 @@ services:
       PORT: '3000'
       # Only Caddy reaches the api, so its X-Forwarded-For is the real client IP (login rate limit).
       TRUST_PROXY: 'true'
+      # Web Push (off while the keys are empty): the api serves the public key to browsers, and
+      # the worker signs the messages it sends with the private one.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     healthcheck:
       test:
         - CMD
@@ -71,6 +76,9 @@ services:
     environment:
       <<: *backend-env
       HEARTBEAT_FILE: /tmp/heartbeat
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     # The api applies the migrations on start, and the worker's ticks need them.
     depends_on:
       db:

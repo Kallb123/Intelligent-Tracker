@@ -19,7 +19,7 @@ Runs locally with Docker Compose, with a Vue web UI.
 ```
 apps/
   api/        Fastify HTTP API: auth, tasks, occurrences, OpenAPI document
-  worker/     scheduler tick: materialises occurrences, plans and queues reminders, delivers in-app notifications
+  worker/     scheduler tick: materialises occurrences, plans and queues reminders, delivers in-app and Web Push notifications
   bot/        Telegram bot (grammY, long polling): links the house group and members, delivers reminders with buttons, commands and digests
   web/        Vue 3 SPA (Vite, Pinia, Vue Router, PrimeVue) with a typed API client
 packages/
@@ -194,6 +194,14 @@ with exponential backoff, gives up after 8 attempts), deletes notifications past
 (in-app ones read over 30 days ago, and delivered or failed ones over 90 days old; pending ones
 never) at most once an hour, and records the worker's `service_heartbeat`. It also queues one
 `telegram_group` notification per due reminder for a household with a linked group; the bot delivers those.
+
+With `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` set (generate a pair once with
+`pnpm --filter @tracker/worker vapid:generate`; `VAPID_SUBJECT` is a `mailto:` or `https:` URL and
+defaults to `PUBLIC_BASE_URL` when that is https) the tick also queues one `web_push` notification
+per due reminder for each recipient who has a push subscription, and the worker sends it to all of
+that member's browsers (Web Push). A browser the push service reports gone (404/410) is
+unsubscribed, a notification that no browser accepted is retried with the same backoff, and ones
+over 24 hours late are given up. Without the keys, push is off and nothing else changes.
 
 The Telegram bot (`apps/bot`, grammY, long polling) needs `TELEGRAM_BOT_TOKEN` and `DATABASE_URL`;
 without either it idles. Leave BotFather's group privacy mode on: the bot only reacts to commands

@@ -91,6 +91,7 @@ describe.skipIf(!adminUrl)('database (integration)', () => {
         'notification',
         'occurrence',
         'password_token',
+        'push_subscription',
         'quick_add_draft',
         'reminder',
         'service_heartbeat',

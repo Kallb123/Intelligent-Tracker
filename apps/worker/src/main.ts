@@ -1,10 +1,12 @@
-import { createDb } from '@tracker/db';
+import { createDb, type PushSender } from '@tracker/db';
 import { startTicker } from '@tracker/shared';
 import { writeFileSync } from 'node:fs';
 import { APP_NAME, startupMessage } from './index.js';
 import { refreshBankHolidays } from './bank-holidays.js';
 import { createPruneSchedule } from './prune-schedule.js';
 import { runTick } from './tick.js';
+import { readVapidSettings } from './vapid-config.js';
+import { createWebPushSender } from './web-push-sender.js';
 
 const HEARTBEAT_MS = 60_000;
 const heartbeatFile = process.env['HEARTBEAT_FILE'];
@@ -30,6 +32,21 @@ function beat(): void {
   if (heartbeatFile) writeFileSync(heartbeatFile, new Date().toISOString());
 }
 
+/** The Web Push sender, or undefined (with a warning when the setup looks unfinished) if push is off. */
+function createPushSender(): PushSender | undefined {
+  const settings = readVapidSettings(process.env);
+  if (!settings.enabled) {
+    if (settings.warning) write('warn', settings.warning);
+    return undefined;
+  }
+  try {
+    return createWebPushSender(settings.config);
+  } catch (error) {
+    write('warn', 'Web Push is off: the VAPID settings are invalid', errorFields(error));
+    return undefined;
+  }
+}
+
 log(startupMessage());
 beat();
 const heartbeat = setInterval(() => {
@@ -40,6 +57,8 @@ const heartbeat = setInterval(() => {
 // postgres.js connects lazily, so creating the pool before the api has migrated is safe.
 const dbHandle = databaseUrl ? createDb(databaseUrl) : undefined;
 const pruning = createPruneSchedule();
+const webPush = createPushSender();
+if (webPush) log('Web Push is on');
 const ticker = dbHandle
   ? startTicker({
       intervalMs: tickIntervalMs,
@@ -60,6 +79,7 @@ const ticker = dbHandle
         const result = await runTick(dbHandle.db, {
           now,
           prune,
+          ...(webPush ? { webPush } : {}),
           logger: { warn: (fields, msg) => write('warn', msg, fields) },
         });
         if (prune && !result.skipped) pruning.done(now);

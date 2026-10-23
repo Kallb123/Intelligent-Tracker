@@ -29,6 +29,7 @@ import {
   member,
   notification,
   occurrence,
+  pushSubscription,
   reminder,
   task,
   taskMilestone,
@@ -41,7 +42,8 @@ import type { NewNotification, NewReminder, Reminder, ReminderData } from './sch
  *
  *   1. `queueDueReminders`: `planned` reminders whose time has come become `in_app` rows in the
  *      outbox (`notification`), plus one `telegram_group` row when the household has linked its
- *      Telegram group, and are marked `sent`. This runs first, because the planner
+ *      Telegram group and one `web_push` row per recipient with a push subscription (when the
+ *      caller delivers Web Push), and are marked `sent`. This runs first, because the planner
  *      drops reminders at or before `now`, so the persisted `planned` rows are the record of
  *      what is due.
  *   2. `replanReminders`: an occurrence whose planner inputs changed since it was last planned
@@ -84,7 +86,10 @@ const OPEN = [...OPEN_OCCURRENCE_STATUSES];
 export interface QueueRemindersResult {
   /** Reminders marked `sent` (queued in the outbox). */
   queued: number;
-  /** Outbox rows inserted: one `in_app` per recipient, and one `telegram_group` per reminder. */
+  /**
+   * Outbox rows inserted: one `in_app` per recipient, one `telegram_group` per reminder, and
+   * (with `webPush`) one `web_push` per recipient with a push subscription.
+   */
   notifications: number;
   /** Reminders cancelled because they were more than `MISSED_REMINDER_GRACE_MS` overdue. */
   cancelled: number;
@@ -98,6 +103,11 @@ export interface QueueRemindersResult {
 /** The dedupe key of the in-app notification of a reminder for one member. */
 export function inAppDedupeKey(reminderId: string, memberId: string): string {
   return `reminder:${reminderId}:in_app:${memberId}`;
+}
+
+/** The dedupe key of the Web Push notification of a reminder for one member. */
+export function webPushDedupeKey(reminderId: string, memberId: string): string {
+  return `reminder:${reminderId}:web_push:${memberId}`;
 }
 
 /**
@@ -153,14 +163,24 @@ function isEveningSlot(at: Date, h: { timezone: string; eveningSlot: string }): 
  * one message that mentions the assignee. A household without a group gets none, so linking a
  * group later does not replay reminders that were already queued.
  *
+ * With `webPush` set (the worker does when the server has VAPID keys), each recipient who has at
+ * least one `push_subscription` also gets one `web_push` row per reminder, for the worker to send
+ * to their browsers. A recipient without a subscription gets none, so subscribing later does not
+ * replay reminders that were already queued, and a deployment without Web Push (the default)
+ * queues no such rows.
+ *
  * The due rows are locked (`FOR UPDATE`), so concurrent callers queue each reminder once, and
  * the outbox's `dedupe_key` is a second guard.
  */
 export async function queueDueReminders(
   db: DbOrTransaction,
-  options: { now: Date },
+  options: {
+    now: Date;
+    /** Also queue `web_push` rows for recipients with a push subscription. Default false. */
+    webPush?: boolean;
+  },
 ): Promise<QueueRemindersResult> {
-  const { now } = options;
+  const { now, webPush = false } = options;
   const result: QueueRemindersResult = { queued: 0, notifications: 0, cancelled: 0, failures: [] };
   const due = await db
     .select({ reminder })
@@ -249,6 +269,16 @@ export async function queueDueReminders(
     }
   }
 
+  const recipientsOf = ({ occurrence: occ, task: t }: PlanContext): string[] =>
+    occ.assigneeId ? [occ.assigneeId] : (membersByHousehold.get(t.householdId) ?? []);
+  // One query for every recipient of the batch, instead of one per reminder.
+  const pushMembers = webPush
+    ? await membersWithPushSubscription(
+        db,
+        sendable.flatMap((r) => recipientsOf(r.context)),
+      )
+    : new Set<string>();
+
   const outbox: NewNotification[] = [];
   for (const { reminder: rem, context } of sendable) {
     const { occurrence: occ, task: t } = context;
@@ -273,10 +303,7 @@ export async function queueDueReminders(
       // Frozen now: the heading of the Telegram message must not follow a later slot change.
       ...(isEveningSlot(rem.fireAt, context.household) ? { tonight: true as const } : {}),
     };
-    const recipients = occ.assigneeId
-      ? [occ.assigneeId]
-      : (membersByHousehold.get(t.householdId) ?? []);
-    for (const memberId of recipients) {
+    for (const memberId of recipientsOf(context)) {
       outbox.push({
         householdId: t.householdId,
         memberId,
@@ -286,6 +313,17 @@ export async function queueDueReminders(
         dedupeKey: inAppDedupeKey(rem.id, memberId),
         nextAttemptAt: now,
       });
+      if (pushMembers.has(memberId)) {
+        outbox.push({
+          householdId: t.householdId,
+          memberId,
+          reminderId: rem.id,
+          channel: 'web_push',
+          payload,
+          dedupeKey: webPushDedupeKey(rem.id, memberId),
+          nextAttemptAt: now,
+        });
+      }
     }
     if (context.household.telegramGroupChatId !== null) {
       outbox.push({
@@ -320,6 +358,22 @@ export async function queueDueReminders(
   result.queued = sendable.length;
   result.cancelled = stale.length;
   return result;
+}
+
+/** Which of `memberIds` have at least one push subscription. */
+async function membersWithPushSubscription(
+  db: DbOrTransaction,
+  memberIds: readonly string[],
+): Promise<Set<string>> {
+  const subscribed = new Set<string>();
+  for (const batch of chunks([...new Set(memberIds)])) {
+    const rows = await db
+      .select({ memberId: pushSubscription.memberId })
+      .from(pushSubscription)
+      .where(inArray(pushSubscription.memberId, batch));
+    for (const row of rows) subscribed.add(row.memberId);
+  }
+  return subscribed;
 }
 
 export interface ReminderPlanFailure {

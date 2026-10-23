@@ -49,6 +49,7 @@ export {
   queueDueReminders,
   replanReminders,
   telegramGroupDedupeKey,
+  webPushDedupeKey,
   type QueueRemindersResult,
   type ReminderPlanFailure,
   type ReplanRemindersResult,
@@ -117,4 +118,15 @@ export * from './schema/index.js';
 export * from './seed/index.js';
 export * from './bank-holidays.js';
 export * from './digest.js';
+export {
+  createWebPushHandler,
+  isPushGone,
+  PUSH_APP_TITLE,
+  PUSH_TTL_SECONDS,
+  renderPushMessage,
+  type PushSendOptions,
+  type PushSender,
+  type PushTarget,
+  type WebPushHandlerOptions,
+} from './web-push.js';
 export { listSuggestions, resolveSuggestion } from './suggestions.js';
