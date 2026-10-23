@@ -1,4 +1,9 @@
-import { describeReminder, HOUSEHOLD_DEFAULTS, type PushMessage } from '@tracker/shared';
+import {
+  describeReminder,
+  HOUSEHOLD_DEFAULTS,
+  isPushServiceEndpoint,
+  type PushMessage,
+} from '@tracker/shared';
 import type { ReminderKind, ReminderPayload } from '@tracker/shared';
 import { eq, inArray } from 'drizzle-orm';
 import type { Database } from './client.js';
@@ -20,9 +25,14 @@ import { household, pushSubscription, type Notification } from './schema/index.j
  *   that already have it, even if another of the member's browsers failed.
  * - A subscription the push service says is gone (404 or 410) is deleted: the browser
  *   unsubscribed or the subscription expired, and it will never work again.
- * - Any other failure (a network error, a 5xx, a rejected request) is thrown when no
+ * - A subscription whose endpoint is not a known push service (`isPushServiceEndpoint`) is
+ *   deleted without being sent to. The api refuses to save such an endpoint, so a row like this
+ *   was not written by the app; the worker must never POST to a host a member chose.
+ * - Any other failure (a network error, a timeout, a 5xx, a rejected request) is thrown when no
  *   subscription accepted the notification, so the outbox retries it with backoff. The ones
- *   that failed this way are kept.
+ *   that failed this way are kept. When another subscription did accept it, the notification
+ *   counts as delivered and those failures are reported to `onPartialFailure` instead, so they
+ *   are not lost silently.
  * - A member with no subscriptions left (all gone, or removed since the row was queued) has
  *   nothing to deliver to, which counts as delivered.
  */
@@ -86,10 +96,32 @@ export function renderPushMessage(payload: ReminderPayload, timeZone: string): P
   };
 }
 
+/**
+ * A notification that reached some of a member's browsers while the push service rejected it
+ * for others (for a reason other than the subscription being gone). Those browsers are not
+ * retried, so this is how the failures are reported.
+ */
+export interface PushPartialFailure {
+  notificationId: string;
+  memberId: string;
+  /** How many subscriptions accepted the message. */
+  accepted: number;
+  /** How many failed. */
+  failed: number;
+  /** The distinct error messages of the failed ones. */
+  errors: string[];
+}
+
 export interface WebPushHandlerOptions {
   send: PushSender;
   /** The delivery time, stamped on `last_sent_at`. */
   now: Date;
+  /**
+   * Called once, after the outcome is recorded, when at least one subscription accepted the
+   * notification and others failed. Optional; the worker logs a warning with it. An error it
+   * throws is ignored: the notification is already delivered and must not be retried.
+   */
+  onPartialFailure?: (failure: PushPartialFailure) => void;
 }
 
 /**
@@ -98,7 +130,7 @@ export interface WebPushHandlerOptions {
  * and is delivered as a no-op.
  */
 export function createWebPushHandler(db: Database, options: WebPushHandlerOptions): OutboxHandler {
-  const { send, now } = options;
+  const { send, now, onPartialFailure } = options;
   return async (row: Notification): Promise<void> => {
     if (!row.memberId) return;
     const subscriptions = await db
@@ -117,10 +149,15 @@ export function createWebPushHandler(db: Database, options: WebPushHandlerOption
     };
 
     const accepted: string[] = [];
+    // Includes the rows whose endpoint is not a push service, which are never sent to.
     const gone: string[] = [];
     const errors: string[] = [];
     await Promise.all(
       subscriptions.map(async (subscription) => {
+        if (!isPushServiceEndpoint(subscription.endpoint)) {
+          gone.push(subscription.id);
+          return;
+        }
         try {
           await send(subscription, message, sendOptions);
           accepted.push(subscription.id);
@@ -140,10 +177,23 @@ export function createWebPushHandler(db: Database, options: WebPushHandlerOption
     if (gone.length > 0) {
       await db.delete(pushSubscription).where(inArray(pushSubscription.id, gone));
     }
-    if (accepted.length === 0 && errors.length > 0) {
+    if (errors.length === 0) return;
+    const distinct = [...new Set(errors)];
+    if (accepted.length === 0) {
       throw new Error(
-        `Web Push failed for ${errors.length} subscription${errors.length === 1 ? '' : 's'}: ${[...new Set(errors)].join('; ')}`,
+        `Web Push failed for ${errors.length} subscription${errors.length === 1 ? '' : 's'}: ${distinct.join('; ')}`,
       );
+    }
+    try {
+      onPartialFailure?.({
+        notificationId: row.id,
+        memberId: row.memberId,
+        accepted: accepted.length,
+        failed: errors.length,
+        errors: distinct,
+      });
+    } catch {
+      // A broken logger must not turn a delivered notification into a retry.
     }
   };
 }

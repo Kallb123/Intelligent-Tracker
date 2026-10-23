@@ -72,10 +72,21 @@ function handlersFor(
   db: Database,
   now: Date,
   webPush: PushSender | undefined,
+  logger: TickLogger,
 ): Partial<Record<'in_app' | 'web_push', OutboxHandler>> {
   return {
     in_app: async () => {},
-    ...(webPush ? { web_push: createWebPushHandler(db, { send: webPush, now }) } : {}),
+    ...(webPush
+      ? {
+          web_push: createWebPushHandler(db, {
+            send: webPush,
+            now,
+            // Delivered to some of the member's browsers: not retried, so say what failed.
+            onPartialFailure: (failure) =>
+              logger.warn({ ...failure }, 'push not accepted by some browsers of a member'),
+          }),
+        }
+      : {}),
   };
 }
 
@@ -148,7 +159,10 @@ export async function runTick(
     const stale = await giveUpStaleNotifications(db, { now, channel: 'web_push' });
     if (stale > 0) logger.warn({ count: stale }, 'stale push notifications not sent');
   }
-  const delivery = await deliverOutbox(db, { now, handlers: handlersFor(db, now, webPush) });
+  const delivery = await deliverOutbox(db, {
+    now,
+    handlers: handlersFor(db, now, webPush, logger),
+  });
   for (const failure of delivery.failures) {
     logger.warn(
       { ...failure },

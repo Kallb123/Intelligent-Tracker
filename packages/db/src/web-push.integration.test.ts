@@ -15,6 +15,7 @@ import {
   createWebPushHandler,
   PUSH_APP_TITLE,
   PUSH_TTL_SECONDS,
+  type PushPartialFailure,
   type PushSender,
 } from './web-push.js';
 
@@ -102,23 +103,29 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
     return n;
   }
 
-  const deliver = (send: PushSender) =>
+  const deliver = (send: PushSender, onPartialFailure?: (failure: PushPartialFailure) => void) =>
     deliverOutbox(db, {
       now: NOW,
-      handlers: { web_push: createWebPushHandler(db, { send, now: NOW }) },
+      handlers: {
+        web_push: createWebPushHandler(db, {
+          send,
+          now: NOW,
+          ...(onPartialFailure ? { onPartialFailure } : {}),
+        }),
+      },
     });
   const subscriptions = () => db.select().from(pushSubscription).orderBy(pushSubscription.endpoint);
   const stored = async (id: string) =>
     (await db.select().from(notification).where(eq(notification.id, id)))[0];
 
   it('sends the rendered reminder to each of the member`s browsers and stamps them', async () => {
-    const phone = await subscribe('https://push.example/phone');
-    await subscribe('https://push.example/laptop');
+    const phone = await subscribe('https://fcm.googleapis.com/fcm/send/phone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/laptop');
     const other = await db
       .insert(member)
       .values({ householdId, name: 'Sam', username: 'sam' })
       .returning();
-    await subscribe('https://push.example/other', other[0]?.id);
+    await subscribe('https://fcm.googleapis.com/fcm/send/other', other[0]?.id);
     const n = await queue();
     const send = vi.fn<PushSender>(async () => {});
 
@@ -138,8 +145,8 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
       { ttlSeconds: PUSH_TTL_SECONDS, urgency: 'high' },
     );
     expect(send.mock.calls.map(([target]) => target.endpoint).sort()).toEqual([
-      'https://push.example/laptop',
-      'https://push.example/phone',
+      'https://fcm.googleapis.com/fcm/send/laptop',
+      'https://fcm.googleapis.com/fcm/send/phone',
     ]);
     expect(await stored(n.id)).toMatchObject({ sentAt: NOW, attempts: 0, lastError: null });
     const rows = await subscriptions();
@@ -152,7 +159,7 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
 
   it('renders times in the household`s zone', async () => {
     await db.update(household).set({ timezone: 'America/New_York' });
-    await subscribe('https://push.example/phone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/phone');
     await queue({ dueDate: null, dueAt: '2026-07-10T17:30:00.000Z' });
     const send = vi.fn<PushSender>(async () => {});
 
@@ -162,7 +169,7 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
   });
 
   it('uses high urgency for due and overdue reminders and normal for the rest', async () => {
-    await subscribe('https://push.example/phone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/phone');
     for (const kind of ['heads_up', 'milestone', 'nudge', 'due', 'overdue'] as const) {
       await queue({ kind, ...(kind === 'overdue' ? { overdueDays: 2 } : {}) });
     }
@@ -188,9 +195,9 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
   });
 
   it('deletes a subscription the push service says is gone, and delivers to the rest', async () => {
-    await subscribe('https://push.example/old');
-    await subscribe('https://push.example/gone');
-    await subscribe('https://push.example/new');
+    await subscribe('https://fcm.googleapis.com/fcm/send/old');
+    await subscribe('https://fcm.googleapis.com/fcm/send/gone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/new');
     const n = await queue();
     const send: PushSender = async (target) => {
       if (target.endpoint.endsWith('/old')) throw pushError(404);
@@ -200,14 +207,16 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
     const result = await deliver(send);
 
     expect(result).toEqual({ delivered: 1, failures: [] });
-    expect((await subscriptions()).map((s) => s.endpoint)).toEqual(['https://push.example/new']);
+    expect((await subscriptions()).map((s) => s.endpoint)).toEqual([
+      'https://fcm.googleapis.com/fcm/send/new',
+    ]);
     expect((await subscriptions())[0]?.lastSentAt).toEqual(NOW);
     expect((await stored(n.id))?.sentAt).toEqual(NOW);
   });
 
   it('counts one accepted browser as delivered, keeping the one that failed', async () => {
-    await subscribe('https://push.example/ok');
-    await subscribe('https://push.example/flaky');
+    await subscribe('https://fcm.googleapis.com/fcm/send/ok');
+    await subscribe('https://fcm.googleapis.com/fcm/send/flaky');
     const n = await queue();
     const send: PushSender = async (target) => {
       if (target.endpoint.endsWith('/flaky')) throw pushError(503);
@@ -224,9 +233,85 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
     ]);
   });
 
+  it('reports the failures to onPartialFailure when another browser accepted it', async () => {
+    await subscribe('https://fcm.googleapis.com/fcm/send/ok');
+    await subscribe('https://fcm.googleapis.com/fcm/send/flaky-1');
+    await subscribe('https://fcm.googleapis.com/fcm/send/flaky-2');
+    await subscribe('https://fcm.googleapis.com/fcm/send/gone');
+    const n = await queue();
+    const send: PushSender = async (target) => {
+      if (target.endpoint.endsWith('/gone')) throw pushError(410);
+      if (target.endpoint.includes('/flaky')) throw pushError(503, 'push service busy');
+    };
+    const onPartialFailure = vi.fn<(failure: PushPartialFailure) => void>();
+
+    const result = await deliver(send, onPartialFailure);
+
+    expect(result).toEqual({ delivered: 1, failures: [] });
+    // Once, with the distinct errors; a gone subscription is not a failure.
+    expect(onPartialFailure).toHaveBeenCalledExactlyOnceWith({
+      notificationId: n.id,
+      memberId,
+      accepted: 1,
+      failed: 2,
+      errors: ['push service busy'],
+    });
+  });
+
+  it('does not report when every browser accepted it or none did', async () => {
+    await subscribe('https://fcm.googleapis.com/fcm/send/ok');
+    await queue();
+    const onPartialFailure = vi.fn<(failure: PushPartialFailure) => void>();
+
+    await deliver(async () => {}, onPartialFailure);
+    expect(onPartialFailure).not.toHaveBeenCalled();
+
+    await queue();
+    await deliver(async () => {
+      throw pushError(503);
+    }, onPartialFailure);
+    expect(onPartialFailure).not.toHaveBeenCalled();
+  });
+
+  it('still counts it as delivered when onPartialFailure throws', async () => {
+    await subscribe('https://fcm.googleapis.com/fcm/send/ok');
+    await subscribe('https://fcm.googleapis.com/fcm/send/flaky');
+    const n = await queue();
+    const send: PushSender = async (target) => {
+      if (target.endpoint.endsWith('/flaky')) throw pushError(503);
+    };
+
+    const result = await deliver(send, () => {
+      throw new Error('logger broke');
+    });
+
+    expect(result).toEqual({ delivered: 1, failures: [] });
+    expect((await stored(n.id))?.sentAt).toEqual(NOW);
+  });
+
+  it('never sends to a host that is not a push service, and deletes that subscription', async () => {
+    await subscribe('https://fcm.googleapis.com/fcm/send/real');
+    await subscribe('https://internal.example/hook');
+    await subscribe('https://fcm.googleapis.com.attacker.example/send/1');
+    await subscribe('https://user:pw@fcm.googleapis.com/fcm/send/creds');
+    await subscribe('http://fcm.googleapis.com/fcm/send/plain');
+    const n = await queue();
+    const send = vi.fn<PushSender>(async () => {});
+
+    const result = await deliver(send);
+
+    expect(result).toEqual({ delivered: 1, failures: [] });
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0].endpoint).toBe('https://fcm.googleapis.com/fcm/send/real');
+    expect((await subscriptions()).map((s) => s.endpoint)).toEqual([
+      'https://fcm.googleapis.com/fcm/send/real',
+    ]);
+    expect((await stored(n.id))?.sentAt).toEqual(NOW);
+  });
+
   it('retries with backoff when no browser accepted it and one failed for another reason', async () => {
-    await subscribe('https://push.example/gone');
-    await subscribe('https://push.example/flaky');
+    await subscribe('https://fcm.googleapis.com/fcm/send/gone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/flaky');
     const n = await queue();
     const send: PushSender = async (target) => {
       throw target.endpoint.endsWith('/gone')
@@ -266,9 +351,9 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
   });
 
   it('reports every distinct failure when all browsers fail', async () => {
-    await subscribe('https://push.example/a');
-    await subscribe('https://push.example/b');
-    await subscribe('https://push.example/c');
+    await subscribe('https://fcm.googleapis.com/fcm/send/a');
+    await subscribe('https://fcm.googleapis.com/fcm/send/b');
+    await subscribe('https://fcm.googleapis.com/fcm/send/c');
     await queue();
     const send: PushSender = async (target) => {
       throw new Error(target.endpoint.endsWith('/c') ? 'timeout' : 'ECONNRESET');
@@ -283,7 +368,7 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
   });
 
   it('gives up like any other channel after the last attempt', async () => {
-    await subscribe('https://push.example/flaky');
+    await subscribe('https://fcm.googleapis.com/fcm/send/flaky');
     const n = await queue();
     const send: PushSender = async () => {
       throw pushError(500);
@@ -300,7 +385,7 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
   });
 
   it('delivers, without sending, when every subscription turns out to be gone', async () => {
-    await subscribe('https://push.example/gone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/gone');
     const n = await queue();
 
     const result = await deliver(async () => {
@@ -324,7 +409,7 @@ describe.skipIf(!adminUrl)('Web Push delivery (integration)', () => {
   });
 
   it('leaves other channels alone', async () => {
-    await subscribe('https://push.example/phone');
+    await subscribe('https://fcm.googleapis.com/fcm/send/phone');
     await db.insert(notification).values({
       householdId,
       memberId,

@@ -124,6 +124,7 @@ export {
   PUSH_APP_TITLE,
   PUSH_TTL_SECONDS,
   renderPushMessage,
+  type PushPartialFailure,
   type PushSendOptions,
   type PushSender,
   type PushTarget,

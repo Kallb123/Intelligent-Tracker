@@ -1197,8 +1197,10 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
     });
 
     describe('Web Push', () => {
-      const subscribe = (memberId: string, endpoint = `https://push.example/${memberId}`) =>
-        db.insert(pushSubscription).values({ memberId, endpoint, p256dh: 'p', auth: 'a' });
+      const subscribe = (
+        memberId: string,
+        endpoint = `https://fcm.googleapis.com/fcm/send/${memberId}`,
+      ) => db.insert(pushSubscription).values({ memberId, endpoint, p256dh: 'p', auth: 'a' });
       const pushRows = async () => (await notifications()).filter((n) => n.channel === 'web_push');
 
       it('queues a row next to the in-app one for a subscribed recipient, once', async () => {
@@ -1254,8 +1256,8 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
       it('is one row per member however many browsers they subscribed', async () => {
         const { alex } = await setup();
-        await subscribe(alex.id, 'https://push.example/phone');
-        await subscribe(alex.id, 'https://push.example/laptop');
+        await subscribe(alex.id, 'https://fcm.googleapis.com/fcm/send/phone');
+        await subscribe(alex.id, 'https://fcm.googleapis.com/fcm/send/laptop');
         await replanReminders(db, { now: NOW });
 
         await queueDueReminders(db, { now: DUE_NOW, webPush: true });

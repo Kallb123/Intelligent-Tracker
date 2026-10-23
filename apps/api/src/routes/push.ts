@@ -55,6 +55,8 @@ export function registerPushRoutes(app: FastifyInstance, ctx: ApiContext): void 
           'Takes `PushSubscription.toJSON()`. Saving the same endpoint again refreshes its keys, ' +
           'and an endpoint that another member had saved (a shared device) moves to the caller. ' +
           'A member keeps at most 20 subscriptions: saving more drops the least recently saved. ' +
+          'The endpoint must be an https URL of a browser push service (Google, Apple, Mozilla or ' +
+          'Windows), as the worker sends to it; any other host is a 400. ' +
           'Answers 409 `push_not_configured` when the deployment has no VAPID keys.',
         body: pushSubscriptionBodySchema,
         response: {
@@ -85,28 +87,35 @@ export function registerPushRoutes(app: FastifyInstance, ctx: ApiContext): void 
         // Set by hand (`$onUpdate` does not apply to an upsert) from the configured clock.
         updatedAt: now,
       };
-      await ctx.db
-        .insert(pushSubscription)
-        .values({ endpoint, ...values, createdAt: now })
-        .onConflictDoUpdate({ target: pushSubscription.endpoint, set: values });
+      // One transaction, so the cap is enforced against the row just saved and a failure while
+      // trimming does not leave an over-the-cap member behind.
+      // An endpoint is an unguessable capability URL (only the browser and whoever it was shared
+      // with know it), so moving it to whoever saves it, as happens on a shared device, is safe
+      // in practice: nobody can claim an endpoint they have not been given.
+      await ctx.db.transaction(async (tx) => {
+        await tx
+          .insert(pushSubscription)
+          .values({ endpoint, ...values, createdAt: now })
+          .onConflictDoUpdate({ target: pushSubscription.endpoint, set: values });
 
-      const newest = await ctx.db
-        .select({ id: pushSubscription.id })
-        .from(pushSubscription)
-        .where(eq(pushSubscription.memberId, me.id))
-        .orderBy(desc(pushSubscription.updatedAt), desc(pushSubscription.id))
-        .limit(MAX_SUBSCRIPTIONS_PER_MEMBER);
-      if (newest.length === MAX_SUBSCRIPTIONS_PER_MEMBER) {
-        await ctx.db.delete(pushSubscription).where(
-          and(
-            eq(pushSubscription.memberId, me.id),
-            notInArray(
-              pushSubscription.id,
-              newest.map((row) => row.id),
+        const newest = await tx
+          .select({ id: pushSubscription.id })
+          .from(pushSubscription)
+          .where(eq(pushSubscription.memberId, me.id))
+          .orderBy(desc(pushSubscription.updatedAt), desc(pushSubscription.id))
+          .limit(MAX_SUBSCRIPTIONS_PER_MEMBER);
+        if (newest.length === MAX_SUBSCRIPTIONS_PER_MEMBER) {
+          await tx.delete(pushSubscription).where(
+            and(
+              eq(pushSubscription.memberId, me.id),
+              notInArray(
+                pushSubscription.id,
+                newest.map((row) => row.id),
+              ),
             ),
-          ),
-        );
-      }
+          );
+        }
+      });
       return reply.code(204).send(null);
     },
   );

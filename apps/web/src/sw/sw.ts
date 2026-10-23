@@ -6,7 +6,8 @@ import {
   precacheAndRoute,
   type PrecacheEntry,
 } from 'workbox-precaching';
-import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { registerRoute } from 'workbox-routing';
+import { isAppPagePath } from './app-routes.js';
 import { messageFromPushData, notificationFor, targetUrlFor } from './push-message.js';
 
 /**
@@ -22,19 +23,19 @@ import { messageFromPushData, notificationFor, targetUrlFor } from './push-messa
  */
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: (PrecacheEntry | string)[] };
 
-// A new version takes over straight away (with `registerType: 'autoUpdate'` the open pages then
-// reload), instead of waiting for every tab to close.
+// A new version takes over straight away, instead of waiting for every tab to close. An open page
+// notices (src/pwa.ts) and loads the new version at its next navigation.
 void self.skipWaiting();
 clientsClaim();
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 
+// Page loads (not `/api`, `/ical` or a file) get the app shell. This is a plain matcher rather
+// than workbox's `NavigationRoute` denylist, which tests the path plus the query string.
 registerRoute(
-  new NavigationRoute(createHandlerBoundToURL('/index.html'), {
-    // `/api` and `/ical` are the backend; a path ending in `.ext` is a file, not a page.
-    denylist: [/^\/api(\/|$)/, /^\/ical(\/|$)/, /\/[^/?]+\.[^/]+$/],
-  }),
+  ({ request, url }) => request.mode === 'navigate' && isAppPagePath(url.pathname),
+  createHandlerBoundToURL('/index.html'),
 );
 
 self.addEventListener('push', (event) => {

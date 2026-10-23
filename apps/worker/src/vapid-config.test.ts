@@ -1,7 +1,31 @@
+import webpush from 'web-push';
 import { describe, expect, it } from 'vitest';
-import { readVapidSettings } from './vapid-config.js';
+import { readVapidSettings, vapidKeysMatch } from './vapid-config.js';
 
-const KEYS = { VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' };
+// Real key pairs: the settings check that the public key belongs to the private one.
+const pair = webpush.generateVAPIDKeys();
+const other = webpush.generateVAPIDKeys();
+const KEYS = { VAPID_PUBLIC_KEY: pair.publicKey, VAPID_PRIVATE_KEY: pair.privateKey };
+
+describe('vapidKeysMatch', () => {
+  it('is true for the two halves of a generated pair', () => {
+    expect(vapidKeysMatch(pair.publicKey, pair.privateKey)).toBe(true);
+    expect(vapidKeysMatch(other.publicKey, other.privateKey)).toBe(true);
+  });
+
+  it('is false when the public key belongs to another private key', () => {
+    expect(vapidKeysMatch(other.publicKey, pair.privateKey)).toBe(false);
+    expect(vapidKeysMatch(pair.publicKey, other.privateKey)).toBe(false);
+  });
+
+  it('is false for keys that are not P-256 keys, without throwing', () => {
+    expect(vapidKeysMatch('pub', 'priv')).toBe(false);
+    expect(vapidKeysMatch(pair.publicKey, '')).toBe(false);
+    expect(vapidKeysMatch('', pair.privateKey)).toBe(false);
+    // The all-zero scalar is not a valid private key.
+    expect(vapidKeysMatch(pair.publicKey, Buffer.alloc(32).toString('base64url'))).toBe(false);
+  });
+});
 
 describe('readVapidSettings', () => {
   it('is off, without a warning, when no key is set (the default install)', () => {
@@ -13,7 +37,10 @@ describe('readVapidSettings', () => {
   });
 
   it('is off with a warning when only one key is set', () => {
-    for (const env of [{ VAPID_PUBLIC_KEY: 'pub' }, { VAPID_PRIVATE_KEY: 'priv' }]) {
+    for (const env of [
+      { VAPID_PUBLIC_KEY: pair.publicKey },
+      { VAPID_PRIVATE_KEY: pair.privateKey },
+    ]) {
       expect(readVapidSettings({ ...env, VAPID_SUBJECT: 'mailto:a@example.com' })).toEqual({
         enabled: false,
         warning: expect.stringContaining('VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY'),
@@ -21,11 +48,26 @@ describe('readVapidSettings', () => {
     }
   });
 
+  it('is off with a warning when the public key is not the private key`s', () => {
+    const env = {
+      VAPID_PUBLIC_KEY: other.publicKey,
+      VAPID_PRIVATE_KEY: pair.privateKey,
+      VAPID_SUBJECT: 'mailto:admin@example.com',
+    };
+    expect(readVapidSettings(env)).toEqual({
+      enabled: false,
+      warning: expect.stringContaining('VAPID_PUBLIC_KEY is not the public key of'),
+    });
+    expect(
+      readVapidSettings({ ...env, VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' }),
+    ).toEqual({ enabled: false, warning: expect.stringContaining('not the public key') });
+  });
+
   it('uses VAPID_SUBJECT when it is a mailto: address or an https: URL', () => {
     for (const subject of ['mailto:admin@example.com', 'https://tracker.example.com/contact']) {
       expect(readVapidSettings({ ...KEYS, VAPID_SUBJECT: ` ${subject} ` })).toEqual({
         enabled: true,
-        config: { publicKey: 'pub', privateKey: 'priv', subject },
+        config: { publicKey: pair.publicKey, privateKey: pair.privateKey, subject },
       });
     }
   });
@@ -60,7 +102,11 @@ describe('readVapidSettings', () => {
       }),
     ).toEqual({
       enabled: true,
-      config: { publicKey: 'pub', privateKey: 'priv', subject: 'https://tracker.example.com' },
+      config: {
+        publicKey: pair.publicKey,
+        privateKey: pair.privateKey,
+        subject: 'https://tracker.example.com',
+      },
     });
   });
 

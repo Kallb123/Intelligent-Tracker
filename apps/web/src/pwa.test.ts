@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   VAPID_KEY,
   apiError,
@@ -7,7 +7,7 @@ import {
   setupApp,
   type FakePush,
 } from './test-util.js';
-import { forgetPushSubscription } from './pwa.js';
+import { FORGET_PUSH_TIMEOUT_MS, forgetPushSubscription } from './pwa.js';
 
 const UNSUBSCRIBE = 'DELETE /api/push/subscriptions';
 
@@ -53,8 +53,8 @@ describe('registerServiceWorker', () => {
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('registers /sw.js in production, and does not reload after the first install', async () => {
-    const { registerServiceWorker } = await freshPwa();
+  it('registers /sw.js in production, and needs no update after the first install', async () => {
+    const { registerServiceWorker, isUpdatePending } = await freshPwa();
     vi.stubEnv('PROD', true);
     const { listeners, reload, register } = container(null);
 
@@ -62,19 +62,23 @@ describe('registerServiceWorker', () => {
     expect(register).toHaveBeenCalledWith('/sw.js');
 
     listeners['controllerchange']?.();
+    expect(isUpdatePending()).toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('reloads once when a new worker takes over a page the old one controlled', async () => {
-    const { registerServiceWorker } = await freshPwa();
+  it('only notes an update when a new worker takes over a page the old one controlled', async () => {
+    const { registerServiceWorker, isUpdatePending } = await freshPwa();
     vi.stubEnv('PROD', true);
     const { listeners, reload } = container({});
 
     registerServiceWorker();
+    expect(isUpdatePending()).toBe(false);
     listeners['controllerchange']?.();
     listeners['controllerchange']?.();
 
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(isUpdatePending()).toBe(true);
+    // The page is left alone: a half-filled form is not thrown away.
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('ignores a registration that fails', async () => {
@@ -84,6 +88,33 @@ describe('registerServiceWorker', () => {
     register.mockRejectedValueOnce(new Error('no'));
     expect(() => registerServiceWorker()).not.toThrow();
     await Promise.resolve();
+  });
+});
+
+describe('loadPendingUpdate', () => {
+  const assign = vi.fn();
+  beforeEach(() => {
+    assign.mockClear();
+    vi.stubGlobal('location', { ...window.location, assign });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('does nothing while the page is up to date', async () => {
+    const { loadPendingUpdate } = await freshPwa();
+    expect(loadPendingUpdate('/tasks')).toBe(false);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('loads the path as a full page once an update is pending', async () => {
+    const { loadPendingUpdate, setUpdatePending, isUpdatePending } = await freshPwa();
+    setUpdatePending();
+    expect(isUpdatePending()).toBe(true);
+
+    expect(loadPendingUpdate('/tasks?next=/a.b#top')).toBe(true);
+    expect(assign).toHaveBeenCalledExactlyOnceWith('/tasks?next=/a.b#top');
+
+    setUpdatePending(false);
+    expect(loadPendingUpdate('/tasks')).toBe(false);
   });
 });
 
@@ -191,5 +222,47 @@ describe('forgetPushSubscription', () => {
 
     push.pushManager.getSubscription.mockRejectedValueOnce(new Error('no'));
     await expect(forgetPushSubscription()).resolves.toBeUndefined();
+  });
+
+  describe('when something hangs', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('gives up after the timeout, so logging out is never held up', async () => {
+      push = fakePushSupport({ permission: 'granted', subscribedWith: VAPID_KEY });
+      setupApp(fakeServer());
+      push.pushManager.getSubscription.mockReturnValueOnce(new Promise(() => {}));
+      vi.useFakeTimers();
+      let done = false;
+
+      const forgetting = forgetPushSubscription().then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(FORGET_PUSH_TIMEOUT_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await forgetting;
+
+      expect(done).toBe(true);
+      expect(FORGET_PUSH_TIMEOUT_MS).toBe(3_000);
+    });
+
+    it('gives up on a server that never answers', async () => {
+      push = fakePushSupport({ permission: 'granted', subscribedWith: VAPID_KEY });
+      setupApp(fakeServer({ [UNSUBSCRIBE]: () => new Promise<Response>(() => {}) }));
+      vi.useFakeTimers();
+
+      const forgetting = forgetPushSubscription();
+      await vi.advanceTimersByTimeAsync(FORGET_PUSH_TIMEOUT_MS);
+
+      await expect(forgetting).resolves.toBeUndefined();
+    });
+
+    it('does not leave a timer behind when it finishes in time', async () => {
+      push = fakePushSupport({ permission: 'granted', subscribedWith: VAPID_KEY });
+      setupApp(fakeServer({ [UNSUBSCRIBE]: new Response(null, { status: 204 }) }));
+      vi.useFakeTimers();
+
+      await forgetPushSubscription();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });

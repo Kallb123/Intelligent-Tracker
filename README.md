@@ -201,7 +201,10 @@ defaults to `PUBLIC_BASE_URL` when that is https) the tick also queues one `web_
 per due reminder for each recipient who has a push subscription, and the worker sends it to all of
 that member's browsers (Web Push). A browser the push service reports gone (404/410) is
 unsubscribed, a notification that no browser accepted is retried with the same backoff, and ones
-over 24 hours late are given up. Without the keys, push is off and nothing else changes.
+over 24 hours late are given up. A send that takes over 10 seconds counts as a failure, so a hung push
+service cannot stall the tick. The worker checks that the public key belongs to the private key and
+turns push off with a warning when it does not. Without the keys, push is off and nothing else
+changes.
 
 The Telegram bot (`apps/bot`, grammY, long polling) needs `TELEGRAM_BOT_TOKEN` and `DATABASE_URL`;
 without either it idles. Leave BotFather's group privacy mode on: the bot only reacts to commands
@@ -255,8 +258,9 @@ The web app is a PWA. `apps/web/src/sw/sw.ts` is built by `vite-plugin-pwa` (`in
 single `/sw.js`, and the static `public/manifest.webmanifest` stays the install manifest. The worker
 precaches the built app shell so an installed app opens offline (page loads are answered with the
 cached `index.html`), and never touches `/api/*` or `/ical/*`, so data is always live and the
-calendar feed is never replaced by the app. A new version takes over straight away and an open page
-reloads. Caddy serves `/sw.js` with `Cache-Control: no-cache` like the other files outside
+calendar feed is never replaced by the app. A new version takes over straight away; a page that is
+already open keeps running its old code until it next navigates, then loads the new version (so a
+half-filled form is never lost to a reload). Caddy serves `/sw.js` with `Cache-Control: no-cache` like the other files outside
 `/assets`, so an update is noticed. The worker is registered in production builds only: the dev
 server (`pnpm --filter @tracker/web dev`) has none, so nothing is cached there and its Account
 page says notifications are not available. Try the real thing with `pnpm --filter @tracker/web
@@ -267,7 +271,11 @@ Push notifications need `VAPID_PUBLIC_KEY` on the api (and the key pair on the w
 `GET /api/push/config` gives the browser the public key (null when push is off), and
 `POST`/`DELETE /api/push/subscriptions` save and remove a browser's subscription for the logged-in
 member (an endpoint another member had saved, such as on a shared device, moves to the caller; at
-most 20 per member). The Account page's "Notifications on this device" switch asks permission,
+most 20 per member). Because the worker POSTs to a saved endpoint, only the browsers' push services
+are accepted: `https` URLs, without credentials or a port, on `fcm.googleapis.com`,
+`android.googleapis.com`, `push.apple.com`, `push.services.mozilla.com` or `notify.windows.com` (the
+host itself or a subdomain such as `web.push.apple.com`); anything else is refused with a 400, and
+the worker deletes a stored subscription for any other host instead of sending to it. The Account page's "Notifications on this device" switch asks permission,
 subscribes and saves it, and saves it again on every visit so the server stays in step with the
 browser. Logging out first deletes this browser's subscription on the server and unsubscribes the
 browser, so the next person on a shared device neither gets the previous member's reminders nor is

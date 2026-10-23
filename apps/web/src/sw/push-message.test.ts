@@ -71,7 +71,7 @@ describe('messageFromPushData', () => {
 });
 
 describe('notificationFor', () => {
-  it('builds the showNotification arguments, keeping the url for the click', () => {
+  it('builds the showNotification arguments, alerting again when a tag is replaced, keeping the url for the click', () => {
     expect(notificationFor(message)).toEqual([
       'Bins',
       {
@@ -79,6 +79,7 @@ describe('notificationFor', () => {
         tag: 'occurrence-1',
         icon: NOTIFICATION_ICON,
         badge: NOTIFICATION_BADGE,
+        renotify: true,
         data: { url: '/tasks' },
       },
     ]);

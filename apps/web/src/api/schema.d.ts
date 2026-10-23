@@ -3033,7 +3033,7 @@ export interface paths {
         put?: never;
         /**
          * Save my push subscription
-         * @description Takes `PushSubscription.toJSON()`. Saving the same endpoint again refreshes its keys, and an endpoint that another member had saved (a shared device) moves to the caller. A member keeps at most 20 subscriptions: saving more drops the least recently saved. Answers 409 `push_not_configured` when the deployment has no VAPID keys.
+         * @description Takes `PushSubscription.toJSON()`. Saving the same endpoint again refreshes its keys, and an endpoint that another member had saved (a shared device) moves to the caller. A member keeps at most 20 subscriptions: saving more drops the least recently saved. The endpoint must be an https URL of a browser push service (Google, Apple, Mozilla or Windows), as the worker sends to it; any other host is a 400. Answers 409 `push_not_configured` when the deployment has no VAPID keys.
          */
         post: {
             parameters: {

@@ -167,9 +167,6 @@ importers:
       workbox-routing:
         specifier: ^7.4.1
         version: 7.4.1
-      workbox-strategies:
-        specifier: ^7.4.1
-        version: 7.4.1
 
   apps/worker:
     dependencies:

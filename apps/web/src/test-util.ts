@@ -176,7 +176,7 @@ export function fakePushSupport(options: FakePushOptions = {}): FakePush {
   const makeSubscription = (key: ArrayBuffer | null): FakeSubscription => {
     const id = state.nextId++;
     const subscription: FakeSubscription = {
-      endpoint: `https://push.example/send/${id}`,
+      endpoint: `https://fcm.googleapis.com/fcm/send/${id}`,
       options: { applicationServerKey: key },
       toJSON: () => ({
         endpoint: subscription.endpoint,

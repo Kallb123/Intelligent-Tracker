@@ -1,19 +1,11 @@
+import type { PushMessage } from '@tracker/shared';
+
 /**
  * The pure parts of the service worker's push handling, kept apart from `sw.ts` (which needs a
- * service worker to run) so they can be unit tested. No imports: the service worker bundle stays
- * small, which is why this does not use zod's `pushMessageSchema`; `push-message.test.ts` checks
- * that the two agree.
+ * service worker to run) so they can be unit tested. `PushMessage` is imported as a type only, so
+ * the service worker bundle stays small: it does not use zod's `pushMessageSchema`, and
+ * `parsePushMessage` below is a hand-written check that `push-message.test.ts` compares with it.
  */
-
-/** What the worker sends in a push message (`PushMessage` in `@tracker/shared`). */
-export interface PushMessage {
-  title: string;
-  body: string;
-  /** Notifications with the same tag replace each other: one per occurrence. */
-  tag: string;
-  /** The app path to open when the notification is clicked. */
-  url: string;
-}
 
 /**
  * Shown when a push arrives without a readable message. Browsers penalise (and may revoke
@@ -65,8 +57,11 @@ export function messageFromPushData(data: { json(): unknown } | null): PushMessa
   }
 }
 
+/** `NotificationOptions` with `renotify`, which browsers support but the WebWorker lib omits. */
+export type PushNotificationOptions = NotificationOptions & { renotify: boolean };
+
 /** The arguments for `registration.showNotification`. */
-export function notificationFor(message: PushMessage): [string, NotificationOptions] {
+export function notificationFor(message: PushMessage): [string, PushNotificationOptions] {
   return [
     message.title,
     {
@@ -74,6 +69,10 @@ export function notificationFor(message: PushMessage): [string, NotificationOpti
       tag: message.tag,
       icon: NOTIFICATION_ICON,
       badge: NOTIFICATION_BADGE,
+      // There is one tag per occurrence, so a later push for the same occurrence (the due
+      // reminder after a heads-up) replaces the earlier notification; without `renotify` the
+      // replacement would be silent, and the later one is the one that must alert.
+      renotify: true,
       data: { url: message.url },
     },
   ];

@@ -19,7 +19,7 @@ type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-ex
 
 const KEY =
   'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM';
-const endpointOf = (n: number) => `https://push.example/send/${n}`;
+const endpointOf = (n: number) => `https://fcm.googleapis.com/fcm/send/${n}`;
 const subscription = (n = 1, keys = { p256dh: `p256dh-${n}`, auth: `auth-${n}` }) => ({
   endpoint: endpointOf(n),
   keys,
@@ -193,8 +193,24 @@ describe.skipIf(!adminUrl)('web push subscriptions (integration)', () => {
     });
 
     it.each([
-      ['a non-https endpoint', { ...subscription(), endpoint: 'http://push.example/1' }],
+      [
+        'a non-https endpoint',
+        { ...subscription(), endpoint: 'http://fcm.googleapis.com/fcm/send/1' },
+      ],
       ['an endpoint that is not a URL', { ...subscription(), endpoint: 'nope' }],
+      // The worker POSTs to the endpoint, so only the browsers' push services are accepted.
+      [
+        'an https endpoint on a host that is not a push service',
+        { ...subscription(), endpoint: 'https://internal.example/hook' },
+      ],
+      [
+        'an endpoint that only hides a push service in its host',
+        { ...subscription(), endpoint: 'https://fcm.googleapis.com.attacker.example/send/1' },
+      ],
+      [
+        'an endpoint with credentials',
+        { ...subscription(), endpoint: 'https://user:pw@fcm.googleapis.com/fcm/send/1' },
+      ],
       ['missing keys', { endpoint: endpointOf(1) }],
       ['an empty auth key', { endpoint: endpointOf(1), keys: { p256dh: 'x', auth: '' } }],
     ])('rejects %s', async (_name, body) => {

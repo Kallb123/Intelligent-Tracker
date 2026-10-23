@@ -643,7 +643,7 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
       const subscribe = (memberId: string) =>
         handle.db.insert(pushSubscription).values({
           memberId,
-          endpoint: `https://push.example/${memberId}`,
+          endpoint: `https://fcm.googleapis.com/fcm/send/${memberId}`,
           p256dh: 'p',
           auth: 'a',
         });
@@ -663,7 +663,9 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
         expect(result).toMatchObject({ queued: 1, delivered: 2 });
         expect(send).toHaveBeenCalledTimes(1);
         expect(send).toHaveBeenCalledWith(
-          expect.objectContaining({ endpoint: `https://push.example/${people[0]?.id}` }),
+          expect.objectContaining({
+            endpoint: `https://fcm.googleapis.com/fcm/send/${people[0]?.id}`,
+          }),
           expect.objectContaining({
             body: 'Coming up: Bins (due 20 Jul 2026)',
             url: '/',
@@ -726,6 +728,37 @@ describe.skipIf(!adminUrl)('worker tick (integration)', () => {
           await handle.db.select().from(notification).where(eq(notification.dedupeKey, 'stale')),
         ).toMatchObject([{ sentAt: null, failedAt: late }]);
         expect(logger.warn).toHaveBeenCalledWith({ count: 1 }, 'stale push notifications not sent');
+      });
+
+      it('logs the browsers that failed when another one accepted the push', async () => {
+        const { people } = await setup({ assignees: 1 });
+        const memberId = people[0]?.id ?? '';
+        await subscribe(memberId);
+        await handle.db.insert(pushSubscription).values({
+          memberId,
+          endpoint: 'https://fcm.googleapis.com/fcm/send/flaky',
+          p256dh: 'p',
+          auth: 'a',
+        });
+        const send = vi.fn<PushSender>(async (target) => {
+          if (target.endpoint.endsWith('/flaky')) throw new Error('push service busy');
+        });
+        await pushTick(NOW, send);
+
+        await pushTick(HEADS_UP_TICK, send);
+
+        const [row] = await pushRows();
+        expect(row).toMatchObject({ sentAt: HEADS_UP_TICK, attempts: 0 });
+        expect(logger.warn).toHaveBeenCalledWith(
+          {
+            notificationId: row?.id,
+            memberId,
+            accepted: 1,
+            failed: 1,
+            errors: ['push service busy'],
+          },
+          'push not accepted by some browsers of a member',
+        );
       });
 
       it('logs a push that could not be delivered, and retries it', async () => {

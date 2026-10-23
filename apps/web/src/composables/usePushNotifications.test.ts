@@ -147,7 +147,7 @@ describe('usePushNotifications on load', () => {
     expect(push?.pushManager.subscribe).toHaveBeenCalledTimes(1);
     expect(push?.notification.requestPermission).not.toHaveBeenCalled();
     expect(server.callsTo(SUBSCRIBE)[0]?.body).toMatchObject({
-      endpoint: 'https://push.example/send/2',
+      endpoint: 'https://fcm.googleapis.com/fcm/send/2',
     });
   });
 
@@ -185,7 +185,7 @@ describe('usePushNotifications enable', () => {
       Array.from(urlBase64ToBytes(VAPID_KEY)),
     );
     expect(server.callsTo(SUBSCRIBE)[0]?.body).toEqual({
-      endpoint: 'https://push.example/send/1',
+      endpoint: 'https://fcm.googleapis.com/fcm/send/1',
       keys: { p256dh: 'p256dh-1', auth: 'auth-1' },
     });
     expect(api.state.value).toBe('subscribed');
@@ -246,7 +246,7 @@ describe('usePushNotifications enable', () => {
     const { api, server } = await setup();
     push?.pushManager.subscribe.mockImplementationOnce(async () => {
       const incomplete = {
-        toJSON: () => ({ endpoint: 'https://push.example/send/9' }),
+        toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/fcm/send/9' }),
         unsubscribe: async () => true,
       };
       return incomplete as never;
