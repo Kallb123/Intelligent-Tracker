@@ -46,8 +46,18 @@ export function registerServiceWorker(): void {
   expected = true;
   const container = navigator.serviceWorker;
   // A page loaded without a worker is claimed by the first one to install: that first change
-  // needs no update, but any later one (a deploy while the tab stays open) does.
+  // needs no update, but any later one (a deploy while the tab stays open) does. A page that is
+  // uncontrolled although a worker is already active (a shift-reload bypasses it) is not a first
+  // install: the next change it sees is a deploy.
   let claimedOnInstall = container.controller === null;
+  if (claimedOnInstall) {
+    container
+      .getRegistration()
+      .then((registration) => {
+        if (registration?.active) claimedOnInstall = false;
+      })
+      .catch(() => undefined);
+  }
   container.addEventListener('controllerchange', () => {
     if (claimedOnInstall) claimedOnInstall = false;
     else updatePending = true;

@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('registerServiceWorker', () => {
   /** A service worker container that records what the page does with it. */
-  function container(controller: object | null) {
+  function container(controller: object | null, existing?: { active: object | null }) {
     const listeners: Record<string, () => void> = {};
     const reload = vi.fn();
     const register = vi.fn<(url: string) => Promise<object>>(async () => ({}));
@@ -36,6 +36,7 @@ describe('registerServiceWorker', () => {
       value: {
         controller,
         register,
+        getRegistration: async () => existing,
         addEventListener: (type: string, listener: () => void) => (listeners[type] = listener),
       },
     });
@@ -67,6 +68,19 @@ describe('registerServiceWorker', () => {
 
     // A deploy while the same tab stays open is an update.
     listeners['controllerchange']?.();
+    expect(isUpdatePending()).toBe(true);
+  });
+
+  it('treats the first change on a shift-reloaded page, with a worker already active, as an update', async () => {
+    const { registerServiceWorker, isUpdatePending } = await freshPwa();
+    vi.stubEnv('PROD', true);
+    const { listeners } = container(null, { active: {} });
+
+    registerServiceWorker();
+    await Promise.resolve();
+    await Promise.resolve();
+    listeners['controllerchange']?.();
+
     expect(isUpdatePending()).toBe(true);
   });
 
