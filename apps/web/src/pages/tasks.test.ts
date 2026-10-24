@@ -74,6 +74,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     assignmentMode: 'fixed',
     assigneeIds: [ME],
     nextAssigneeId: ME,
+    nextDue: null,
     milestones: [],
     archived: false,
     archivedAt: null,
@@ -470,6 +471,7 @@ describe('All tasks', () => {
       title: 'Put the bins out',
       category: 'Home',
       tags: ['weekly'],
+      nextDue: '2026-10-11T23:00:00.000Z',
     }),
     task({
       id: 'a0000000-0000-4000-8000-000000000002',
@@ -481,6 +483,8 @@ describe('All tasks', () => {
       rrule: null,
       intervalAfterCompletionDays: 42,
       assigneeIds: [SAM],
+      nextDue: '2026-10-14T23:00:00.000Z',
+      createdAt: '2026-10-05T10:00:00.000Z',
     }),
     task({
       id: 'a0000000-0000-4000-8000-000000000003',
@@ -490,9 +494,11 @@ describe('All tasks', () => {
       dueDate: '2026-11-01',
       assigneeIds: [],
       assignmentMode: 'any',
+      createdAt: '2026-10-08T10:00:00.000Z',
     }),
   ];
   const titles = (wrapper: VueWrapper) => texts(wrapper, '.task-title');
+  beforeEach(() => localStorage.clear());
 
   it('lists tasks with a description of their schedule', async () => {
     const { wrapper } = await open({ 'GET /api/tasks': json({ tasks }) }, '/tasks');
@@ -509,6 +515,59 @@ describe('All tasks', () => {
     expect(wrapper.find('.task-title').attributes('href')).toBe(`/tasks/${tasks[0]?.id}`);
   });
 
+  it('orders by next due by default, with undated tasks last, and shows the date', async () => {
+    const [bins, kettle, passport] = tasks;
+    const { wrapper } = await open(
+      { 'GET /api/tasks': json({ tasks: [passport, kettle, bins] }) },
+      '/tasks',
+    );
+
+    expect(titles(wrapper)).toEqual(['Put the bins out', 'Descale kettle', 'Renew passport']);
+    expect(texts(wrapper, '#task-sort option')).toEqual([
+      'Next due',
+      'Title (A–Z)',
+      'Priority',
+      'Newest first',
+    ]);
+    expect(wrapper.find('label[for="task-sort"]').text()).toBe('Sort by');
+    const rows = texts(wrapper, '.task-row');
+    expect(rows[0]).toContain('Next due tomorrow');
+    expect(rows[1]).toContain('Next due Thu 15 Oct');
+    expect(rows[2]).not.toContain('Next due');
+  });
+
+  it('reorders when the sort changes, and remembers the choice', async () => {
+    const [bins, kettle, passport] = tasks;
+    const { wrapper } = await open(
+      { 'GET /api/tasks': json({ tasks: [bins, kettle, passport] }) },
+      '/tasks',
+    );
+
+    await wrapper.get('#task-sort').setValue('title');
+    expect(titles(wrapper)).toEqual(['Descale kettle', 'Put the bins out', 'Renew passport']);
+    expect(localStorage.getItem('tracker.tasks.sort')).toBe('title');
+
+    await wrapper.get('#task-sort').setValue('newest');
+    expect(titles(wrapper)).toEqual(['Renew passport', 'Descale kettle', 'Put the bins out']);
+    mounted?.unmount();
+
+    const again = await open(
+      { 'GET /api/tasks': json({ tasks: [bins, kettle, passport] }) },
+      '/tasks',
+    );
+    expect(again.wrapper.get('#task-sort').element).toHaveProperty('value', 'newest');
+    expect(titles(again.wrapper)).toEqual(['Renew passport', 'Descale kettle', 'Put the bins out']);
+  });
+
+  it('sorts the filtered tasks', async () => {
+    const { wrapper } = await open({ 'GET /api/tasks': json({ tasks }) }, '/tasks');
+    await wrapper.get('#task-sort').setValue('title');
+    await wrapper.get('#task-search').setValue('e');
+    expect(titles(wrapper)).toEqual(['Descale kettle', 'Put the bins out', 'Renew passport']);
+    await wrapper.get('#task-search').setValue('weekly');
+    expect(titles(wrapper)).toEqual(['Put the bins out']);
+  });
+
   it('shows whose turn it is on rotation tasks', async () => {
     const rotating = task({
       title: 'Clean the bathroom',
@@ -522,9 +581,10 @@ describe('All tasks', () => {
     );
 
     const rows = texts(wrapper, '.task-row');
-    expect(rows[3]).toContain('For Alex, Sam');
-    expect(rows[3]).toContain('Next: Sam');
-    expect(rows.slice(0, 3).join()).not.toContain('Next:');
+    const rotatingRow = rows.find((row) => row.includes('Clean the bathroom'));
+    expect(rotatingRow).toContain('For Alex, Sam');
+    expect(rotatingRow).toContain('Next: Sam');
+    expect(rows.filter((row) => row.includes('Next:'))).toHaveLength(1);
   });
 
   it('starts with the person from the address and writes changes back', async () => {

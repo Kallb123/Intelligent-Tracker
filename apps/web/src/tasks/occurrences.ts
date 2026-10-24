@@ -1,5 +1,10 @@
 import { addLocalDays, localToday } from '@tracker/core';
-import { formatDayHeading, type MemberDto, type OccurrenceDto } from '@tracker/shared';
+import {
+  formatDayHeading,
+  type MemberDto,
+  type OccurrenceDto,
+  type TaskDto,
+} from '@tracker/shared';
 import { formatTime } from '../format.js';
 
 /** The household-local calendar date an occurrence is due, or null for an undated one. */
@@ -15,6 +20,12 @@ function atTime(occurrence: OccurrenceDto, timeZone: string): string {
     : '';
 }
 
+/** `today`, `tomorrow`, or a short date like `Fri 16 Oct`, relative to `today`. */
+function relativeDay(date: string, today: string): string {
+  if (date === today) return 'today';
+  return date === addLocalDays(today, 1) ? 'tomorrow' : formatDayHeading(date, today);
+}
+
 /**
  * When an occurrence is due, in words relative to `today` (a `YYYY-MM-DD` in the household's
  * zone): "Due today", "Due tomorrow at 09:00", "Overdue, was due Mon 5 Oct", "No date".
@@ -23,13 +34,27 @@ export function describeDue(occurrence: OccurrenceDto, today: string, timeZone: 
   const date = dueDateOf(occurrence, timeZone);
   if (date === null) return 'No date';
   const at = atTime(occurrence, timeZone);
-  const when =
-    date === today
-      ? 'today'
-      : date === addLocalDays(today, 1)
-        ? 'tomorrow'
-        : formatDayHeading(date, today);
+  const when = relativeDay(date, today);
   return occurrence.overdue ? `Overdue, was due ${when}${at}` : `Due ${when}${at}`;
+}
+
+/**
+ * When a task's earliest open occurrence is due, relative to `now` in the household's zone
+ * ("Next due tomorrow", "Next due today at 09:30, overdue"), or an empty string when it has none.
+ * A timed due is overdue once its instant has passed, an all-day one from the day after.
+ */
+export function describeNextDue(
+  task: Pick<TaskDto, 'nextDue' | 'allDay'>,
+  now: Date,
+  timeZone: string,
+): string {
+  if (task.nextDue === null) return '';
+  const due = new Date(task.nextDue);
+  const today = localToday(now, timeZone);
+  const date = localToday(due, timeZone);
+  const at = task.allDay ? '' : ` at ${formatTime(due, timeZone)}`;
+  const overdue = task.allDay ? date < today : due < now;
+  return `Next due ${relativeDay(date, today)}${at}${overdue ? ', overdue' : ''}`;
 }
 
 /**

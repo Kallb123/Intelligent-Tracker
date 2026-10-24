@@ -883,6 +883,8 @@ export interface paths {
                                 assigneeIds: string[];
                                 /** Format: uuid */
                                 nextAssigneeId: string | null;
+                                /** Format: date-time */
+                                nextDue: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;
@@ -1016,6 +1018,8 @@ export interface paths {
                                 assigneeIds: string[];
                                 /** Format: uuid */
                                 nextAssigneeId: string | null;
+                                /** Format: date-time */
+                                nextDue: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;
@@ -1135,6 +1139,8 @@ export interface paths {
                                 assigneeIds: string[];
                                 /** Format: uuid */
                                 nextAssigneeId: string | null;
+                                /** Format: date-time */
+                                nextDue: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;
@@ -1334,6 +1340,8 @@ export interface paths {
                                 assigneeIds: string[];
                                 /** Format: uuid */
                                 nextAssigneeId: string | null;
+                                /** Format: date-time */
+                                nextDue: string | null;
                                 milestones: {
                                     /** Format: uuid */
                                     id: string;

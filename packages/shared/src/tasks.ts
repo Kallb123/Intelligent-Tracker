@@ -244,6 +244,12 @@ export const taskSchema = z.object({
    * one, undated last. `null` when it has no open occurrence or that one is unassigned.
    */
   nextAssigneeId: z.uuid().nullable(),
+  /**
+   * The due instant of the task's earliest open occurrence (the same one `nextAssigneeId` is
+   * read from); an all-day due is local midnight at the start of its date in the household time
+   * zone. `null` when it has no dated open occurrence.
+   */
+  nextDue: z.iso.datetime().nullable(),
   /** Ordered by position. */
   milestones: z.array(milestoneSchema),
   archived: z.boolean(),
