@@ -75,7 +75,7 @@ export class TestClient {
   constructor(private readonly app: FastifyInstance) {}
 
   async request(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     url: string,
     options: RequestOptions = {},
   ): Promise<LightMyRequestResponse> {
@@ -110,6 +110,9 @@ export class TestClient {
   }
   post(url: string, body?: unknown, options: RequestOptions = {}) {
     return this.request('POST', url, { ...options, ...(body !== undefined ? { body } : {}) });
+  }
+  put(url: string, body?: unknown, options: RequestOptions = {}) {
+    return this.request('PUT', url, { ...options, ...(body !== undefined ? { body } : {}) });
   }
   patch(url: string, body?: unknown, options: RequestOptions = {}) {
     return this.request('PATCH', url, { ...options, ...(body !== undefined ? { body } : {}) });

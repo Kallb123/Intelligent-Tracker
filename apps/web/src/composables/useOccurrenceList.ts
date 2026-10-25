@@ -13,10 +13,11 @@ export interface OccurrenceListQuery {
 }
 
 /**
- * An occurrence list (Today, Coming up) and the things you can do to its items. Every action
- * reloads the list afterwards, so what is shown is what the api says (a completed or snoozed item
- * leaves; completing an "after it's done" task brings its next one in). Reloads also happen when
- * the failure was a conflict, such as completing something a housemate just completed.
+ * An occurrence list (Today, Coming up) and the things you can do to its items (complete, start,
+ * snooze, tick a milestone). Every action reloads the list afterwards, so what is shown is what
+ * the api says (a completed or snoozed item leaves; completing an "after it's done" task brings
+ * its next one in). Reloads also happen when the failure was a conflict, such as completing
+ * something a housemate just completed.
  *
  * `query` is read on every load, so a reactive source (the 30/90-day toggle, the person filter)
  * reloads the list.
@@ -78,8 +79,27 @@ export function useOccurrenceList(query: () => OccurrenceListQuery) {
       getApi().POST('/api/occurrences/{id}/snooze', { ...path(o.id), body: { days } }),
     );
 
+  const tickMilestone = (o: OccurrenceDto, milestoneId: string, done: boolean) =>
+    act(o.id, () =>
+      getApi().PUT('/api/occurrences/{id}/milestones/{milestoneId}', {
+        params: { path: { id: o.id, milestoneId } },
+        body: { done },
+      }),
+    );
+
   onMounted(load);
   watch(() => JSON.stringify(query()), load);
 
-  return { occurrences, loading, loadError, actionError, busyId, load, complete, start, snooze };
+  return {
+    occurrences,
+    loading,
+    loadError,
+    actionError,
+    busyId,
+    load,
+    complete,
+    start,
+    snooze,
+    tickMilestone,
+  };
 }

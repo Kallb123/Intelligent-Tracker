@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_TITLE_LENGTH,
   occurrenceListQuerySchema,
+  milestoneDoneBodySchema,
+  occurrenceMilestoneSchema,
   snoozeBodySchema,
   taskBodySchema,
   taskFieldsIssues,
@@ -341,5 +343,26 @@ describe('query and snooze schemas', () => {
     expect(snoozeBodySchema.safeParse({ days: 0 }).success).toBe(false);
     expect(snoozeBodySchema.safeParse({ days: 366 }).success).toBe(false);
     expect(snoozeBodySchema.safeParse({ until: 'tomorrow' }).success).toBe(false);
+  });
+
+  it('takes only a boolean `done` when ticking a milestone', () => {
+    expect(milestoneDoneBodySchema.parse({ done: true })).toEqual({ done: true });
+    expect(milestoneDoneBodySchema.parse({ done: false })).toEqual({ done: false });
+    for (const bad of [{}, { done: 'true' }, { done: 1 }, { done: true, extra: 1 }]) {
+      expect(milestoneDoneBodySchema.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  it('shows a milestone on an occurrence as the task’s with whether it is ticked', () => {
+    const milestone = {
+      id: '66666666-6666-4666-8666-666666666666',
+      title: 'Get quotes',
+      offsetDaysBeforeDue: 14,
+    };
+    expect(occurrenceMilestoneSchema.parse({ ...milestone, done: true })).toEqual({
+      ...milestone,
+      done: true,
+    });
+    expect(occurrenceMilestoneSchema.safeParse(milestone).success).toBe(false);
   });
 });

@@ -95,6 +95,7 @@ const extra = (o: OccurrenceDto) => describePrepStart(o, today.value, session.ti
             @complete="list.complete(o)"
             @start="list.start(o)"
             @snooze="(d) => list.snooze(o, d)"
+            @milestone="(id, done) => list.tickMilestone(o, id, done)"
           />
         </ul>
       </section>

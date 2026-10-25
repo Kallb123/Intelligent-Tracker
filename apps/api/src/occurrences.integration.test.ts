@@ -1,4 +1,12 @@
-import { activity, occurrence, replanRotation, task, type DbHandle } from '@tracker/db';
+import {
+  activity,
+  occurrence,
+  reminder,
+  replanReminders,
+  replanRotation,
+  task,
+  type DbHandle,
+} from '@tracker/db';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -236,6 +244,7 @@ describe.skipIf(!adminUrl)('occurrences (integration)', () => {
         completedAt: null,
         completedBy: null,
         snoozedUntil: null,
+        milestones: [],
         overdue: false,
       });
       expect((await admin.get(`/api/occurrences/${occ['id']}`)).json()).toEqual({
@@ -834,6 +843,513 @@ describe.skipIf(!adminUrl)('occurrences (integration)', () => {
       expect(
         (await handle.db.select().from(task).where(eq(task.id, created['id'])))[0]?.rotationCursor,
       ).toBe(0);
+    });
+  });
+
+  describe('milestones', () => {
+    const milestones = [
+      { title: 'Get quotes', offsetDaysBeforeDue: 14 },
+      { title: 'Decide', offsetDaysBeforeDue: 7 },
+    ];
+
+    async function setUp() {
+      const created = await createTask({ title: 'Insurance', dueDate: '2026-03-30', milestones });
+      const occ = await firstOccurrence(created['id']);
+      const [quotes, decide] = created['milestones'] as [Json, Json];
+      const tick = (done: boolean, id: string = quotes['id'], client: TestClient = admin) =>
+        client.put(`/api/occurrences/${occ['id']}/milestones/${id}`, { done });
+      return { created, occ, quotes, decide, tick };
+    }
+
+    const done = (res: { json<T>(): T }) =>
+      res.json<Json>().occurrence.milestones.map((m: Json) => [m['title'], m['done']]);
+
+    /** The status of the planned milestone reminders of a milestone, by key. */
+    async function milestoneReminder(milestoneId: string) {
+      const rows = await handle.db.select().from(reminder);
+      return rows.find((r) => r.key === `milestone:${milestoneId}`);
+    }
+
+    it('lists the task’s milestones, none ticked, on every occurrence', async () => {
+      const { occ, quotes, decide } = await setUp();
+      expect(occ['milestones']).toEqual([
+        { id: quotes['id'], title: 'Get quotes', offsetDaysBeforeDue: 14, done: false },
+        { id: decide['id'], title: 'Decide', offsetDaysBeforeDue: 7, done: false },
+      ]);
+      const listed = (await admin.get('/api/occurrences?view=upcoming&days=60')).json<Json>();
+      expect(listed.occurrences[0].milestones).toHaveLength(2);
+      const none = await createTask({ title: 'Bins', dueDate: '2026-03-01' });
+      expect((await firstOccurrence(none['id']))['milestones']).toEqual([]);
+    });
+
+    it('ticks and unticks a milestone, storing when it was ticked, and logs both', async () => {
+      const { occ, quotes, tick } = await setUp();
+
+      const ticked = await tick(true);
+      expect(ticked.statusCode, ticked.body).toBe(200);
+      expect(done(ticked)).toEqual([
+        ['Get quotes', true],
+        ['Decide', false],
+      ]);
+      const [stored] = await handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.id, occ['id']));
+      expect(stored?.milestoneProgress).toEqual({ [quotes['id']]: t.clock.now().toISOString() });
+      expect(
+        (await admin.get(`/api/occurrences/${occ['id']}`)).json<Json>().occurrence.milestones[0]
+          .done,
+      ).toBe(true);
+
+      const unticked = await tick(false);
+      expect(done(unticked)).toEqual([
+        ['Get quotes', false],
+        ['Decide', false],
+      ]);
+      const [after] = await handle.db.select().from(occurrence).where(eq(occurrence.id, occ['id']));
+      expect(after?.milestoneProgress).toEqual({});
+      expect(await kinds()).toEqual([
+        'task.created',
+        'occurrence.milestone_done',
+        'occurrence.milestone_undone',
+      ]);
+      const [row] = await handle.db
+        .select()
+        .from(activity)
+        .where(eq(activity.kind, 'occurrence.milestone_done'));
+      expect(row?.data).toMatchObject({ title: 'Insurance', milestoneId: quotes['id'] });
+    });
+
+    it('does nothing, and logs nothing, when the milestone is already as asked', async () => {
+      const { occ, quotes, tick } = await setUp();
+      await tick(true);
+      t.clock.advance(HOUR);
+      expect((await tick(true)).statusCode).toBe(200);
+      expect((await tick(false, quotes['id'])).statusCode).toBe(200);
+      expect((await tick(false, quotes['id'])).statusCode).toBe(200);
+
+      const [stored] = await handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.id, occ['id']));
+      expect(stored?.milestoneProgress).toEqual({});
+      expect(await kinds()).toEqual([
+        'task.created',
+        'occurrence.milestone_done',
+        'occurrence.milestone_undone',
+      ]);
+    });
+
+    it('keeps the first tick time when ticked again, and other milestones’ ticks when unticking', async () => {
+      const { occ, quotes, decide, tick } = await setUp();
+      await tick(true);
+      const firstTick = t.clock.now().toISOString();
+      t.clock.advance(HOUR);
+      await tick(true);
+      await tick(true, decide['id']);
+      await tick(false, decide['id']);
+
+      const [stored] = await handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.id, occ['id']));
+      expect(stored?.milestoneProgress).toEqual({ [quotes['id']]: firstTick });
+    });
+
+    it('ticks only the one occurrence', async () => {
+      const created = await createTask({
+        title: 'Filter',
+        scheduleKind: 'fixed',
+        dueDate: '2026-03-02',
+        rrule: 'FREQ=WEEKLY',
+        milestones: [{ title: 'Order', offsetDaysBeforeDue: 1 }],
+      });
+      const res = await admin.get(`/api/occurrences?view=upcoming&days=30&taskId=${created['id']}`);
+      const [first, second] = res.json<Json>().occurrences as [Json, Json];
+      expect(second).toBeDefined();
+      await admin.put(`/api/occurrences/${first['id']}/milestones/${created['milestones'][0].id}`, {
+        done: true,
+      });
+
+      const after = (
+        await admin.get(`/api/occurrences?view=upcoming&days=30&taskId=${created['id']}`)
+      ).json<Json>().occurrences as Json[];
+      expect(after.map((o) => o['milestones'][0].done)).toEqual([
+        true,
+        ...after.slice(1).map(() => false),
+      ]);
+      expect(after.length).toBeGreaterThan(1);
+      const tasks = (await admin.get('/api/tasks')).json<Json>().tasks as Json[];
+      expect(tasks[0]?.['nextCompletedMilestoneIds']).toEqual([created['milestones'][0].id]);
+    });
+
+    it('reports the ticked milestones of the next open occurrence on the task', async () => {
+      const { created, quotes, decide, tick } = await setUp();
+      const next = async () =>
+        (await admin.get(`/api/tasks/${created['id']}`)).json<Json>().task[
+          'nextCompletedMilestoneIds'
+        ];
+      expect(await next()).toEqual([]);
+      await tick(true);
+      expect(await next()).toEqual([quotes['id']]);
+      await tick(true, decide['id']);
+      expect([...(await next())].sort()).toEqual([quotes['id'], decide['id']].sort());
+      await tick(false);
+      expect(await next()).toEqual([decide['id']]);
+    });
+
+    it('answers 404 for a milestone of another task, or one that does not exist', async () => {
+      const { occ, tick } = await setUp();
+      const other = await createTask({
+        title: 'Other',
+        dueDate: '2026-03-30',
+        milestones: [{ title: 'Elsewhere', offsetDaysBeforeDue: 3 }],
+      });
+      for (const id of [other['milestones'][0].id, '00000000-0000-4000-8000-000000000000']) {
+        const res = await tick(true, id);
+        expect([id, res.statusCode]).toEqual([id, 404]);
+      }
+      const [stored] = await handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.id, occ['id']));
+      expect(stored?.milestoneProgress).toEqual({});
+      expect(await kinds()).toEqual(['task.created', 'task.created']);
+    });
+
+    it('answers 404 for another household’s occurrence', async () => {
+      const { occ, quotes, tick } = await setUp();
+      const outsider = await addOutsider(app, handle);
+      const res = await tick(true, quotes['id'], outsider.client);
+      expect(res.statusCode).toBe(404);
+      expect(
+        (await handle.db.select().from(occurrence).where(eq(occurrence.id, occ['id'])))[0]
+          ?.milestoneProgress,
+      ).toEqual({});
+    });
+
+    it.each(['complete', 'skip'])(
+      'answers 409 once the occurrence is closed by %s',
+      async (action) => {
+        const { occ, quotes, tick } = await setUp();
+        await admin.post(`/api/occurrences/${occ['id']}/${action}`);
+        const res = await tick(true);
+        expect(res.statusCode).toBe(409);
+        expect(res.json<Json>()['error']).toBe('occurrence_closed');
+        expect(
+          (await handle.db.select().from(occurrence).where(eq(occurrence.id, occ['id'])))[0]
+            ?.milestoneProgress,
+        ).not.toHaveProperty(quotes['id']);
+      },
+    );
+
+    it('answers 409, not 404, for an unknown milestone on a closed occurrence', async () => {
+      const { occ, tick } = await setUp();
+      await admin.post(`/api/occurrences/${occ['id']}/complete`);
+      const res = await tick(true, '00000000-0000-4000-8000-000000000000');
+      expect(res.statusCode).toBe(409);
+      expect(res.json<Json>()['error']).toBe('occurrence_closed');
+    });
+
+    it('can tick a milestone of a started occurrence', async () => {
+      const { occ, tick } = await setUp();
+      await admin.post(`/api/occurrences/${occ['id']}/start`);
+      const res = await tick(true);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json<Json>().occurrence).toMatchObject({ status: 'started' });
+      expect(done(res)).toEqual([
+        ['Get quotes', true],
+        ['Decide', false],
+      ]);
+    });
+
+    it('keeps two simultaneous ticks of different milestones', async () => {
+      const { occ, quotes, decide, tick } = await setUp();
+      const results = await Promise.all([tick(true, quotes['id']), tick(true, decide['id'])]);
+      expect(results.map((r) => r.statusCode)).toEqual([200, 200]);
+      const [stored] = await handle.db
+        .select()
+        .from(occurrence)
+        .where(eq(occurrence.id, occ['id']));
+      expect(Object.keys(stored?.milestoneProgress ?? {}).sort()).toEqual(
+        [quotes['id'], decide['id']].sort(),
+      );
+    });
+
+    it('leaves a reminder that was already sent as sent when its milestone is ticked', async () => {
+      const { quotes, tick } = await setUp();
+      const now = t.clock.now();
+      await replanReminders(handle.db, { now });
+      await handle.db
+        .update(reminder)
+        .set({ status: 'sent', sentAt: now })
+        .where(eq(reminder.key, `milestone:${quotes['id']}`));
+
+      await tick(true);
+      await replanReminders(handle.db, { now });
+      expect((await milestoneReminder(quotes['id']))?.status).toBe('sent');
+
+      await tick(false);
+      await replanReminders(handle.db, { now });
+      expect((await milestoneReminder(quotes['id']))?.status).toBe('sent');
+    });
+
+    describe('when the task is edited', () => {
+      const patch = async (taskId: string, milestones: Json[]) => {
+        const res = await admin.patch(`/api/tasks/${taskId}`, { milestones });
+        expect(res.statusCode, res.body).toBe(200);
+        return res.json<Json>().task;
+      };
+
+      it('keeps ticks of milestones that stay, whatever else changes, and prunes deleted ones', async () => {
+        const created = await createTask({
+          title: 'Insurance',
+          dueDate: '2026-03-30',
+          milestones: [
+            { title: 'Get quotes', offsetDaysBeforeDue: 14 },
+            { title: 'Decide', offsetDaysBeforeDue: 7 },
+            { title: 'Renew', offsetDaysBeforeDue: 1 },
+          ],
+        });
+        const occ = await firstOccurrence(created['id']);
+        const [quotes, decide, renew] = created['milestones'] as [Json, Json, Json];
+        for (const m of [quotes, renew]) {
+          await admin.put(`/api/occurrences/${occ['id']}/milestones/${m['id']}`, { done: true });
+        }
+        const tickedAt = t.clock.now().toISOString();
+
+        // Rename Decide, reorder, change Get quotes' offset and drop Renew.
+        const edited = await patch(created['id'], [
+          { title: 'Decide soon', offsetDaysBeforeDue: 6 },
+          { title: 'Get quotes', offsetDaysBeforeDue: 10 },
+        ]);
+
+        expect(
+          edited['milestones'].map((m: Json) => [m['title'], m['offsetDaysBeforeDue']]),
+        ).toEqual([
+          ['Decide soon', 6],
+          ['Get quotes', 10],
+        ]);
+        expect(edited['milestones'][1]['id']).toBe(quotes['id']);
+        expect(edited['milestones'][0]['id']).not.toBe(decide['id']);
+        expect(edited['nextCompletedMilestoneIds']).toEqual([quotes['id']]);
+        const [stored] = await handle.db
+          .select()
+          .from(occurrence)
+          .where(eq(occurrence.id, occ['id']));
+        expect(stored?.milestoneProgress).toEqual({ [quotes['id']]: tickedAt });
+        const after = (await admin.get(`/api/occurrences/${occ['id']}`)).json<Json>().occurrence;
+        expect(after.milestones.map((m: Json) => [m['title'], m['done']])).toEqual([
+          ['Decide soon', false],
+          ['Get quotes', true],
+        ]);
+      });
+
+      describe('and rescheduled', () => {
+        const weekly = (extra: Json = {}) =>
+          createTask({
+            title: 'Filter',
+            scheduleKind: 'fixed',
+            dueDate: '2026-03-02',
+            rrule: 'FREQ=WEEKLY',
+            milestones: [
+              { title: 'Order', offsetDaysBeforeDue: 2 },
+              { title: 'Fit', offsetDaysBeforeDue: 0 },
+            ],
+            ...extra,
+          });
+        const occurrencesOf = async (taskId: string) =>
+          (
+            (
+              await admin.get(`/api/occurrences?view=upcoming&days=30&taskId=${taskId}`)
+            ).json<Json>().occurrences as Json[]
+          ).map((o) => ({
+            id: o['id'] as string,
+            dueDate: o['dueDate'] as string,
+            ticked: (o['milestones'] as Json[]).filter((m) => m['done']).map((m) => m['title']),
+          }));
+        const tickFirst = async (taskId: string, milestoneId: string) => {
+          const [first] = await occurrencesOf(taskId);
+          await admin.put(`/api/occurrences/${first!.id}/milestones/${milestoneId}`, {
+            done: true,
+          });
+          return first!;
+        };
+
+        it('keeps the tick on the occurrence that replaces the same date', async () => {
+          const created = await weekly();
+          const old = await tickFirst(created['id'], created['milestones'][0].id);
+
+          const res = await admin.patch(`/api/tasks/${created['id']}`, { leadTimeDays: 7 });
+          expect(res.statusCode, res.body).toBe(200);
+
+          const after = await occurrencesOf(created['id']);
+          expect(after[0]).toMatchObject({ dueDate: old.dueDate, ticked: ['Order'] });
+          expect(after[0]!.id).not.toBe(old.id);
+          expect(after.slice(1).every((o) => o.ticked.length === 0)).toBe(true);
+          expect(res.json<Json>().task['nextCompletedMilestoneIds']).toEqual([
+            created['milestones'][0].id,
+          ]);
+        });
+
+        it('keeps the milestone reminder cancelled across the reschedule', async () => {
+          const created = await weekly();
+          const now = t.clock.now();
+          // The milestone on the due day itself is still ahead of the test clock for the first date.
+          const order = created['milestones'][1].id;
+          const statusOn = async (occurrenceId: string) =>
+            (await handle.db.select().from(reminder))
+              .filter((r) => r.key === `milestone:${order}` && r.occurrenceId === occurrenceId)
+              .map((r) => r.status);
+          await replanReminders(handle.db, { now });
+          const old = await tickFirst(created['id'], order);
+          await replanReminders(handle.db, { now });
+          expect(await statusOn(old.id)).toEqual(['cancelled']);
+
+          await admin.patch(`/api/tasks/${created['id']}`, { leadTimeDays: 7 });
+          await replanReminders(handle.db, { now });
+
+          const [first] = await occurrencesOf(created['id']);
+          expect(first!.id).not.toBe(old.id);
+          expect(await statusOn(first!.id)).not.toContain('planned');
+        });
+
+        it('drops the ticks of milestones deleted in the same edit', async () => {
+          const created = await weekly();
+          const [order, fit] = created['milestones'] as [Json, Json];
+          const first = await tickFirst(created['id'], order['id']);
+          await admin.put(`/api/occurrences/${first.id}/milestones/${fit['id']}`, { done: true });
+
+          const res = await admin.patch(`/api/tasks/${created['id']}`, {
+            leadTimeDays: 7,
+            milestones: [{ title: 'Fit', offsetDaysBeforeDue: 0 }],
+          });
+          expect(res.statusCode, res.body).toBe(200);
+
+          const [after] = await occurrencesOf(created['id']);
+          expect(after).toMatchObject({ dueDate: first.dueDate, ticked: ['Fit'] });
+          const [stored] = await handle.db
+            .select()
+            .from(occurrence)
+            .where(eq(occurrence.id, after!.id));
+          expect(Object.keys(stored?.milestoneProgress ?? {})).toEqual([fit['id']]);
+        });
+
+        it('keeps the tick of a one-off task whose due date moves', async () => {
+          const created = await createTask({
+            title: 'Insurance',
+            dueDate: '2026-03-30',
+            milestones: [{ title: 'Get quotes', offsetDaysBeforeDue: 14 }],
+          });
+          await tickFirst(created['id'], created['milestones'][0].id);
+
+          await admin.patch(`/api/tasks/${created['id']}`, { dueDate: '2026-04-10' });
+
+          const after = (
+            await admin.get(`/api/occurrences?view=upcoming&days=60&taskId=${created['id']}`)
+          ).json<Json>().occurrences as Json[];
+          expect(after).toHaveLength(1);
+          expect(after[0]).toMatchObject({ dueDate: '2026-04-10' });
+          expect(after[0]!['milestones'][0].done).toBe(true);
+        });
+
+        it('starts unticked when the new schedule no longer covers the date', async () => {
+          const created = await weekly();
+          const first = await tickFirst(created['id'], created['milestones'][0].id);
+
+          // From Mondays to Tuesdays: nothing covers the old dates any more.
+          const res = await admin.patch(`/api/tasks/${created['id']}`, {
+            dueDate: '2026-03-03',
+          });
+          expect(res.statusCode, res.body).toBe(200);
+
+          const after = await occurrencesOf(created['id']);
+          expect(after.length).toBeGreaterThan(0);
+          expect(after.map((o) => o.dueDate)).not.toContain(first.dueDate);
+          expect(after.every((o) => o.ticked.length === 0)).toBe(true);
+        });
+
+        it('does not hand one of several ticks to a task changed to a one-off', async () => {
+          const created = await weekly();
+          await tickFirst(created['id'], created['milestones'][0].id);
+          expect((await occurrencesOf(created['id'])).length).toBeGreaterThan(1);
+
+          const res = await admin.patch(`/api/tasks/${created['id']}`, {
+            scheduleKind: 'once',
+            rrule: null,
+            dueDate: '2026-03-05',
+          });
+          expect(res.statusCode, res.body).toBe(200);
+
+          const after = await occurrencesOf(created['id']);
+          expect(after).toHaveLength(1);
+          expect(after[0]).toMatchObject({ dueDate: '2026-03-05', ticked: [] });
+        });
+      });
+
+      it('keeps the milestone reminder cancelled after an unrelated milestone is edited', async () => {
+        const created = await createTask({
+          title: 'Insurance',
+          dueDate: '2026-03-30',
+          milestones: [
+            { title: 'Get quotes', offsetDaysBeforeDue: 14 },
+            { title: 'Decide', offsetDaysBeforeDue: 7 },
+          ],
+        });
+        const occ = await firstOccurrence(created['id']);
+        const [quotes] = created['milestones'] as [Json, Json];
+        const now = t.clock.now();
+        await replanReminders(handle.db, { now });
+        await admin.put(`/api/occurrences/${occ['id']}/milestones/${quotes['id']}`, { done: true });
+        await replanReminders(handle.db, { now });
+        expect((await milestoneReminder(quotes['id']))?.status).toBe('cancelled');
+
+        await patch(created['id'], [
+          { title: 'Decide', offsetDaysBeforeDue: 5 },
+          { title: 'Get quotes', offsetDaysBeforeDue: 14 },
+        ]);
+        await replanReminders(handle.db, { now });
+
+        expect((await milestoneReminder(quotes['id']))?.status).toBe('cancelled');
+      });
+    });
+
+    it('validates the ids and the body, and needs a session and the CSRF token', async () => {
+      const { occ, quotes } = await setUp();
+      const url = `/api/occurrences/${occ['id']}/milestones/${quotes['id']}`;
+      for (const body of [{}, { done: 'yes' }, { done: true, extra: 1 }]) {
+        expect([body, (await admin.put(url, body)).statusCode]).toEqual([body, 400]);
+      }
+      expect(
+        (await admin.put(`/api/occurrences/nope/milestones/${quotes['id']}`, { done: true }))
+          .statusCode,
+      ).toBe(400);
+      expect(
+        (await admin.put(`/api/occurrences/${occ['id']}/milestones/nope`, { done: true }))
+          .statusCode,
+      ).toBe(400);
+      expect((await admin.put(url, { done: true }, { csrf: false })).statusCode).toBe(403);
+      const anon = new TestClient(app);
+      expect(
+        (await anon.request('PUT', url, { body: { done: true }, csrf: false })).statusCode,
+      ).toBe(401);
+    });
+
+    it('cancels the milestone’s reminder when ticked, and plans it again when unticked', async () => {
+      const { quotes, decide, tick } = await setUp();
+      const now = t.clock.now();
+      await replanReminders(handle.db, { now });
+      expect((await milestoneReminder(quotes['id']))?.status).toBe('planned');
+      expect((await milestoneReminder(decide['id']))?.status).toBe('planned');
+
+      await tick(true);
+      await replanReminders(handle.db, { now });
+      expect((await milestoneReminder(quotes['id']))?.status).toBe('cancelled');
+      expect((await milestoneReminder(decide['id']))?.status).toBe('planned');
+
+      await tick(false);
+      await replanReminders(handle.db, { now });
+      expect((await milestoneReminder(quotes['id']))?.status).toBe('planned');
     });
   });
 

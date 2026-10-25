@@ -187,6 +187,130 @@ describe.skipIf(!adminUrl)('createTask and setMemberAway (integration)', () => {
     });
   });
 
+  describe('replaceTaskLists milestones', () => {
+    const ms = (...specs: [string, number][]) =>
+      specs.map(([title, offsetDaysBeforeDue]) => ({ title, offsetDaysBeforeDue }));
+    const stored = async () =>
+      (await db.select().from(taskMilestone).orderBy(asc(taskMilestone.position))).map((m) => ({
+        id: m.id,
+        title: m.title,
+        offset: m.offsetDaysBeforeDue,
+        position: m.position,
+      }));
+
+    async function withTask(milestones: ReturnType<typeof ms>) {
+      const { h, sam } = await setup();
+      const created = await db.transaction((tx) =>
+        createTask(tx, {
+          householdId: h.id,
+          createdBy: sam.id,
+          values: values(),
+          assigneeIds: [sam.id],
+          milestones,
+          now: NOW,
+        }),
+      );
+      const [occ] = await db.select().from(occurrence).where(eq(occurrence.taskId, created.id));
+      return { task: created, occ: occ! };
+    }
+
+    const progressOf = async (id: string) =>
+      (await db.select().from(occurrence).where(eq(occurrence.id, id)))[0]?.milestoneProgress;
+
+    it('keeps the ids of milestones that stay, through renames of others, reorders and offset changes', async () => {
+      const { task: t } = await withTask(ms(['A', 3], ['B', 2], ['C', 1]));
+      const before = await stored();
+
+      await db.transaction((tx) =>
+        replaceTaskLists(tx, t.id, { milestones: ms(['C', 9], ['A', 3], ['B renamed', 2]) }),
+      );
+
+      const after = await stored();
+      expect(after.map((m) => [m.title, m.offset, m.position])).toEqual([
+        ['C', 9, 0],
+        ['A', 3, 1],
+        ['B renamed', 2, 2],
+      ]);
+      expect(after[0]?.id).toBe(before[2]?.id);
+      expect(after[1]?.id).toBe(before[0]?.id);
+      // The renamed one matches nothing, so it is new and the old B is gone.
+      expect(after[2]?.id).not.toBe(before[1]?.id);
+    });
+
+    it('swaps two milestones while a third stays where it is, and re-saving the same list changes nothing', async () => {
+      const { task: t } = await withTask(ms(['A', 3], ['B', 2], ['C', 1]));
+      const before = await stored();
+
+      await db.transaction((tx) =>
+        replaceTaskLists(tx, t.id, { milestones: ms(['A', 3], ['C', 1], ['B', 2]) }),
+      );
+      const swapped = await stored();
+      expect(swapped.map((m) => m.id)).toEqual([before[0]!.id, before[2]!.id, before[1]!.id]);
+      expect(swapped.map((m) => m.position)).toEqual([0, 1, 2]);
+
+      await db.transaction((tx) =>
+        replaceTaskLists(tx, t.id, { milestones: ms(['A', 3], ['C', 1], ['B', 2]) }),
+      );
+      expect(await stored()).toEqual(swapped);
+    });
+
+    it('matches duplicate titles in order, taking the first unused one', async () => {
+      const { task: t } = await withTask(ms(['Same', 3], ['Same', 2]));
+      const before = await stored();
+      await db.transaction((tx) =>
+        replaceTaskLists(tx, t.id, { milestones: ms(['Same', 5], ['Same', 4], ['Same', 1]) }),
+      );
+      const after = await stored();
+      expect(after.slice(0, 2).map((m) => m.id)).toEqual(before.map((m) => m.id));
+      expect(after.map((m) => m.offset)).toEqual([5, 4, 1]);
+    });
+
+    it('removes the ids of deleted milestones from open occurrences only', async () => {
+      const { task: t, occ } = await withTask(ms(['A', 3], ['B', 2]));
+      const [a, b] = await stored();
+      await db
+        .update(occurrence)
+        .set({ milestoneProgress: { [a!.id]: '2026-07-15T10:00:00Z', [b!.id]: true } })
+        .where(eq(occurrence.id, occ.id));
+      const [closed] = await db
+        .insert(occurrence)
+        .values({
+          taskId: t.id,
+          dueDate: '2026-07-01',
+          status: 'done',
+          milestoneProgress: { [b!.id]: true },
+        })
+        .returning();
+
+      await db.transaction((tx) => replaceTaskLists(tx, t.id, { milestones: ms(['A', 3]) }));
+
+      expect(await progressOf(occ.id)).toEqual({ [a!.id]: '2026-07-15T10:00:00Z' });
+      expect(await progressOf(closed!.id)).toEqual({ [b!.id]: true });
+      expect((await stored()).map((m) => m.id)).toEqual([a!.id]);
+    });
+
+    it('leaves occurrences alone when nothing was deleted, and adds new milestones', async () => {
+      const { task: t, occ } = await withTask(ms(['A', 3]));
+      const [a] = await stored();
+      await db
+        .update(occurrence)
+        .set({ milestoneProgress: { [a!.id]: true } })
+        .where(eq(occurrence.id, occ.id));
+
+      await db.transaction((tx) =>
+        replaceTaskLists(tx, t.id, { milestones: ms(['New', 5], ['A', 3]) }),
+      );
+
+      const after = await stored();
+      expect(after.map((m) => [m.title, m.position])).toEqual([
+        ['New', 0],
+        ['A', 1],
+      ]);
+      expect(after[1]?.id).toBe(a!.id);
+      expect(await progressOf(occ.id)).toEqual({ [a!.id]: true });
+    });
+  });
+
   describe('setMemberAway', () => {
     const away = (
       h: { id: string },

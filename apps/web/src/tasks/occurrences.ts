@@ -69,20 +69,22 @@ export interface NextMilestone {
 }
 
 /**
- * The next milestone of a task's next open occurrence: the earliest one dated today or later,
- * the first listed on a tie. Each date is its offset before the due date. Null when the task has
- * no next occurrence, no milestones, or every milestone has passed.
+ * The next milestone of a task's next open occurrence: the earliest unticked one dated today or
+ * later, the first listed on a tie. Each date is its offset before the due date. Null when the
+ * task has no next occurrence, or no milestone left that is unticked and not yet passed.
  */
 export function nextMilestone(
-  task: Pick<TaskDto, 'nextDue' | 'milestones'>,
+  task: Pick<TaskDto, 'nextDue' | 'milestones' | 'nextCompletedMilestoneIds'>,
   now: Date,
   timeZone: string,
 ): NextMilestone | null {
   const dueDate = nextDueDate(task, timeZone);
   if (dueDate === null) return null;
   const today = localToday(now, timeZone);
+  const ticked = new Set(task.nextCompletedMilestoneIds);
   let next: NextMilestone | null = null;
   for (const milestone of task.milestones) {
+    if (ticked.has(milestone.id)) continue;
     const date = milestoneDay(dueDate, milestone.offsetDaysBeforeDue);
     if (date >= today && (next === null || date < next.date)) {
       next = { title: milestone.title, date };
@@ -96,7 +98,7 @@ export function nextMilestone(
  * venue, tomorrow"), or an empty string when there is none.
  */
 export function describeNextMilestone(
-  task: Pick<TaskDto, 'nextDue' | 'milestones'>,
+  task: Pick<TaskDto, 'nextDue' | 'milestones' | 'nextCompletedMilestoneIds'>,
   now: Date,
   timeZone: string,
 ): string {

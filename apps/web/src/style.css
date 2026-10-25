@@ -485,6 +485,21 @@ h2 {
   gap: 0.35rem;
 }
 
+.milestone-checklist {
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.milestone-checklist .checkbox-row {
+  margin-bottom: 0.25rem;
+}
+
+.milestone-done {
+  text-decoration: line-through;
+  color: var(--p-text-muted-color);
+}
+
 .occurrence-tags:empty {
   display: none;
 }
