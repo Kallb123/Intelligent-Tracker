@@ -11,6 +11,7 @@ import {
 } from './callback-data.js';
 
 const ID = '3f2b8c1e-9d4a-4e6b-8a7c-1d2e3f4a5b6c';
+const MILESTONE_ID = 'c0ffee00-1234-4abc-9def-0123456789ab';
 
 const actions: CallbackAction[] = [
   { type: 'complete', occurrenceId: ID },
@@ -18,6 +19,7 @@ const actions: CallbackAction[] = [
   { type: 'skip', occurrenceId: ID },
   { type: 'snoozeMenu', occurrenceId: ID },
   { type: 'back', occurrenceId: ID },
+  { type: 'milestone', occurrenceId: ID, milestoneId: MILESTONE_ID },
   ...SNOOZE_OPTION_KEYS.map((key) => ({ type: 'snooze' as const, key, occurrenceId: ID })),
 ];
 
@@ -33,6 +35,12 @@ describe('callback data', () => {
     expect(encodeCallback({ type: 'snooze', key: '3d', occurrenceId: ID })).toBe(`n:3d:${ID}`);
   });
 
+  it('packs the two ids of a milestone tick into 47 bytes', () => {
+    const data = encodeCallback({ type: 'milestone', occurrenceId: ID, milestoneId: MILESTONE_ID });
+    expect(data).toMatch(/^m:[\w-]{22}:[\w-]{22}$/);
+    expect(Buffer.byteLength(data)).toBe(47);
+  });
+
   it.each([
     '',
     'd',
@@ -44,6 +52,12 @@ describe('callback data', () => {
     `n:never:${ID}`,
     `x:tonight:${ID}`,
     ID,
+    'm',
+    'm:AAAAAAAAAAAAAAAAAAAAAA',
+    `m:${ID}:${MILESTONE_ID}`,
+    'm:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA',
+    'm:AAAAAAAAAAAAAAAAAAAAAA:short',
+    'm:AAAAAAAAAAAAAAAAAAAAAB:AAAAAAAAAAAAAAAAAAAAAA',
   ])('rejects %j', (data) => {
     expect(decodeCallback(data)).toBeUndefined();
   });

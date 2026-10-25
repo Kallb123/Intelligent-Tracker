@@ -1,5 +1,9 @@
 import type { SnoozeOption, SnoozeOptionKey } from '@tracker/core';
-import { DEFAULT_OUTBOX_MESSAGE_SIZE, type OccurrenceState } from '@tracker/db';
+import {
+  DEFAULT_OUTBOX_MESSAGE_SIZE,
+  type MilestoneState,
+  type OccurrenceState,
+} from '@tracker/db';
 import {
   describeReminder,
   instantToWall,
@@ -153,6 +157,25 @@ export function formatSnoozeUntil(until: Date, timeZone: string): string {
 const isOpen = (state: OccurrenceState | undefined): state is OccurrenceState =>
   state !== undefined && (OPEN_OCCURRENCE_STATUSES as readonly string[]).includes(state.status);
 
+/**
+ * Where the milestone a milestone reminder is about stands: undefined when the line is not about
+ * one (another kind of reminder, or one queued before reminders carried the milestone's id),
+ * null when the milestone has since been deleted from the task.
+ */
+function milestoneOf(
+  { payload }: RenderLine,
+  state: OccurrenceState | undefined,
+): MilestoneState | null | undefined {
+  const id = payload.kind === 'milestone' ? payload.milestoneId : undefined;
+  return id === undefined || !state ? undefined : (state.milestones[id] ?? null);
+}
+
+/** Whether something is left to do about the line: its occurrence is open, and so is its milestone. */
+function isLive(line: RenderLine, state: OccurrenceState | undefined): state is OccurrenceState {
+  const milestone = milestoneOf(line, state);
+  return isOpen(state) && milestone !== null && !milestone?.done;
+}
+
 /** " by Sam", or nothing when it is not known who did it. */
 function by(name: string | null | undefined): string {
   return name ? ` by ${truncate(name, MAX_NAME_LENGTH)}` : '';
@@ -164,6 +187,7 @@ function by(name: string | null | undefined): string {
  */
 function noteFor(
   state: OccurrenceState | undefined,
+  milestone: MilestoneState | null | undefined,
   now: Date,
   timeZone: string,
 ): string | undefined {
@@ -174,6 +198,8 @@ function noteFor(
     case 'skipped':
       return `⏭ Skipped${by(state.actors.skipped)}`;
     default:
+      if (milestone === null) return '🗑 Removed';
+      if (milestone?.done) return `✅ Milestone done${by(milestone.doneBy)}`;
       if (state.snoozedUntil && state.snoozedUntil > now) {
         return `⏰ Snoozed until ${formatSnoozeUntil(state.snoozedUntil, timeZone)}${by(state.actors.snoozed)}`;
       }
@@ -187,11 +213,12 @@ function renderLine(
   state: OccurrenceState | undefined,
   { now, timeZone }: Pick<RenderInput, 'now' | 'timeZone'>,
 ): string {
-  const open = isOpen(state);
+  const milestone = milestoneOf(line, state);
+  const open = isLive(line, state);
   const { assignee } = line;
   const loud = open && line.payload.escalated === true;
   const prefix = `${number === undefined ? '' : `${number}. `}${loud ? ESCALATED_PREFIX : ''}`;
-  const note = noteFor(state, now, timeZone);
+  const note = noteFor(state, milestone, now, timeZone);
   const name = assignee ? truncate(assignee.name, MAX_NAME_LENGTH) : 'Anyone 🙋';
   // What is left of the line's budget once the number, the name (and its ": ") and the note
   // (and the line break before it) are counted, for the reminder's own text.
@@ -241,12 +268,40 @@ function actionRow(
 }
 
 /**
+ * The buttons that tick off the milestones the open lines of one occurrence remind about (one
+ * each, however many reminders name it), labelled with the line's number when there are several
+ * lines.
+ */
+function milestoneRowOf(
+  occurrenceId: string,
+  live: { line: RenderLine; number: number }[],
+  numbered: boolean,
+): InlineButton[] {
+  const seen = new Set<string>();
+  return live.flatMap(({ line, number }) => {
+    const { kind, milestoneId } = line.payload;
+    if (kind !== 'milestone' || milestoneId === undefined || seen.has(milestoneId)) return [];
+    seen.add(milestoneId);
+    return [
+      {
+        text: `☑️ ${numbered ? number : 'Milestone done'}`,
+        callback_data: encodeCallback({ type: 'milestone', occurrenceId, milestoneId }),
+      },
+    ];
+  });
+}
+
+/**
  * Builds the message: an optional heading, then one numbered line per reminder (numbers only when there is more than one;
  * at most `DEFAULT_OUTBOX_MESSAGE_SIZE` of them, which the outbox guarantees),
- * struck through with who closed it once its occurrence is done or skipped, and one row of
- * buttons per distinct occurrence that is still open (several reminders of one occurrence share
- * its row). With several occurrences the buttons say which line they are for ("✅ 2"), since the
- * row's position is all that ties it to its line.
+ * struck through with who closed it once its occurrence is done or skipped (or, for a milestone
+ * reminder, the milestone ticked off), and one row of buttons per distinct occurrence that still
+ * has an open line (several reminders of one occurrence share its row). With several occurrences
+ * the buttons say which line they are for ("✅ 2"), since the row's position is all that ties it
+ * to its line.
+ *
+ * A milestone reminder that can still be ticked off also gets a "☑️ Milestone done" button in a
+ * row above its occurrence's; the occurrence's own "✅ Done" completes the whole job.
  */
 export function renderMessage(input: RenderInput): RenderedMessage {
   const { states, snoozeMenu, tonightsJobs } = input;
@@ -269,7 +324,13 @@ export function renderMessage(input: RenderInput): RenderedMessage {
   const keyboard: InlineButton[][] = [];
   for (const [occurrenceId, n] of firstLine) {
     const state = states.get(occurrenceId);
-    if (!isOpen(state)) continue;
+    const live = lines.flatMap((line, i) =>
+      line.payload.occurrenceId === occurrenceId && isLive(line, state)
+        ? [{ line, number: i + 1 }]
+        : [],
+    );
+    // Closed (or ticked off) lines have nothing left to press.
+    if (!state || live.length === 0) continue;
     if (snoozeMenu?.occurrenceId === occurrenceId) {
       keyboard.push(
         snoozeMenu.choices.map(({ key, label }) => ({
@@ -278,9 +339,11 @@ export function renderMessage(input: RenderInput): RenderedMessage {
         })),
         [{ text: '↩ Back', callback_data: encodeCallback({ type: 'back', occurrenceId }) }],
       );
-    } else {
-      keyboard.push(actionRow(occurrenceId, state, several ? n : undefined));
+      continue;
     }
+    const milestoneRow = milestoneRowOf(occurrenceId, live, numbered);
+    if (milestoneRow.length > 0) keyboard.push(milestoneRow);
+    keyboard.push(actionRow(occurrenceId, state, several ? n : undefined));
   }
   return { text, keyboard };
 }

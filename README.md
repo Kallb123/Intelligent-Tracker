@@ -212,7 +212,9 @@ and button presses. An admin links the house group by sending `/linkgroup <code>
 member links their Telegram with `t.me/<bot>?start=<code>`; both codes come from the web app. Every
 `DELIVERY_INTERVAL_MS` (default 10 seconds) the bot sends the group reminders that are due as one
 message per household, with a mention for each assignee and ✅ Done / ▶️ Started / ⏰ Snooze / ⏭ Skip
-buttons. A press is attributed to the member behind the Telegram user, and the message is edited in
+buttons. A milestone reminder also gets a ☑️ Milestone done button, which ticks that milestone off on
+the occurrence (the same tick as in the web app; the line is struck through and a milestone that is
+already ticked off, or has been deleted, is answered rather than ticked again). A press is attributed to the member behind the Telegram user, and the message is edited in
 place to show the result. Long titles and names are cut with "…" so a message always fits Telegram's
 4096 characters, and reminders that were due more than 24 hours ago (the bot was down) are given up
 instead of posted late. A Telegram account that is already connected to a member is never moved by

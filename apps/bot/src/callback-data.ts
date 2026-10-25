@@ -6,6 +6,10 @@ import { SNOOZE_OPTION_KEYS, type SnoozeOptionKey } from '@tracker/core';
  * at 47 bytes). It is all the bot keeps about a button: who pressed it comes from the update, and
  * which message it was on from the callback query.
  *
+ * Ticking off a milestone needs two ids, which as UUIDs would not fit (`m:` and two 36-character
+ * UUIDs is 75 bytes), so `m:<occurrence>:<milestone>` carries each as 22 base64url characters
+ * (47 bytes).
+ *
  * The two buttons on a `/add` confirmation card are the exception: they carry a quick-add draft's
  * id (`qs:<uuid>` to save it, `qc:<uuid>` to cancel it, 39 bytes), and are told apart from the
  * occurrence buttons by `QUICK_ADD_CALLBACK`.
@@ -14,7 +18,9 @@ import { SNOOZE_OPTION_KEYS, type SnoozeOptionKey } from '@tracker/core';
 /** A button press: what to do, to which occurrence. */
 export type CallbackAction =
   | { type: 'complete' | 'start' | 'skip' | 'snoozeMenu' | 'back'; occurrenceId: string }
-  | { type: 'snooze'; key: SnoozeOptionKey; occurrenceId: string };
+  | { type: 'snooze'; key: SnoozeOptionKey; occurrenceId: string }
+  /** Tick off one of the task's milestones on the occurrence. */
+  | { type: 'milestone'; occurrenceId: string; milestoneId: string };
 
 const SIMPLE_CODES = {
   d: 'complete',
@@ -31,15 +37,39 @@ const CODE_OF = Object.fromEntries(
   Object.entries(SIMPLE_CODES).map(([code, type]) => [type, code]),
 ) as Record<SimpleType, string>;
 
+/** A UUID as 22 base64url characters. */
+function packUuid(uuid: string): string {
+  return Buffer.from(uuid.replaceAll('-', ''), 'hex').toString('base64url');
+}
+
+/** The UUID `packUuid` made `packed` from, or undefined if it is not one of those. */
+function unpackUuid(packed: string): string | undefined {
+  const hex = Buffer.from(packed, 'base64url').toString('hex');
+  const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return UUID.test(uuid) && packUuid(uuid) === packed ? uuid : undefined;
+}
+
 export function encodeCallback(action: CallbackAction): string {
-  return action.type === 'snooze'
-    ? `n:${action.key}:${action.occurrenceId}`
-    : `${CODE_OF[action.type]}:${action.occurrenceId}`;
+  switch (action.type) {
+    case 'snooze':
+      return `n:${action.key}:${action.occurrenceId}`;
+    case 'milestone':
+      return `m:${packUuid(action.occurrenceId)}:${packUuid(action.milestoneId)}`;
+    default:
+      return `${CODE_OF[action.type]}:${action.occurrenceId}`;
+  }
 }
 
 /** The action a button's data stands for, or undefined for data this bot did not produce. */
 export function decodeCallback(data: string): CallbackAction | undefined {
   const parts = data.split(':');
+  if (parts[0] === 'm') {
+    const occurrenceId = parts.length === 3 ? unpackUuid(parts[1] as string) : undefined;
+    const milestoneId = parts.length === 3 ? unpackUuid(parts[2] as string) : undefined;
+    return occurrenceId && milestoneId
+      ? { type: 'milestone', occurrenceId, milestoneId }
+      : undefined;
+  }
   const occurrenceId = parts[parts.length - 1];
   if (occurrenceId === undefined || !UUID.test(occurrenceId)) return undefined;
 

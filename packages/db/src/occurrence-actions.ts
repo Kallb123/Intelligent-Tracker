@@ -72,6 +72,9 @@ export class OccurrenceActionError extends Error {
   }
 }
 
+/** The activity kind that logs a milestone being ticked off (`data.milestoneId` says which). */
+export const MILESTONE_DONE_ACTIVITY = 'occurrence.milestone_done';
+
 const NOT_STARTED = ['upcoming', 'active'] as const satisfies OccurrenceStatus[];
 
 /** The occurrence as read under its lock, before a change. */
@@ -161,7 +164,7 @@ function transitionFor(
           if (!row) throw new OccurrenceActionError('milestone_not_found');
         },
         unchanged: (b) => Boolean(b.milestoneProgress[milestoneId]) === done,
-        activityKind: done ? 'occurrence.milestone_done' : 'occurrence.milestone_undone',
+        activityKind: done ? MILESTONE_DONE_ACTIVITY : 'occurrence.milestone_undone',
         activityData: { milestoneId },
       };
     }

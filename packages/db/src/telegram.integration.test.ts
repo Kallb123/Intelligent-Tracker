@@ -10,6 +10,7 @@ import {
   notification,
   occurrence,
   task,
+  taskMilestone,
   type NewNotification,
 } from './schema/index.js';
 import {
@@ -552,12 +553,14 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
         status: 'started',
         snoozedUntil: later(9000),
         actors: { snoozed: 'Sam', started: 'Alex' },
+        milestones: {},
       });
       expect(states.find((s) => s.occurrenceId === untouched.occurrence.id)).toEqual({
         occurrenceId: untouched.occurrence.id,
         status: 'active',
         snoozedUntil: null,
         actors: {},
+        milestones: {},
       });
     });
 
@@ -582,9 +585,77 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
           status: 'active',
           snoozedUntil: null,
           actors: { completed: null },
+          milestones: {},
         },
       ]);
       expect(await occurrenceStates(db, h.id, [])).toEqual([]);
+    });
+
+    it("gives the task's milestones: ticked or not, and who ticked each one last", async () => {
+      const h = await newHousehold();
+      const alex = await newMember(h.id, 'Alex');
+      const sam = await newMember(h.id, 'Sam');
+      const gone = await newMember(h.id, 'Gone');
+      const occ = await newOccurrence(h.id);
+      const other = await newOccurrence(h.id);
+      const [quotes, decide, renew, untrackedTick] = await db
+        .insert(taskMilestone)
+        .values(
+          ['Get quotes', 'Decide', 'Renew', 'Old tick'].map((title, position) => ({
+            taskId: occ.task.id,
+            title,
+            offsetDaysBeforeDue: 30 - position,
+            position,
+          })),
+        )
+        .returning();
+      if (!quotes || !decide || !renew || !untrackedTick) throw new Error('insert failed');
+      const tick = async (memberId: string, milestoneId: string, createdAt: Date) => {
+        await db.insert(activity).values({
+          householdId: h.id,
+          memberId,
+          taskId: occ.task.id,
+          occurrenceId: occ.occurrence.id,
+          kind: 'occurrence.milestone_done',
+          data: { milestoneId },
+          createdAt,
+        });
+      };
+      // Quotes was ticked by Alex, unticked, and ticked again by Sam; Decide by a member who has
+      // since been deleted; Old tick has no activity row at all; Renew is not ticked.
+      await tick(alex.id, quotes.id, later(1000));
+      await tick(sam.id, quotes.id, later(2000));
+      await tick(gone.id, decide.id, later(3000));
+      await db.delete(member).where(eq(member.id, gone.id));
+      // A tick on another occurrence does not leak into this one.
+      await db.insert(activity).values({
+        householdId: h.id,
+        memberId: alex.id,
+        taskId: occ.task.id,
+        occurrenceId: other.occurrence.id,
+        kind: 'occurrence.milestone_done',
+        data: { milestoneId: renew.id },
+        createdAt: later(4000),
+      });
+      await db
+        .update(occurrence)
+        .set({
+          milestoneProgress: {
+            [quotes.id]: later(2000).toISOString(),
+            [decide.id]: later(3000).toISOString(),
+            [untrackedTick.id]: later(500).toISOString(),
+          },
+        })
+        .where(eq(occurrence.id, occ.occurrence.id));
+
+      const [state] = await occurrenceStates(db, h.id, [occ.occurrence.id]);
+
+      expect(state?.milestones).toEqual({
+        [quotes.id]: { done: true, doneBy: 'Sam' },
+        [decide.id]: { done: true, doneBy: null },
+        [untrackedTick.id]: { done: true, doneBy: null },
+        [renew.id]: { done: false },
+      });
     });
   });
 });

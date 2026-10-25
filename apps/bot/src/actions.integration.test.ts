@@ -1,4 +1,4 @@
-import { applyOccurrenceAction, household, occurrence } from '@tracker/db';
+import { activity, applyOccurrenceAction, household, occurrence, taskMilestone } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
@@ -26,16 +26,36 @@ describe.skipIf(!adminUrl)('button presses in the group (integration)', () => {
 
   /**
    * A household with a linked group and two linked members, and one reminder for each of
-   * `titles` already delivered as one message (so presses find the message's lines again).
+   * `titles` already delivered as one message (so presses find the message's lines again). With
+   * `milestones`, each is a reminder for a "Get quotes" milestone of its task instead of a due
+   * reminder, and `milestoneIds` has the milestones' ids in the same order.
    */
-  async function deliveredMessage(titles: string[] = ['Put the bins out']) {
+  async function deliveredMessage(
+    titles: string[] = ['Put the bins out'],
+    { milestones = false }: { milestones?: boolean } = {},
+  ) {
     const h = await newHousehold(test.db);
     const alex = await newMember(test.db, h.id, 'Alex', ALEX_TG);
     const sam = await newMember(test.db, h.id, 'Sam', SAM_TG);
     const occurrences = [];
+    const milestoneIds: string[] = [];
     for (const title of titles) {
       const occ = await newOccurrence(test.db, h.id, title, { assigneeId: alex.id });
-      await queueGroupReminder(test.db, h.id, occ);
+      if (milestones) {
+        const [m] = await test.db
+          .insert(taskMilestone)
+          .values({ taskId: occ.task.id, title: 'Get quotes', offsetDaysBeforeDue: 0, position: 0 })
+          .returning();
+        if (!m) throw new Error('insert failed');
+        milestoneIds.push(m.id);
+        await queueGroupReminder(test.db, h.id, occ, {
+          kind: 'milestone',
+          milestoneId: m.id,
+          milestoneTitle: m.title,
+        });
+      } else {
+        await queueGroupReminder(test.db, h.id, occ);
+      }
       occurrences.push(occ.occurrence);
     }
     const harness = newTestBot(test.db);
@@ -59,7 +79,7 @@ describe.skipIf(!adminUrl)('button presses in the group (integration)', () => {
       if (!o) throw new Error('missing');
       return o;
     };
-    return { h, alex, sam, occurrences, messageId, press, stored, ...harness };
+    return { h, alex, sam, occurrences, milestoneIds, messageId, press, stored, ...harness };
   }
 
   const edited = (telegram: { to(method: string): Record<string, unknown>[] }) =>
@@ -279,6 +299,162 @@ describe.skipIf(!adminUrl)('button presses in the group (integration)', () => {
       expect(edited(telegram)[0]?.['text']).toBe(
         '<s>Alex: Put the bins out is due today</s>\n🗑 Removed',
       );
+    });
+  });
+
+  describe('milestone reminders', () => {
+    const MILESTONE_LINE = '<s>Alex: Get quotes — Put the bins out</s>';
+
+    async function milestoneMessage(titles?: string[]) {
+      const message = await deliveredMessage(titles, { milestones: true });
+      const [occ] = message.occurrences;
+      const [milestoneId] = message.milestoneIds;
+      if (!occ || !milestoneId) throw new Error('missing');
+      const ticked = async (id: string) =>
+        Object.keys((await message.stored(id)).milestoneProgress as Record<string, unknown>);
+      return { ...message, occ, milestoneId, ticked };
+    }
+
+    it('ticks the milestone off as the member who pressed, leaving the occurrence open', async () => {
+      const { occ, milestoneId, sam, press, stored, ticked, telegram, messageId } =
+        await milestoneMessage();
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId });
+
+      expect(await ticked(occ.id)).toEqual([milestoneId]);
+      expect((await stored(occ.id)).status).toBe('active');
+      expect(telegram.to('sendMessage')).toEqual([]);
+      const edit = edited(telegram)[0];
+      expect(edit).toMatchObject({ chat_id: CHAT_ID, message_id: messageId, parse_mode: 'HTML' });
+      expect(edit?.['text']).toBe(`${MILESTONE_LINE}\n✅ Milestone done by Sam`);
+      expect(labels(edit)).toEqual([]);
+      expect(telegram.to('answerCallbackQuery')).toEqual([
+        { callback_query_id: expect.any(String), text: '☑️ Milestone done' },
+      ]);
+      const logged = await test.db
+        .select()
+        .from(activity)
+        .where(eq(activity.kind, 'occurrence.milestone_done'));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toMatchObject({ memberId: sam.id, occurrenceId: occ.id });
+    });
+
+    it('is idempotent: pressing again changes nothing and says it is already ticked off', async () => {
+      const { occ, milestoneId, press, ticked, stored, telegram } = await milestoneMessage();
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId });
+      const firstTick = (await stored(occ.id)).milestoneProgress;
+      telegram.clear();
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId }, ALEX_TG);
+
+      expect(await ticked(occ.id)).toEqual([milestoneId]);
+      expect((await stored(occ.id)).milestoneProgress).toEqual(firstTick);
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({ text: 'Already ticked off' });
+      // Still shows who ticked it first.
+      expect(edited(telegram)[0]?.['text']).toBe(`${MILESTONE_LINE}\n✅ Milestone done by Sam`);
+    });
+
+    it('also treats a milestone ticked off in the web app as already done', async () => {
+      const { h, alex, occ, milestoneId, press, telegram } = await milestoneMessage();
+      await applyOccurrenceAction(test.db, {
+        householdId: h.id,
+        memberId: alex.id,
+        occurrenceId: occ.id,
+        now: NOW,
+        action: { type: 'milestone', milestoneId, done: true },
+      });
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId });
+
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({ text: 'Already ticked off' });
+      expect(edited(telegram)[0]?.['text']).toBe(`${MILESTONE_LINE}\n✅ Milestone done by Alex`);
+      expect(labels(edited(telegram)[0])).toEqual([]);
+    });
+
+    it('keeps the occurrence buttons when other lines of the message are still open', async () => {
+      const { occurrences, milestoneIds, press, telegram } = await milestoneMessage([
+        'Put the bins out',
+        'Water the plants',
+      ]);
+      const [first, second] = occurrences;
+      const [, secondMilestone] = milestoneIds;
+      if (!first || !second || !secondMilestone) throw new Error('missing');
+
+      await press({ type: 'milestone', occurrenceId: second.id, milestoneId: secondMilestone });
+
+      expect(labels(edited(telegram)[0])).toEqual([['☑️ 1'], ['✅ 1', '▶️ 1', '⏰ 1', '⏭ 1']]);
+    });
+
+    it('says the job is already done when the occurrence was completed meanwhile', async () => {
+      const { h, alex, occ, milestoneId, press, ticked, telegram } = await milestoneMessage();
+      await applyOccurrenceAction(test.db, {
+        householdId: h.id,
+        memberId: alex.id,
+        occurrenceId: occ.id,
+        now: NOW,
+        action: { type: 'complete' },
+      });
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId });
+
+      expect(await ticked(occ.id)).toEqual([]);
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({
+        text: 'That job is already done.',
+      });
+      expect(edited(telegram)[0]?.['text']).toBe(`${MILESTONE_LINE}\n✅ Done by Alex`);
+    });
+
+    it('says the milestone no longer exists when it was deleted from the task', async () => {
+      const { occ, milestoneId, press, ticked, telegram } = await milestoneMessage();
+      await test.db.delete(taskMilestone).where(eq(taskMilestone.id, milestoneId));
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId });
+
+      expect(await ticked(occ.id)).toEqual([]);
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({
+        text: 'That milestone no longer exists.',
+      });
+      expect(edited(telegram)[0]?.['text']).toBe(`${MILESTONE_LINE}\n🗑 Removed`);
+      expect(labels(edited(telegram)[0])).toEqual([]);
+    });
+
+    it('says the job no longer exists when the occurrence was deleted', async () => {
+      const { occ, milestoneId, press, telegram } = await milestoneMessage();
+      await test.db.delete(occurrence).where(eq(occurrence.id, occ.id));
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId });
+
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({
+        text: 'That job no longer exists.',
+      });
+      expect(edited(telegram)[0]?.['text']).toBe(`${MILESTONE_LINE}\n🗑 Removed`);
+    });
+
+    it("refuses a milestone that belongs to another task's occurrence", async () => {
+      const { occurrences, milestoneIds, press, ticked, telegram } = await milestoneMessage([
+        'Put the bins out',
+        'Water the plants',
+      ]);
+      const [first] = occurrences;
+      const [, otherMilestone] = milestoneIds;
+      if (!first || !otherMilestone) throw new Error('missing');
+
+      await press({ type: 'milestone', occurrenceId: first.id, milestoneId: otherMilestone });
+
+      expect(await ticked(first.id)).toEqual([]);
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({
+        text: 'That milestone no longer exists.',
+      });
+    });
+
+    it('ignores a press from a Telegram user who is not linked', async () => {
+      const { occ, milestoneId, press, ticked, telegram } = await milestoneMessage();
+
+      await press({ type: 'milestone', occurrenceId: occ.id, milestoneId }, 9999);
+
+      expect(await ticked(occ.id)).toEqual([]);
+      expect(telegram.to('answerCallbackQuery')[0]).toMatchObject({ show_alert: true });
+      expect(edited(telegram)).toEqual([]);
     });
   });
 
