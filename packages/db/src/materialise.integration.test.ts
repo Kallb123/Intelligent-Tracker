@@ -595,6 +595,26 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
       expect(await occurrencesOf(other.id)).toHaveLength(1);
     });
 
+    it('reports the cleared occurrences that had milestones ticked', async () => {
+      const h = await newHousehold();
+      const t = await newTask(h.id);
+      await insertOccurrence(t.id, {
+        dueDate: '2026-07-13',
+        sourceDueKeys: ['2026-07-13'],
+        milestoneProgress: { m1: '2026-07-01T10:00:00Z' },
+      });
+      await insertOccurrence(t.id, { dueDate: '2026-07-20', sourceDueKeys: ['2026-07-20'] });
+
+      const result = await clearFutureOpenOccurrences(handle.db, t.id, {
+        now: at('2026-07-06T09:00:00Z'),
+      });
+
+      expect(result.deleted).toBe(2);
+      expect(result.ticked).toEqual([
+        { sourceDueKeys: ['2026-07-13'], milestoneProgress: { m1: '2026-07-01T10:00:00Z' } },
+      ]);
+    });
+
     it('draws the line at local midnight for timed dues', async () => {
       const h = await newHousehold();
       const t = await newTask(h.id, { scheduleKind: 'once', rrule: null, dueDate: null });
@@ -629,7 +649,7 @@ describe.skipIf(!adminUrl)('materialisation (integration)', () => {
         '00000000-0000-4000-8000-000000000000',
         { now: at('2026-07-06T09:00:00Z') },
       );
-      expect(result).toEqual({ deleted: 0, sourceDueKeys: [] });
+      expect(result).toEqual({ deleted: 0, sourceDueKeys: [], ticked: [] });
     });
   });
 

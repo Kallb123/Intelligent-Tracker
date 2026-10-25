@@ -161,6 +161,7 @@ describe.skipIf(!adminUrl)('tasks (integration)', () => {
         nextAssigneeId: null,
         nextDue: '2026-03-05T00:00:00.000Z',
         milestones: [],
+        nextCompletedMilestoneIds: [],
         archived: false,
         archivedAt: null,
         createdBy: me.id,

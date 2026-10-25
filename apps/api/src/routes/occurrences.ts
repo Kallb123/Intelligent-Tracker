@@ -9,6 +9,7 @@ import {
 } from '@tracker/db';
 import {
   MS_PER_DAY,
+  milestoneDoneBodySchema,
   occurrenceCompletionResponseSchema,
   occurrenceListQuerySchema,
   occurrenceResponseSchema,
@@ -28,7 +29,7 @@ import {
   loadOccurrenceDtos,
   type OverdueClock,
   selectOccurrences,
-  toOccurrenceDto,
+  toOccurrenceDtos,
 } from '../tasks/payloads.js';
 
 /**
@@ -41,6 +42,7 @@ import {
  *   POST /api/occurrences/:id/skip       like complete, but counts as skipped
  *   POST /api/occurrences/:id/snooze     hide until a time, or for a number of days
  *   POST /api/occurrences/:id/start      mark as started
+ *   PUT  /api/occurrences/:id/milestones/:milestoneId   tick or untick a milestone
  * Open means upcoming, active or started. Changing a closed (done/skipped) occurrence is 409.
  * Starting, completing or skipping an occurrence that was not yet started uses up its assignee's
  * turn in the task's rotation (see `consumeRotationTurn`).
@@ -79,6 +81,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
     } catch (error) {
       if (!(error instanceof OccurrenceActionError)) throw error;
       if (error.code === 'not_found') throw notFound('No such occurrence');
+      if (error.code === 'milestone_not_found') throw notFound('No such milestone');
       throw conflict('occurrence_closed', error.message);
     }
     const [dto] = await loadOccurrenceDtos(ctx.db, me.householdId, [occurrenceId], clock);
@@ -178,6 +181,36 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
     },
   );
 
+  r.put(
+    '/api/occurrences/:id/milestones/:milestoneId',
+    {
+      onRequest: app.requireAuth,
+      schema: {
+        tags,
+        summary: 'Tick or untick a milestone',
+        description:
+          "Marks one of the task's milestones as done (or not done) on an open occurrence. A " +
+          'ticked milestone stops its reminder and is skipped as the next milestone; unticking ' +
+          'it lets the reminder be planned again if it is still in the future. Setting what is ' +
+          "already set changes nothing. A milestone that is not the task's is a 404.",
+        params: z.object({ id: z.uuid(), milestoneId: z.uuid() }),
+        body: milestoneDoneBodySchema,
+        response: { 200: occurrenceResponseSchema, 400: errorResponseSchema, ...actionErrors },
+      },
+    },
+    async (request) => {
+      const me = authOf(request).member;
+      const { id, milestoneId } = request.params;
+      const { dto } = await actOnOccurrence(
+        me,
+        id,
+        { type: 'milestone', milestoneId, done: request.body.done },
+        ctx.config.clock(),
+      );
+      return { occurrence: dto };
+    },
+  );
+
   r.get(
     '/api/occurrences',
     {
@@ -212,7 +245,7 @@ export function registerOccurrenceRoutes(app: FastifyInstance, ctx: ApiContext):
         )
         .orderBy(...viewOrder(options))
         .limit(limit);
-      return { occurrences: rows.map((row) => toOccurrenceDto(row, options)) };
+      return { occurrences: await toOccurrenceDtos(ctx.db, rows, options) };
     },
   );
 

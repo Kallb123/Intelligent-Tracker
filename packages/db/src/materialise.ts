@@ -28,7 +28,8 @@ import {
 import type { DbOrTransaction } from './client.js';
 import { dueInstant, dueOf } from './due.js';
 import { assigneeIdsOf, replanRotation } from './rotation.js';
-import { bankHoliday, household, occurrence, task } from './schema/index.js';
+import { keepUpdatedAt } from './schema/columns.js';
+import { bankHoliday, household, occurrence, task, taskMilestone } from './schema/index.js';
 import type { NewOccurrence, Task } from './schema/index.js';
 
 /*
@@ -365,25 +366,35 @@ export async function activateDue(db: DbOrTransaction, options: { now: Date }): 
   return rows.length;
 }
 
+/** What `clearFutureOpenOccurrences` deleted. */
+export interface ClearedOccurrences {
+  deleted: number;
+  /** The recurrence dates (`dueKey`s) the deleted occurrences covered. */
+  sourceDueKeys: string[];
+  /** The deleted occurrences that had milestones ticked: their dates and `milestone_progress`. */
+  ticked: { sourceDueKeys: string[]; milestoneProgress: Record<string, unknown> }[];
+}
+
 /**
  * Deletes the task's `upcoming` and `active` occurrences that are due today (household-local) or
  * later, or undated, so a changed schedule can be materialised afresh. Occurrences already
  * started, done or skipped, and overdue ones from before today, are kept. With `touchingDates`,
  * only occurrences whose span from earliest source date to due includes one of those local
  * dates are deleted (the ones a bank-holiday change can move). Returns the number deleted and
- * the recurrence dates they covered.
+ * the recurrence dates they covered, and those of them that had milestones ticked, with their
+ * `milestone_progress` (see `rematerialiseTask`, which carries it over).
  */
 export async function clearFutureOpenOccurrences(
   db: DbOrTransaction,
   taskId: string,
   options: { now: Date; touchingDates?: ReadonlySet<string> },
-): Promise<{ deleted: number; sourceDueKeys: string[] }> {
+): Promise<ClearedOccurrences> {
   const [row] = await db
     .select({ timezone: household.timezone })
     .from(task)
     .innerJoin(household, eq(household.id, task.householdId))
     .where(eq(task.id, taskId));
-  if (!row) return { deleted: 0, sourceDueKeys: [] };
+  if (!row) return { deleted: 0, sourceDueKeys: [], ticked: [] };
   const { timezone } = row;
   const today = localToday(options.now, timezone);
   const candidates = await db
@@ -392,6 +403,7 @@ export async function clearFutureOpenOccurrences(
       sourceDueKeys: occurrence.sourceDueKeys,
       dueDate: occurrence.dueDate,
       dueAt: occurrence.dueAt,
+      milestoneProgress: occurrence.milestoneProgress,
     })
     .from(occurrence)
     .where(
@@ -415,7 +427,7 @@ export async function clearFutureOpenOccurrences(
         sourceDueKeys.map((key) => dueLocalDate(dueFromKey(key), timezone)).sort()[0] ?? end;
       if (![...options.touchingDates].some((date) => date >= start && date <= end)) return [];
     }
-    return [{ id: o.id, sourceDueKeys }];
+    return [{ id: o.id, sourceDueKeys, milestoneProgress: o.milestoneProgress }];
   });
   if (cleared.length) {
     // Re-check the status, in case a caller did not lock the task before clearing.
@@ -429,7 +441,13 @@ export async function clearFutureOpenOccurrences(
       ),
     );
   }
-  return { deleted: cleared.length, sourceDueKeys: cleared.flatMap((o) => o.sourceDueKeys) };
+  return {
+    deleted: cleared.length,
+    sourceDueKeys: cleared.flatMap((o) => o.sourceDueKeys),
+    ticked: cleared
+      .filter((o) => Object.keys(o.milestoneProgress).length > 0)
+      .map(({ sourceDueKeys, milestoneProgress }) => ({ sourceDueKeys, milestoneProgress })),
+  };
 }
 
 /**
@@ -437,6 +455,14 @@ export async function clearFutureOpenOccurrences(
  * it again. `keepDues` plans the cleared recurrence dates again, for changes that move dues
  * without changing the recurrence (lead time, working days, bank holidays); without it only the
  * task's current schedule decides.
+ *
+ * Milestones ticked on a cleared occurrence stay ticked on the occurrence that takes its place.
+ * That is the new occurrence covering any of the same recurrence dates (`sourceDueKeys`), each
+ * cleared one handing its ticks to at most one new one; ids of milestones the task no longer has
+ * are dropped. Deliberately conservative: an occurrence whose dates nothing in the new schedule
+ * covers (a recurrence changed to other days, a dropped date) starts unticked, except that a
+ * one-off task, which is one job wherever it falls, keeps its ticks when its single occurrence
+ * is replaced by a single new one.
  */
 export async function rematerialiseTask(
   db: DbOrTransaction,
@@ -444,10 +470,54 @@ export async function rematerialiseTask(
   options: { now: Date; keepDues: boolean; touchingDates?: ReadonlySet<string> },
 ): Promise<MaterialiseTaskResult> {
   const cleared = await clearFutureOpenOccurrences(db, taskId, options);
-  return materialiseTask(db, taskId, {
+  const result = await materialiseTask(db, taskId, {
     now: options.now,
     additionalDues: options.keepDues ? cleared.sourceDueKeys.map(dueFromKey) : [],
   });
+  if (cleared.ticked.length > 0 && result.occurrenceIds.length > 0) {
+    await carryOverTicks(db, taskId, cleared, result.occurrenceIds);
+  }
+  return result;
+}
+
+/** Hands the cleared occurrences' ticks to the new occurrences that replace them. */
+async function carryOverTicks(
+  db: DbOrTransaction,
+  taskId: string,
+  { deleted, ticked }: ClearedOccurrences,
+  newIds: string[],
+): Promise<void> {
+  const [created, milestones, [t]] = await Promise.all([
+    db
+      .select({ id: occurrence.id, sourceDueKeys: occurrence.sourceDueKeys })
+      .from(occurrence)
+      .where(inArray(occurrence.id, newIds)),
+    db.select({ id: taskMilestone.id }).from(taskMilestone).where(eq(taskMilestone.taskId, taskId)),
+    db.select({ scheduleKind: task.scheduleKind }).from(task).where(eq(task.id, taskId)),
+  ]);
+  const alive = new Set(milestones.map((m) => m.id));
+  const free = [...created];
+  const handOver = async (id: string, progress: Record<string, unknown>) => {
+    const kept = Object.fromEntries(Object.entries(progress).filter(([key]) => alive.has(key)));
+    if (Object.keys(kept).length === 0) return;
+    await db
+      .update(occurrence)
+      .set({ milestoneProgress: kept, updatedAt: keepUpdatedAt(occurrence) })
+      .where(eq(occurrence.id, id));
+  };
+  for (const old of ticked) {
+    const at = free.findIndex((o) =>
+      o.sourceDueKeys.some((key) => old.sourceDueKeys.includes(key)),
+    );
+    if (at < 0) continue;
+    const [match] = free.splice(at, 1);
+    await handOver(match!.id, old.milestoneProgress);
+  }
+  // A one-off task is one job wherever it falls: its only occurrence is replaced by its only one.
+  const [only] = deleted === 1 && ticked.length === 1 && created.length === 1 ? created : [];
+  if (t?.scheduleKind === 'once' && only && free.includes(only)) {
+    await handOver(only.id, ticked[0]!.milestoneProgress);
+  }
 }
 
 /**

@@ -45,6 +45,7 @@ function occurrence(title: string, overrides: Partial<OccurrenceDto> = {}): Occu
     completedAt: null,
     completedBy: null,
     snoozedUntil: null,
+    milestones: [],
     overdue: false,
     ...overrides,
   };
@@ -76,6 +77,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     nextAssigneeId: ME,
     nextDue: null,
     milestones: [],
+    nextCompletedMilestoneIds: [],
     archived: false,
     archivedAt: null,
     createdBy: ME,
@@ -261,6 +263,51 @@ describe('Today', () => {
     );
   });
 
+  it('shows milestones as a checklist and ticks and unticks them', async () => {
+    const quotes = '66666666-6666-4666-8666-666666666666';
+    const decide = '77777777-7777-4777-8777-777777777777';
+    const milestones = (quotesDone: boolean) => [
+      { id: quotes, title: 'Get quotes', offsetDaysBeforeDue: 14, done: quotesDone },
+      { id: decide, title: 'Decide', offsetDaysBeforeDue: 7, done: false },
+    ];
+    let state = { ...mine, milestones: milestones(false) };
+    const key = `PUT /api/occurrences/${mine.id}/milestones/${quotes}`;
+    const { wrapper, server } = await open(
+      {
+        'GET /api/occurrences': () => json({ occurrences: [state] }),
+        [key]: (call) => {
+          state = { ...mine, milestones: milestones((call.body as { done: boolean }).done) };
+          return json({ occurrence: state });
+        },
+      },
+      '/',
+    );
+
+    const boxes = () => wrapper.findAll<HTMLInputElement>('.milestone-checklist input');
+    expect(texts(wrapper, '.milestone-checklist label')).toEqual(['Get quotes', 'Decide']);
+    expect(boxes().map((b) => b.element.checked)).toEqual([false, false]);
+    expect(wrapper.findAll('.milestone-done')).toHaveLength(0);
+
+    await boxes()[0]!.setValue(true);
+    await flushPromises();
+
+    expect(lastBody(server, key)).toEqual({ done: true });
+    expect(server.callsTo('GET /api/occurrences')).toHaveLength(2);
+    expect(boxes().map((b) => b.element.checked)).toEqual([true, false]);
+    expect(texts(wrapper, '.milestone-done')).toEqual(['Get quotes']);
+
+    await boxes()[0]!.setValue(false);
+    await flushPromises();
+
+    expect(lastBody(server, key)).toEqual({ done: false });
+    expect(boxes().map((b) => b.element.checked)).toEqual([false, false]);
+  });
+
+  it('has no checklist for an occurrence without milestones', async () => {
+    const { wrapper } = await open({ 'GET /api/occurrences': json({ occurrences: [mine] }) }, '/');
+    expect(wrapper.find('.milestone-checklist').exists()).toBe(false);
+  });
+
   it('starts an item', async () => {
     let state = mine;
     const { wrapper, server } = await open(
@@ -388,6 +435,36 @@ describe('Coming up', () => {
     expect(rows[0]?.text()).toContain('Prep started Fri 9 Oct');
     expect(rows[2]?.text()).toContain('Due at 14:30');
     expect(rows[2]?.text()).toContain('Health');
+  });
+
+  it('ticks a milestone from the list and refreshes it', async () => {
+    const quotes = '66666666-6666-4666-8666-666666666666';
+    const withMilestones = (done: boolean) => ({
+      ...tomorrow,
+      milestones: [{ id: quotes, title: 'Get quotes', offsetDaysBeforeDue: 14, done }],
+    });
+    let state = withMilestones(false);
+    const key = `PUT /api/occurrences/${tomorrow.id}/milestones/${quotes}`;
+    const { wrapper, server } = await open(
+      {
+        'GET /api/occurrences': () => json({ occurrences: [state] }),
+        [key]: (call: Call) => {
+          state = withMilestones((call.body as { done: boolean }).done);
+          return json({ occurrence: state });
+        },
+      },
+      '/upcoming',
+    );
+    const box = () => wrapper.get<HTMLInputElement>('.milestone-checklist input');
+    expect(box().element.checked).toBe(false);
+
+    await box().setValue(true);
+    await flushPromises();
+
+    expect(lastBody(server, key)).toEqual({ done: true });
+    expect(server.callsTo('GET /api/occurrences')).toHaveLength(2);
+    expect(box().element.checked).toBe(true);
+    expect(texts(wrapper, '.milestone-done')).toEqual(['Get quotes']);
   });
 
   it('switches between 30 and 90 days', async () => {

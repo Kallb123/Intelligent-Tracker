@@ -891,6 +891,7 @@ export interface paths {
                                     title: string;
                                     offsetDaysBeforeDue: number;
                                 }[];
+                                nextCompletedMilestoneIds: string[];
                                 archived: boolean;
                                 /** Format: date-time */
                                 archivedAt: string | null;
@@ -1026,6 +1027,7 @@ export interface paths {
                                     title: string;
                                     offsetDaysBeforeDue: number;
                                 }[];
+                                nextCompletedMilestoneIds: string[];
                                 archived: boolean;
                                 /** Format: date-time */
                                 archivedAt: string | null;
@@ -1147,6 +1149,7 @@ export interface paths {
                                     title: string;
                                     offsetDaysBeforeDue: number;
                                 }[];
+                                nextCompletedMilestoneIds: string[];
                                 archived: boolean;
                                 /** Format: date-time */
                                 archivedAt: string | null;
@@ -1348,6 +1351,7 @@ export interface paths {
                                     title: string;
                                     offsetDaysBeforeDue: number;
                                 }[];
+                                nextCompletedMilestoneIds: string[];
                                 archived: boolean;
                                 /** Format: date-time */
                                 archivedAt: string | null;
@@ -2068,6 +2072,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             };
                             next: {
@@ -2098,6 +2109,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             } | null;
                         };
@@ -2218,6 +2236,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             };
                             next: {
@@ -2248,6 +2273,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             } | null;
                         };
@@ -2377,6 +2409,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             };
                         };
@@ -2509,6 +2548,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             };
                         };
@@ -2564,6 +2610,152 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/occurrences/{id}/milestones/{milestoneId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Tick or untick a milestone
+         * @description Marks one of the task's milestones as done (or not done) on an open occurrence. A ticked milestone stops its reminder and is skipped as the next milestone; unticking it lets the reminder be planned again if it is still in the future. Setting what is already set changes nothing. A milestone that is not the task's is a 404.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    milestoneId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        done: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            occurrence: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                taskId: string;
+                                task: {
+                                    title: string;
+                                    category: string | null;
+                                    priority: number;
+                                    allDay: boolean;
+                                    /** @enum {string} */
+                                    scheduleKind: "once" | "fixed" | "after_completion";
+                                };
+                                dueDate: string | null;
+                                /** Format: date-time */
+                                dueAt: string | null;
+                                /** Format: date-time */
+                                startAt: string | null;
+                                /** Format: uuid */
+                                assigneeId: string | null;
+                                /** @enum {string} */
+                                status: "upcoming" | "active" | "started" | "done" | "skipped";
+                                /** Format: date-time */
+                                completedAt: string | null;
+                                /** Format: uuid */
+                                completedBy: string | null;
+                                /** Format: date-time */
+                                snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
+                                overdue: boolean;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2631,6 +2823,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             }[];
                         };
@@ -2712,6 +2911,13 @@ export interface paths {
                                 completedBy: string | null;
                                 /** Format: date-time */
                                 snoozedUntil: string | null;
+                                milestones: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    offsetDaysBeforeDue: number;
+                                    done: boolean;
+                                }[];
                                 overdue: boolean;
                             };
                         };

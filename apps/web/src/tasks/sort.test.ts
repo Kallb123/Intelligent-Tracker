@@ -22,6 +22,7 @@ const task = (overrides: Partial<TaskDto>): TaskDto => {
     priority: 0,
     nextDue: null,
     milestones: [],
+    nextCompletedMilestoneIds: [],
     createdAt: '2026-10-01T10:00:00.000Z',
     ...overrides,
   } as TaskDto;
@@ -105,6 +106,27 @@ describe('sortTasks by next milestone or due', () => {
       task({ title: 'Due sooner', nextDue: day14 }),
     ];
     expect(titles(order(tasks, 'milestone'))).toEqual(['Due sooner', 'Passed']);
+  });
+
+  it('sorts by the next unticked milestone, not a ticked one', () => {
+    const tasks = [
+      task({ title: 'Due sooner', nextDue: day14 }),
+      task({
+        title: 'Ticked',
+        nextDue: day20,
+        milestones: [milestone(7)],
+        nextCompletedMilestoneIds: ['m-7'],
+      }),
+      task({
+        title: 'Second milestone',
+        nextDue: day20,
+        milestones: [milestone(7), milestone(8)],
+        nextCompletedMilestoneIds: ['m-7'],
+      }),
+    ];
+    // 'Second milestone' falls back to its 12 Oct milestone; 'Ticked' has none left and sorts by
+    // its due date.
+    expect(titles(order(tasks, 'milestone'))).toEqual(['Second milestone', 'Due sooner', 'Ticked']);
   });
 
   it('counts a milestone dated today', () => {

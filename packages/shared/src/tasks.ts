@@ -216,6 +216,9 @@ export const milestoneSchema = z.object({
   offsetDaysBeforeDue: z.number().int(),
 });
 
+/** A task's milestone as it stands on one occurrence: `done` once it has been ticked off. */
+export const occurrenceMilestoneSchema = milestoneSchema.extend({ done: z.boolean() });
+
 export const taskSchema = z.object({
   id: z.uuid(),
   title: z.string(),
@@ -252,6 +255,11 @@ export const taskSchema = z.object({
   nextDue: z.iso.datetime().nullable(),
   /** Ordered by position. */
   milestones: z.array(milestoneSchema),
+  /**
+   * The ids of `milestones` ticked off on the task's earliest open occurrence (the one `nextDue`
+   * is read from); empty when it has none.
+   */
+  nextCompletedMilestoneIds: z.array(z.uuid()),
   archived: z.boolean(),
   archivedAt: z.iso.datetime().nullable(),
   createdBy: z.uuid().nullable(),
@@ -280,6 +288,8 @@ export const occurrenceSchema = z.object({
   completedAt: z.iso.datetime().nullable(),
   completedBy: z.uuid().nullable(),
   snoozedUntil: z.iso.datetime().nullable(),
+  /** The task's milestones in position order, each with whether it is ticked on this occurrence. */
+  milestones: z.array(occurrenceMilestoneSchema),
   /** Computed when the response is built: past its due and still open. */
   overdue: z.boolean(),
 });
@@ -312,11 +322,16 @@ export const snoozeBodySchema = z.union([
   z.strictObject({ days: z.number().int().min(1).max(365) }),
 ]);
 
+/** Body of `PUT /api/occurrences/:id/milestones/:milestoneId`: tick (`true`) or untick. */
+export const milestoneDoneBodySchema = z.strictObject({ done: z.boolean() });
+
 export type MilestoneInput = z.infer<typeof milestoneInputSchema>;
 export type TaskBody = z.infer<typeof taskBodySchema>;
 export type TaskPatch = z.infer<typeof taskPatchSchema>;
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
 export type MilestoneDto = z.infer<typeof milestoneSchema>;
+export type OccurrenceMilestoneDto = z.infer<typeof occurrenceMilestoneSchema>;
+export type MilestoneDoneBody = z.infer<typeof milestoneDoneBodySchema>;
 export type TaskDto = z.infer<typeof taskSchema>;
 export type OccurrenceDto = z.infer<typeof occurrenceSchema>;
 export type OccurrenceView = (typeof OCCURRENCE_VIEWS)[number];

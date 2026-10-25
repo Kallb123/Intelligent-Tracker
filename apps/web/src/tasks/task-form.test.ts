@@ -208,6 +208,7 @@ describe('formFromTask', () => {
     milestones: [
       { id: '66666666-6666-4666-8666-666666666666', title: 'Put out', offsetDaysBeforeDue: 0 },
     ],
+    nextCompletedMilestoneIds: [],
     archived: false,
     archivedAt: null,
     createdBy: ME,

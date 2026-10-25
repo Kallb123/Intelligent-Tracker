@@ -1,5 +1,5 @@
 import type { MemberDto, OccurrenceDto } from '@tracker/shared';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   describeDue,
   describeNextDue,
@@ -30,6 +30,7 @@ function occ(overrides: Partial<OccurrenceDto> = {}): OccurrenceDto {
     completedAt: null,
     completedBy: null,
     snoozedUntil: null,
+    milestones: [],
     overdue: false,
     ...overrides,
   };
@@ -125,9 +126,13 @@ describe('nextMilestone and describeNextMilestone', () => {
     offsetDaysBeforeDue,
   });
   const next = (milestones: ReturnType<typeof ms>[], due: string | null = nextDue) =>
-    nextMilestone({ nextDue: due, milestones }, now, TZ);
+    nextMilestone({ nextDue: due, milestones, nextCompletedMilestoneIds: ticked }, now, TZ);
   const describeMilestone = (milestones: ReturnType<typeof ms>[], due: string | null = nextDue) =>
-    describeNextMilestone({ nextDue: due, milestones }, now, TZ);
+    describeNextMilestone({ nextDue: due, milestones, nextCompletedMilestoneIds: ticked }, now, TZ);
+  let ticked: string[] = [];
+  beforeEach(() => {
+    ticked = [];
+  });
 
   it('dates each milestone before the due date in the household zone', () => {
     expect(next([ms('Book venue', 7)])).toEqual({ title: 'Book venue', date: '2026-10-23' });
@@ -138,7 +143,11 @@ describe('nextMilestone and describeNextMilestone', () => {
     // 00:30 BST on 21 Oct in London, still 20 Oct in UTC.
     const lateDue = '2026-10-20T23:30:00.000Z';
     const early = new Date('2026-10-11T10:00:00.000Z');
-    const onTheDay = { nextDue: lateDue, milestones: [ms('On the day', 0)] };
+    const onTheDay = {
+      nextDue: lateDue,
+      milestones: [ms('On the day', 0)],
+      nextCompletedMilestoneIds: [],
+    };
     expect(nextMilestone(onTheDay, early, 'Europe/London')).toEqual({
       title: 'On the day',
       date: '2026-10-21',
@@ -156,6 +165,18 @@ describe('nextMilestone and describeNextMilestone', () => {
       title: 'Today',
       date: '2026-10-11',
     });
+  });
+
+  it('skips ticked milestones, falling back to the next unticked one', () => {
+    const milestones = [ms('Quotes', 20), ms('Decide', 10), ms('Renew', 3)];
+    ticked = ['id-Quotes'];
+    expect(next(milestones)).toEqual({ title: 'Decide', date: '2026-10-20' });
+    expect(describeMilestone(milestones)).toBe('Next milestone: Decide, Tue 20 Oct');
+    ticked = ['id-Quotes', 'id-Decide'];
+    expect(next(milestones)).toEqual({ title: 'Renew', date: '2026-10-27' });
+    ticked = ['id-Quotes', 'id-Decide', 'id-Renew'];
+    expect(next(milestones)).toBeNull();
+    expect(describeMilestone(milestones)).toBe('');
   });
 
   it('is null without a due date, milestones, or any milestone still to come', () => {

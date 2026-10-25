@@ -34,6 +34,7 @@ import {
   task,
   taskMilestone,
 } from './schema/index.js';
+import { keepUpdatedAt } from './schema/columns.js';
 import type { NewNotification, NewReminder, Reminder, ReminderData } from './schema/index.js';
 
 /*
@@ -531,8 +532,10 @@ function planFailure(context: PlanContext, error: RecurrenceError): ReminderPlan
 /**
  * The ids of the milestones ticked off in an occurrence's `milestone_progress`. The column is a
  * JSON object keyed by milestone id; a milestone counts as completed when its value is truthy
- * (for example `true` or the completion timestamp). Nothing writes it yet, so this is the
- * convention the api should follow when it adds ticking milestones.
+ * (for example `true` or the completion timestamp). `applyOccurrenceAction` (the `milestone`
+ * action) writes it: ticking stores the ISO time it was ticked, unticking removes the key, so
+ * the column only holds ticked milestones. Deleting a milestone from a task (`replaceTaskLists`)
+ * removes its key from the task's open occurrences.
  */
 export function completedMilestoneIds(progress: Record<string, unknown>): string[] {
   return Object.entries(progress)
@@ -657,7 +660,7 @@ export async function replanReminders(
     .set({
       reminderPlanHash: null,
       // Bookkeeping, not an edit: leave `updated_at` as it is.
-      updatedAt: sql`${occurrence.updatedAt}`,
+      updatedAt: keepUpdatedAt(occurrence),
     })
     .from(task)
     .where(and(eq(task.id, occurrence.taskId), isNotNull(occurrence.reminderPlanHash), isClosed));
@@ -821,7 +824,7 @@ export async function replanReminders(
       .set({
         reminderPlanHash: sql`case ${occurrence.id} ${hashOf} end`,
         // Bookkeeping, not an edit: leave `updated_at` as it is.
-        updatedAt: sql`${occurrence.updatedAt}`,
+        updatedAt: keepUpdatedAt(occurrence),
       })
       .where(
         inArray(

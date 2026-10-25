@@ -3,11 +3,12 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { Database, DbOrTransaction } from './client.js';
 import { materialiseTask } from './materialise.js';
 import { consumeRotationTurn } from './rotation.js';
-import { activity, occurrence, task, type NewOccurrence } from './schema/index.js';
+import { activity, occurrence, task, taskMilestone, type NewOccurrence } from './schema/index.js';
 
 /*
- * What members do with an occurrence: complete, skip, snooze or start it. Shared by the api and
- * the Telegram bot, which both act on behalf of a member of a household.
+ * What members do with an occurrence: complete, skip, snooze or start it, or tick one of its
+ * milestones. Shared by the api and the Telegram bot, which both act on behalf of a member of a
+ * household.
  */
 
 /** An action on one occurrence, by a member of its household. */
@@ -19,7 +20,13 @@ export type OccurrenceAction =
   /** Hides an open occurrence from the today and overdue views until `until`. */
   | { type: 'snooze'; until: Date }
   /** Marks an upcoming or active occurrence as started; already started is a no-op. */
-  | { type: 'start' };
+  | { type: 'start' }
+  /**
+   * Ticks (`done`) or unticks one of the task's milestones on this occurrence. A ticked
+   * milestone stops its reminder (see `planReminders`). Only open occurrences can be changed;
+   * ticking what is already ticked, or unticking what is not, changes nothing.
+   */
+  | { type: 'milestone'; milestoneId: string; done: boolean };
 
 export interface OccurrenceActionInput {
   /** Occurrences of any other household do not exist as far as the action is concerned. */
@@ -35,34 +42,58 @@ export interface OccurrenceActionResult {
   taskId: string;
   /** The occurrence's status after the action. */
   status: OccurrenceStatus;
-  /** False when nothing was done because the occurrence was already started (`start` only). */
+  /**
+   * False when nothing was done because the occurrence was already started (`start`) or the
+   * milestone was already as asked (`milestone`).
+   */
   changed: boolean;
   /** Ids of occurrences the action created (the next one of an `after_completion` task). */
   createdIds: string[];
 }
 
 /**
- * Why an action was refused: `not_found` (no such occurrence in the household) or
- * `occurrence_closed` (it is done or skipped, or for `start` also not open any more), with its
- * current `status`.
+ * Why an action was refused: `not_found` (no such occurrence in the household),
+ * `milestone_not_found` (the task has no such milestone) or `occurrence_closed` (it is done or
+ * skipped, or for `start` also not open any more), with its current `status`.
  */
 export class OccurrenceActionError extends Error {
   constructor(
-    readonly code: 'not_found' | 'occurrence_closed',
+    readonly code: 'not_found' | 'milestone_not_found' | 'occurrence_closed',
     readonly status?: OccurrenceStatus,
   ) {
-    super(code === 'not_found' ? 'No such occurrence' : `That occurrence is already ${status}`);
+    super(
+      code === 'not_found'
+        ? 'No such occurrence'
+        : code === 'milestone_not_found'
+          ? 'No such milestone'
+          : `That occurrence is already ${status}`,
+    );
     this.name = 'OccurrenceActionError';
   }
 }
 
 const NOT_STARTED = ['upcoming', 'active'] as const satisfies OccurrenceStatus[];
 
+/** The occurrence as read under its lock, before a change. */
+interface Before {
+  status: OccurrenceStatus;
+  milestoneProgress: Record<string, unknown>;
+}
+
 /** What a status change does to an occurrence and how it is logged. */
 interface Transition {
   /** Statuses the occurrence may currently have; any other is `occurrence_closed`. */
   from: readonly OccurrenceStatus[];
-  changes: Partial<Pick<NewOccurrence, 'status' | 'snoozedUntil' | 'completedAt' | 'completedBy'>>;
+  changes: Partial<
+    Pick<
+      NewOccurrence,
+      'status' | 'snoozedUntil' | 'completedAt' | 'completedBy' | 'milestoneProgress'
+    >
+  >;
+  /** Throws `OccurrenceActionError` if the action does not make sense for this task. */
+  validate?: (tx: DbOrTransaction, taskId: string) => Promise<void>;
+  /** True when the occurrence is already as the action wants it: success, nothing logged. */
+  unchanged?: (before: Before) => boolean;
   activityKind: string;
   activityData?: Record<string, unknown>;
   /** Treated as success without doing anything when the occurrence is already in this status. */
@@ -75,7 +106,10 @@ interface Transition {
   ) => Promise<string[]>;
 }
 
-function transitionFor({ memberId, occurrenceId, now, action }: OccurrenceActionInput): Transition {
+function transitionFor(
+  { memberId, occurrenceId, now, action }: OccurrenceActionInput,
+  before: Before,
+): Transition {
   switch (action.type) {
     case 'complete':
     case 'skip': {
@@ -110,6 +144,27 @@ function transitionFor({ memberId, occurrenceId, now, action }: OccurrenceAction
           return [];
         },
       };
+    case 'milestone': {
+      const { milestoneId, done } = action;
+      // The key is removed on untick, so the column only holds what is ticked: the completion
+      // time (see `completedMilestoneIds`).
+      const rest = { ...before.milestoneProgress };
+      delete rest[milestoneId];
+      return {
+        from: OPEN_OCCURRENCE_STATUSES,
+        changes: { milestoneProgress: done ? { ...rest, [milestoneId]: now.toISOString() } : rest },
+        validate: async (tx, taskId) => {
+          const [row] = await tx
+            .select({ id: taskMilestone.id })
+            .from(taskMilestone)
+            .where(and(eq(taskMilestone.id, milestoneId), eq(taskMilestone.taskId, taskId)));
+          if (!row) throw new OccurrenceActionError('milestone_not_found');
+        },
+        unchanged: (b) => Boolean(b.milestoneProgress[milestoneId]) === done,
+        activityKind: done ? 'occurrence.milestone_done' : 'occurrence.milestone_undone',
+        activityData: { milestoneId },
+      };
+    }
   }
 }
 
@@ -128,7 +183,6 @@ export async function applyOccurrenceAction(
   input: OccurrenceActionInput,
 ): Promise<OccurrenceActionResult> {
   const { householdId, memberId, occurrenceId } = input;
-  const transition = transitionFor(input);
 
   return db.transaction(async (tx) => {
     const owned = tx.select({ id: task.id }).from(task).where(eq(task.householdId, householdId));
@@ -143,12 +197,19 @@ export async function applyOccurrenceAction(
     if (!ref) throw new OccurrenceActionError('not_found');
     await tx.select({ id: task.id }).from(task).where(eq(task.id, ref.taskId)).for('no key update');
     const [before] = await tx
-      .select({ status: occurrence.status })
+      .select({ status: occurrence.status, milestoneProgress: occurrence.milestoneProgress })
       .from(occurrence)
       .where(eq(occurrence.id, occurrenceId))
       .for('no key update');
     // Gone while waiting for the lock (the task was deleted or rescheduled).
     if (!before) throw new OccurrenceActionError('not_found');
+    const transition = transitionFor(input, before);
+    if (transition.from.includes(before.status)) {
+      await transition.validate?.(tx, ref.taskId);
+      if (transition.unchanged?.(before)) {
+        return { taskId: ref.taskId, status: before.status, changed: false, createdIds: [] };
+      }
+    }
     const changed = await tx
       .update(occurrence)
       .set(transition.changes)

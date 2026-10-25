@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { OccurrenceDto } from '@tracker/shared';
 import Button from 'primevue/button';
+import Checkbox from 'primevue/checkbox';
 import Menu from 'primevue/menu';
 import type { MenuItem } from 'primevue/menuitem';
 import Tag from 'primevue/tag';
@@ -8,8 +9,8 @@ import { computed, ref, useId } from 'vue';
 
 /**
  * One occurrence in the Today and Coming up lists: title (linking to the task), when it is due,
- * and the one-click actions. The buttons are named after the task ("Complete Bins") so a screen
- * reader, or a test, can tell the rows apart.
+ * its milestones as a checklist, and the one-click actions. The buttons are named after the task
+ * ("Complete Bins") so a screen reader, or a test, can tell the rows apart.
  */
 const props = defineProps<{
   occurrence: OccurrenceDto;
@@ -26,12 +27,15 @@ const emit = defineEmits<{
   complete: [];
   start: [];
   snooze: [days: number];
+  /** A milestone was ticked (`done`) or unticked. */
+  milestone: [milestoneId: string, done: boolean];
 }>();
 
 const title = computed(() => props.occurrence.task.title);
 const started = computed(() => props.occurrence.status === 'started');
 const important = computed(() => props.occurrence.task.priority >= 2);
 
+const checklistId = useId();
 const menuId = useId();
 const menu = ref<InstanceType<typeof Menu> | null>(null);
 const snoozeOptions: MenuItem[] = [
@@ -66,6 +70,24 @@ const snoozeOptions: MenuItem[] = [
         />
         <Tag v-if="started" value="Started" severity="success" />
       </span>
+      <ul
+        v-if="occurrence.milestones.length > 0"
+        class="milestone-checklist"
+        :aria-label="`Milestones of ${title}`"
+      >
+        <li v-for="m in occurrence.milestones" :key="m.id" class="checkbox-row">
+          <Checkbox
+            :model-value="m.done"
+            :input-id="`${checklistId}-${m.id}`"
+            binary
+            :disabled="busy"
+            @update:model-value="emit('milestone', m.id, $event === true)"
+          />
+          <label :for="`${checklistId}-${m.id}`" :class="{ 'milestone-done': m.done }">{{
+            m.title
+          }}</label>
+        </li>
+      </ul>
     </div>
     <div class="occurrence-actions">
       <Button
