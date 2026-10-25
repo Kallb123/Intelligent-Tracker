@@ -16,13 +16,13 @@ import { usePersonFilter } from '../composables/usePersonFilter.js';
 import { useTaskSort } from '../composables/useTaskSort.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
-import { describeNextDue } from '../tasks/occurrences.js';
+import { describeNextDue, describeNextMilestone } from '../tasks/occurrences.js';
 import { describeAssignees, nextUpName } from '../tasks/rotation.js';
 import { sortTasks, TASK_SORT_OPTIONS } from '../tasks/sort.js';
 
 /**
  * All tasks: every task definition, with search, person / category / tag filters, a sort order
- * (next due by default, remembered per browser) and quick-add.
+ * (next due by default, or next milestone; remembered per browser) and quick-add.
  */
 const session = useSessionStore();
 const membersStore = useMembersStore();
@@ -86,7 +86,7 @@ const visible = computed(() => {
       text.toLowerCase().includes(needle),
     );
   });
-  return sortTasks(matching, sort.value);
+  return sortTasks(matching, sort.value, new Date(), session.timeZone);
 });
 
 const filtering = computed(
@@ -96,6 +96,7 @@ const filtering = computed(
 const assignees = (t: TaskDto) => describeAssignees(t, membersStore.nameOf);
 const nextUp = (t: TaskDto) => nextUpName(t, membersStore.nameOf);
 const nextDue = (t: TaskDto) => describeNextDue(t, new Date(), session.timeZone);
+const nextMilestone = (t: TaskDto) => describeNextMilestone(t, new Date(), session.timeZone);
 </script>
 
 <template>
@@ -163,6 +164,7 @@ const nextDue = (t: TaskDto) => describeNextDue(t, new Date(), session.timeZone)
             }}</router-link>
             <span class="muted">{{ describeSchedule(t, session.timeZone) }}</span>
             <span v-if="nextDue(t)" class="muted">{{ nextDue(t) }}</span>
+            <span v-if="nextMilestone(t)" class="muted">{{ nextMilestone(t) }}</span>
             <span class="muted">For {{ assignees(t) }}</span>
             <span v-if="nextUp(t)" class="muted">Next: {{ nextUp(t) }}</span>
           </div>

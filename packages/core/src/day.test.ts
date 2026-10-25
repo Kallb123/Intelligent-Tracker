@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addLocalDays, localToday, startOfLocalDay } from './day.js';
+import { addLocalDays, localToday, milestoneDay, startOfLocalDay } from './day.js';
 import { RecurrenceError } from './recurrence/errors.js';
 
 describe('localToday', () => {
@@ -67,5 +67,18 @@ describe('addLocalDays', () => {
 
   it('rejects impossible dates', () => {
     expect(() => addLocalDays('2026-13-01', 1)).toThrow(RecurrenceError);
+  });
+});
+
+describe('milestoneDay', () => {
+  it('is the offset in calendar days before the due day', () => {
+    expect(milestoneDay('2026-10-30', 0)).toBe('2026-10-30');
+    expect(milestoneDay('2026-10-30', 7)).toBe('2026-10-23');
+    expect(milestoneDay('2026-03-02', 3)).toBe('2026-02-27');
+    expect(milestoneDay('2027-01-02', 5)).toBe('2026-12-28');
+  });
+
+  it('rejects impossible dates', () => {
+    expect(() => milestoneDay('2026-13-01', 1)).toThrow(RecurrenceError);
   });
 });

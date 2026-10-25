@@ -42,3 +42,12 @@ export function startOfLocalDay(date: LocalDate, timezone?: string): Date {
 export function addLocalDays(date: LocalDate, days: number): LocalDate {
   return addDays(date, days);
 }
+
+/**
+ * The day a milestone falls on: `offsetDaysBeforeDue` calendar days before the due day. The one
+ * rule behind milestone reminders and the milestone dates shown to people. Throws
+ * `RecurrenceError` for an impossible date.
+ */
+export function milestoneDay(dueDay: LocalDate, offsetDaysBeforeDue: number): LocalDate {
+  return addDays(dueDay, -offsetDaysBeforeDue);
+}

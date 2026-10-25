@@ -18,6 +18,7 @@ import {
   parseLocalDate,
   resolveZone,
 } from '../recurrence/calendar.js';
+import { milestoneDay } from '../day.js';
 import { assertInteger, RecurrenceError } from '../recurrence/errors.js';
 import type { Due, LocalDate } from '../recurrence/types.js';
 import { isAwayOn } from '../rotation/index.js';
@@ -316,7 +317,7 @@ function prepWindowReminders(
   const completed = new Set(occurrence.completedMilestoneIds);
   for (const milestone of task.milestones) {
     if (completed.has(milestone.id)) continue;
-    const day = addDays(dueDay, -milestone.offsetDaysBeforeDue);
+    const day = milestoneDay(dueDay, milestone.offsetDaysBeforeDue);
     reminders.push(
       draft('milestone', slotOn(clock, day), `milestone:${milestone.id}`, {
         milestoneId: milestone.id,

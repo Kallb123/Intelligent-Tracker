@@ -1,4 +1,4 @@
-import { addLocalDays, localToday } from '@tracker/core';
+import { addLocalDays, localToday, milestoneDay } from '@tracker/core';
 import {
   formatDayHeading,
   type MemberDto,
@@ -55,6 +55,54 @@ export function describeNextDue(
   const at = task.allDay ? '' : ` at ${formatTime(due, timeZone)}`;
   const overdue = task.allDay ? date < today : due < now;
   return `Next due ${relativeDay(date, today)}${at}${overdue ? ', overdue' : ''}`;
+}
+
+/** The household-local `YYYY-MM-DD` a task's next occurrence is due, or null when it has none. */
+export function nextDueDate(task: Pick<TaskDto, 'nextDue'>, timeZone: string): string | null {
+  return task.nextDue === null ? null : localToday(new Date(task.nextDue), timeZone);
+}
+
+export interface NextMilestone {
+  title: string;
+  /** Household-local `YYYY-MM-DD`. */
+  date: string;
+}
+
+/**
+ * The next milestone of a task's next open occurrence: the earliest one dated today or later,
+ * the first listed on a tie. Each date is its offset before the due date. Null when the task has
+ * no next occurrence, no milestones, or every milestone has passed.
+ */
+export function nextMilestone(
+  task: Pick<TaskDto, 'nextDue' | 'milestones'>,
+  now: Date,
+  timeZone: string,
+): NextMilestone | null {
+  const dueDate = nextDueDate(task, timeZone);
+  if (dueDate === null) return null;
+  const today = localToday(now, timeZone);
+  let next: NextMilestone | null = null;
+  for (const milestone of task.milestones) {
+    const date = milestoneDay(dueDate, milestone.offsetDaysBeforeDue);
+    if (date >= today && (next === null || date < next.date)) {
+      next = { title: milestone.title, date };
+    }
+  }
+  return next;
+}
+
+/**
+ * The next milestone in words relative to `now` in the household's zone ("Next milestone: Book
+ * venue, tomorrow"), or an empty string when there is none.
+ */
+export function describeNextMilestone(
+  task: Pick<TaskDto, 'nextDue' | 'milestones'>,
+  now: Date,
+  timeZone: string,
+): string {
+  const milestone = nextMilestone(task, now, timeZone);
+  if (milestone === null) return '';
+  return `Next milestone: ${milestone.title}, ${relativeDay(milestone.date, localToday(now, timeZone))}`;
 }
 
 /**

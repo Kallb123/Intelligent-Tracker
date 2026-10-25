@@ -1,6 +1,17 @@
 import type { TaskDto } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TASK_SORT, isTaskSort, sortTasks, TASK_SORT_OPTIONS, TASK_SORTS } from './sort.js';
+import {
+  DEFAULT_TASK_SORT,
+  isTaskSort,
+  sortTasks,
+  TASK_SORT_OPTIONS,
+  TASK_SORTS,
+  type TaskSort,
+} from './sort.js';
+
+const NOW = new Date('2026-10-11T10:00:00.000Z'); // 11:00 on 2026-10-11 in London (BST)
+const TZ = 'Europe/London';
+const order = (tasks: TaskDto[], sort: TaskSort) => sortTasks(tasks, sort, NOW, TZ);
 
 let counter = 0;
 const task = (overrides: Partial<TaskDto>): TaskDto => {
@@ -10,6 +21,7 @@ const task = (overrides: Partial<TaskDto>): TaskDto => {
     title: 'Task',
     priority: 0,
     nextDue: null,
+    milestones: [],
     createdAt: '2026-10-01T10:00:00.000Z',
     ...overrides,
   } as TaskDto;
@@ -30,6 +42,7 @@ describe('isTaskSort', () => {
     expect(TASK_SORT_OPTIONS.map((o) => o.value)).toEqual([...TASK_SORTS]);
     expect(TASK_SORT_OPTIONS.map((o) => o.label)).toEqual([
       'Next due',
+      'Next milestone or due',
       'Title (A–Z)',
       'Priority',
       'Newest first',
@@ -45,7 +58,7 @@ describe('sortTasks by next due', () => {
       task({ title: 'Overdue', nextDue: '2026-10-01T00:00:00.000Z' }),
       task({ title: 'Soon', nextDue: '2026-10-12T08:00:00.000Z' }),
     ];
-    expect(titles(sortTasks(tasks, 'due'))).toEqual(['Overdue', 'Soon', 'Later', 'Undated']);
+    expect(titles(order(tasks, 'due'))).toEqual(['Overdue', 'Soon', 'Later', 'Undated']);
   });
 
   it('compares instants, not strings', () => {
@@ -53,7 +66,7 @@ describe('sortTasks by next due', () => {
       task({ title: 'B', nextDue: '2026-10-12T10:00:00.000Z' }),
       task({ title: 'A', nextDue: '2026-10-12T09:30:00.000Z' }),
     ];
-    expect(titles(sortTasks(tasks, 'due'))).toEqual(['A', 'B']);
+    expect(titles(order(tasks, 'due'))).toEqual(['A', 'B']);
   });
 
   it('breaks ties by title, including among undated tasks', () => {
@@ -63,7 +76,74 @@ describe('sortTasks by next due', () => {
       task({ title: 'Alpha', nextDue: '2026-10-12T00:00:00.000Z' }),
       task({ title: 'Beta' }),
     ];
-    expect(titles(sortTasks(tasks, 'due'))).toEqual(['Alpha', 'Zeta', 'Beta', 'Mu']);
+    expect(titles(order(tasks, 'due'))).toEqual(['Alpha', 'Zeta', 'Beta', 'Mu']);
+  });
+});
+
+describe('sortTasks by next milestone or due', () => {
+  // All-day dues are local midnight in London (BST), so 2026-10-14 is 2026-10-13T23:00Z.
+  const day14 = '2026-10-13T23:00:00.000Z';
+  const day20 = '2026-10-19T23:00:00.000Z';
+  const milestone = (offsetDaysBeforeDue: number) => ({
+    id: `m-${String(offsetDaysBeforeDue)}`,
+    title: 'Milestone',
+    offsetDaysBeforeDue,
+  });
+
+  it('puts a task due later but with an upcoming milestone ahead of one due sooner', () => {
+    const tasks = [
+      task({ title: 'Due sooner', nextDue: day14 }),
+      task({ title: 'Due later', nextDue: day20, milestones: [milestone(7)] }),
+    ];
+    expect(titles(order(tasks, 'milestone'))).toEqual(['Due later', 'Due sooner']);
+    expect(titles(order(tasks, 'due'))).toEqual(['Due sooner', 'Due later']);
+  });
+
+  it('ignores milestones that have passed', () => {
+    const tasks = [
+      task({ title: 'Passed', nextDue: day20, milestones: [milestone(15)] }),
+      task({ title: 'Due sooner', nextDue: day14 }),
+    ];
+    expect(titles(order(tasks, 'milestone'))).toEqual(['Due sooner', 'Passed']);
+  });
+
+  it('counts a milestone dated today', () => {
+    const tasks = [
+      task({ title: 'Due sooner', nextDue: day14 }),
+      task({ title: 'Today', nextDue: day20, milestones: [milestone(9)] }),
+    ];
+    expect(titles(order(tasks, 'milestone'))).toEqual(['Today', 'Due sooner']);
+  });
+
+  it('keeps overdue tasks first and undated tasks last', () => {
+    const tasks = [
+      task({ title: 'Undated', milestones: [milestone(1)] }),
+      task({ title: 'Milestone', nextDue: day20, milestones: [milestone(8)] }),
+      task({ title: 'Overdue', nextDue: '2026-10-01T00:00:00.000Z', milestones: [milestone(3)] }),
+    ];
+    expect(titles(order(tasks, 'milestone'))).toEqual(['Overdue', 'Milestone', 'Undated']);
+  });
+
+  it('breaks ties by next due, then title', () => {
+    const tasks = [
+      task({ title: 'Later due', nextDue: day20, milestones: [milestone(6)] }),
+      task({ title: 'Zeta', nextDue: day14 }),
+      task({ title: 'Alpha', nextDue: day14 }),
+    ];
+    expect(titles(order(tasks, 'milestone'))).toEqual(['Alpha', 'Zeta', 'Later due']);
+  });
+
+  it('judges milestone dates in the given time zone', () => {
+    // 00:30 on the 20th in London, but still the 19th in UTC.
+    const tasks = [
+      task({ title: 'Plain', nextDue: '2026-10-19T08:00:00.000Z' }),
+      task({ title: 'Milestone', nextDue: '2026-10-19T23:30:00.000Z', milestones: [milestone(1)] }),
+    ];
+    expect(titles(sortTasks(tasks, 'milestone', NOW, 'Europe/London'))).toEqual([
+      'Plain',
+      'Milestone',
+    ]);
+    expect(titles(sortTasks(tasks, 'milestone', NOW, 'UTC'))).toEqual(['Milestone', 'Plain']);
   });
 });
 
@@ -75,7 +155,7 @@ describe('sortTasks by title', () => {
       task({ id: 'a', title: 'Bins' }),
       task({ id: 'c', title: 'Boiler' }),
     ];
-    const sorted = sortTasks(tasks, 'title');
+    const sorted = order(tasks, 'title');
     expect(titles(sorted)).toEqual(['Bins', 'Bins', 'Boiler', 'water plants']);
     expect(sorted.map((t) => t.id).slice(0, 2)).toEqual(['a', 'z']);
   });
@@ -91,7 +171,7 @@ describe('sortTasks by priority', () => {
       task({ title: 'High B', priority: 2 }),
       task({ title: 'High A', priority: 2 }),
     ];
-    expect(titles(sortTasks(tasks, 'priority'))).toEqual([
+    expect(titles(order(tasks, 'priority'))).toEqual([
       'Urgent sooner',
       'Urgent later',
       'Urgent undated',
@@ -110,7 +190,7 @@ describe('sortTasks by newest', () => {
       task({ title: 'New', createdAt: '2026-10-11T00:00:00.000Z' }),
       task({ title: 'A same', createdAt: '2026-10-10T00:00:00.000Z' }),
     ];
-    expect(titles(sortTasks(tasks, 'newest'))).toEqual(['New', 'A same', 'B same', 'Old']);
+    expect(titles(order(tasks, 'newest'))).toEqual(['New', 'A same', 'B same', 'Old']);
   });
 });
 
@@ -119,15 +199,15 @@ describe('sortTasks', () => {
     const tasks = [task({ title: 'B' }), task({ title: 'A' })];
     const before = [...tasks];
     for (const sort of TASK_SORTS) {
-      const sorted = sortTasks(tasks, sort);
-      expect(sorted).not.toBe(tasks);
+      const result = order(tasks, sort);
+      expect(result).not.toBe(tasks);
     }
     expect(tasks).toEqual(before);
-    expect(titles(sortTasks(tasks, 'title'))).toEqual(['A', 'B']);
+    expect(titles(order(tasks, 'title'))).toEqual(['A', 'B']);
     expect(titles(tasks)).toEqual(['B', 'A']);
   });
 
   it('handles an empty list', () => {
-    expect(sortTasks([], 'due')).toEqual([]);
+    expect(order([], 'due')).toEqual([]);
   });
 });
