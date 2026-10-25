@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   describeDue,
   describeNextDue,
+  describeNextMilestone,
   describePrepStart,
   dueDateOf,
   groupByAssignee,
   groupByDate,
+  nextDueDate,
+  nextMilestone,
 } from './occurrences.js';
 
 const TZ = 'Europe/London';
@@ -97,6 +100,80 @@ describe('describeNextDue', () => {
     expect(timed('2026-10-11T08:30:00.000Z')).toBe('Next due today at 09:30, overdue');
     expect(timed('2026-10-11T14:00:00.000Z')).toBe('Next due today at 15:00');
     expect(timed('2026-10-12T08:30:00.000Z')).toBe('Next due tomorrow at 09:30');
+  });
+});
+
+describe('nextDueDate', () => {
+  it('is the due day in the household zone, which can differ from the UTC day', () => {
+    const nextDue = '2026-10-20T23:30:00.000Z'; // 00:30 BST on 21 Oct in London
+    expect(nextDueDate({ nextDue }, TZ)).toBe('2026-10-21');
+    expect(nextDueDate({ nextDue }, 'UTC')).toBe('2026-10-20');
+  });
+
+  it('is null without a next occurrence', () => {
+    expect(nextDueDate({ nextDue: null }, TZ)).toBeNull();
+  });
+});
+
+describe('nextMilestone and describeNextMilestone', () => {
+  // 11:00 on TODAY in London (BST); the due date is Fri 30 Oct, local midnight (GMT by then).
+  const now = new Date('2026-10-11T10:00:00.000Z');
+  const nextDue = '2026-10-30T00:00:00.000Z';
+  const ms = (title: string, offsetDaysBeforeDue: number) => ({
+    id: `id-${title}`,
+    title,
+    offsetDaysBeforeDue,
+  });
+  const next = (milestones: ReturnType<typeof ms>[], due: string | null = nextDue) =>
+    nextMilestone({ nextDue: due, milestones }, now, TZ);
+  const describeMilestone = (milestones: ReturnType<typeof ms>[], due: string | null = nextDue) =>
+    describeNextMilestone({ nextDue: due, milestones }, now, TZ);
+
+  it('dates each milestone before the due date in the household zone', () => {
+    expect(next([ms('Book venue', 7)])).toEqual({ title: 'Book venue', date: '2026-10-23' });
+    expect(next([ms('On the day', 0)])).toEqual({ title: 'On the day', date: '2026-10-30' });
+  });
+
+  it('dates a milestone from the due day in the given zone', () => {
+    // 00:30 BST on 21 Oct in London, still 20 Oct in UTC.
+    const lateDue = '2026-10-20T23:30:00.000Z';
+    const early = new Date('2026-10-11T10:00:00.000Z');
+    const onTheDay = { nextDue: lateDue, milestones: [ms('On the day', 0)] };
+    expect(nextMilestone(onTheDay, early, 'Europe/London')).toEqual({
+      title: 'On the day',
+      date: '2026-10-21',
+    });
+    expect(nextMilestone(onTheDay, early, 'UTC')).toEqual({
+      title: 'On the day',
+      date: '2026-10-20',
+    });
+  });
+
+  it('picks the earliest milestone that is today or later, the first listed on a tie', () => {
+    const milestones = [ms('Passed', 30), ms('Later', 3), ms('First', 10), ms('Same day', 10)];
+    expect(next(milestones)).toEqual({ title: 'First', date: '2026-10-20' });
+    expect(next([ms('Passed', 30), ms('Today', 19)])).toEqual({
+      title: 'Today',
+      date: '2026-10-11',
+    });
+  });
+
+  it('is null without a due date, milestones, or any milestone still to come', () => {
+    expect(next([ms('Book venue', 7)], null)).toBeNull();
+    expect(next([])).toBeNull();
+    expect(next([ms('Passed', 20)])).toBeNull();
+  });
+
+  it('describes the milestone relative to today', () => {
+    expect(describeMilestone([ms('Book venue', 19)])).toBe('Next milestone: Book venue, today');
+    expect(describeMilestone([ms('Book venue', 18)])).toBe('Next milestone: Book venue, tomorrow');
+    expect(describeMilestone([ms('Book venue', 0)])).toBe('Next milestone: Book venue, Fri 30 Oct');
+  });
+
+  it('says nothing when there is no next milestone', () => {
+    expect(describeMilestone([])).toBe('');
+    expect(describeMilestone([ms('Passed', 20)])).toBe('');
+    expect(describeMilestone([ms('Book venue', 7)], null)).toBe('');
   });
 });
 

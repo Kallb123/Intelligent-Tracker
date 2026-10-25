@@ -525,6 +525,7 @@ describe('All tasks', () => {
     expect(titles(wrapper)).toEqual(['Put the bins out', 'Descale kettle', 'Renew passport']);
     expect(texts(wrapper, '#task-sort option')).toEqual([
       'Next due',
+      'Next milestone or due',
       'Title (A–Z)',
       'Priority',
       'Newest first',
@@ -534,6 +535,58 @@ describe('All tasks', () => {
     expect(rows[0]).toContain('Next due tomorrow');
     expect(rows[1]).toContain('Next due Thu 15 Oct');
     expect(rows[2]).not.toContain('Next due');
+  });
+
+  it('shows the next milestone alongside the next due date', async () => {
+    const withMilestones = task({
+      ...tasks[1],
+      milestones: [
+        {
+          id: 'b0000000-0000-4000-8000-000000000001',
+          title: 'Buy descaler',
+          offsetDaysBeforeDue: 4,
+        },
+        {
+          id: 'b0000000-0000-4000-8000-000000000002',
+          title: 'Order filters',
+          offsetDaysBeforeDue: 2,
+        },
+        { id: 'b0000000-0000-4000-8000-000000000003', title: 'Too late', offsetDaysBeforeDue: 10 },
+      ],
+    });
+    const { wrapper } = await open(
+      { 'GET /api/tasks': json({ tasks: [tasks[0], withMilestones] }) },
+      '/tasks',
+    );
+
+    const rows = texts(wrapper, '.task-row');
+    expect(rows[0]).not.toContain('Next milestone');
+    expect(rows[1]).toContain('Next due Thu 15 Oct');
+    expect(rows[1]).toContain('Next milestone: Buy descaler, today');
+  });
+
+  it('sorts by the next milestone or due date', async () => {
+    const [bins, kettle, passport] = tasks;
+    const kettleWithMilestone = task({
+      ...kettle,
+      milestones: [
+        {
+          id: 'b0000000-0000-4000-8000-000000000001',
+          title: 'Buy descaler',
+          offsetDaysBeforeDue: 4,
+        },
+      ],
+    });
+    const { wrapper } = await open(
+      { 'GET /api/tasks': json({ tasks: [bins, kettleWithMilestone, passport] }) },
+      '/tasks',
+    );
+    expect(titles(wrapper)).toEqual(['Put the bins out', 'Descale kettle', 'Renew passport']);
+
+    await wrapper.get('#task-sort').setValue('milestone');
+
+    expect(titles(wrapper)).toEqual(['Descale kettle', 'Put the bins out', 'Renew passport']);
+    expect(localStorage.getItem('tracker.tasks.sort')).toBe('milestone');
   });
 
   it('reorders when the sort changes, and remembers the choice', async () => {
