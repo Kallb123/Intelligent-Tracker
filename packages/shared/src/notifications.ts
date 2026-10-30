@@ -48,6 +48,11 @@ export const reminderPayloadSchema = z.object({
   fireAt: z.iso.datetime({ offset: true }),
   /** The member the reminder is for; `null` when the occurrence has no assignee. */
   assigneeId: z.uuid().nullable(),
+  /**
+   * Kind `milestone` only. The id lets the Telegram message tick the milestone off; reminders
+   * queued by an older version lack it and get no such button.
+   */
+  milestoneId: z.uuid().optional(),
   /** Kind `milestone` only. */
   milestoneTitle: z.string().optional(),
   /** Kind `overdue` only: whole local days past the due date. */

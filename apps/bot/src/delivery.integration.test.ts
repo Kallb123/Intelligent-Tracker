@@ -3,10 +3,12 @@ import {
   MISSED_REMINDER_GRACE_MS,
   notification,
   OUTBOX_RETRY_BASE_MS,
+  taskMilestone,
 } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { botDeps } from './bot.js';
+import { decodeCallback } from './callback-data.js';
 import { deliverGroupMessages } from './delivery.js';
 import {
   adminUrl,
@@ -77,6 +79,40 @@ describe.skipIf(!adminUrl)('delivering reminders to the group (integration)', ()
     telegram.clear();
     await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
     expect(telegram.calls).toEqual([]);
+  });
+
+  it('sends a milestone reminder with a button that ticks the milestone off', async () => {
+    const h = await newHousehold(test.db);
+    const alex = await newMember(test.db, h.id, 'Alex', 1001);
+    const renewal = await newOccurrence(test.db, h.id, 'Car insurance', { assigneeId: alex.id });
+    const [milestone] = await test.db
+      .insert(taskMilestone)
+      .values({ taskId: renewal.task.id, title: 'Get quotes', offsetDaysBeforeDue: 7, position: 0 })
+      .returning();
+    if (!milestone) throw new Error('insert failed');
+    await queueGroupReminder(test.db, h.id, renewal, {
+      kind: 'milestone',
+      milestoneId: milestone.id,
+      milestoneTitle: milestone.title,
+    });
+    const { bot, telegram } = newTestBot(test.db);
+
+    await deliverGroupMessages(test.db, bot.api, botDeps(test.db, { now: () => NOW }));
+
+    const sent = telegram.to('sendMessage')[0];
+    expect(sent?.['text']).toBe('<a href="tg://user?id=1001">Alex</a>: Get quotes — Car insurance');
+    const keyboard = (
+      sent?.['reply_markup'] as { inline_keyboard: { text: string; callback_data: string }[][] }
+    ).inline_keyboard;
+    expect(keyboard.map((row) => row.map((b) => b.text))).toEqual([
+      ['☑️ Milestone done'],
+      ['✅ Done', '▶️ Started', '⏰ Snooze', '⏭ Skip'],
+    ]);
+    expect(decodeCallback(keyboard[0]?.[0]?.callback_data ?? '')).toEqual({
+      type: 'milestone',
+      occurrenceId: renewal.occurrence.id,
+      milestoneId: milestone.id,
+    });
   });
 
   it('mentions nobody for a member who has not linked Telegram', async () => {

@@ -3011,6 +3011,8 @@ export interface paths {
                                     fireAt: string;
                                     /** Format: uuid */
                                     assigneeId: string | null;
+                                    /** Format: uuid */
+                                    milestoneId?: string;
                                     milestoneTitle?: string;
                                     overdueDays?: number;
                                     effortMinutes?: number | null;

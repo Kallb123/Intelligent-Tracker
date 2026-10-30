@@ -83,14 +83,18 @@ export function registerActions(bot: Bot, deps: BotDeps): void {
       const at = now();
       const outcome = await resolveOutcome(
         action,
-        (change) =>
-          applyAs(db, {
-            householdId: household.id,
-            memberId: presser.id,
-            occurrenceId: action.occurrenceId,
-            now: at,
-            action: change,
-          }),
+        (change, unchangedToast) =>
+          applyAs(
+            db,
+            {
+              householdId: household.id,
+              memberId: presser.id,
+              occurrenceId: action.occurrenceId,
+              now: at,
+              action: change,
+            },
+            unchangedToast,
+          ),
         { now: at, timezone: household.timezone, eveningSlot: household.eveningSlot },
       );
 
@@ -123,25 +127,35 @@ export function registerActions(bot: Bot, deps: BotDeps): void {
 }
 
 /**
- * Applies the change as the member. Returns why nothing was done (the toast to show), or
- * undefined when it was done.
+ * Applies the change as the member. Returns why nothing was done (the toast to show:
+ * `unchangedToast` when the occurrence was already as the change wants it), or undefined when it
+ * was done.
  */
-async function applyAs(db: Database, input: OccurrenceActionInput): Promise<string | undefined> {
+async function applyAs(
+  db: Database,
+  input: OccurrenceActionInput,
+  unchangedToast: string,
+): Promise<string | undefined> {
   try {
     const result = await applyOccurrenceAction(db, input);
-    return result.changed ? undefined : 'Already started';
+    return result.changed ? undefined : unchangedToast;
   } catch (error) {
     if (!(error instanceof OccurrenceActionError)) throw error;
-    return error.code === 'not_found'
-      ? 'That job no longer exists.'
-      : `That job is already ${error.status ?? 'closed'}.`;
+    switch (error.code) {
+      case 'not_found':
+        return 'That job no longer exists.';
+      case 'milestone_not_found':
+        return 'That milestone no longer exists.';
+      case 'occurrence_closed':
+        return `That job is already ${error.status ?? 'closed'}.`;
+    }
   }
 }
 
 /** Carries out a press with `apply` and words the toast: the refusal, or else what was done. */
 async function resolveOutcome(
   action: CallbackAction,
-  apply: (change: OccurrenceAction) => Promise<string | undefined>,
+  apply: (change: OccurrenceAction, unchangedToast: string) => Promise<string | undefined>,
   snooze: { now: Date; timezone: string; eveningSlot: string },
 ): Promise<Outcome> {
   switch (action.type) {
@@ -150,17 +164,25 @@ async function resolveOutcome(
     case 'back':
       return {};
     case 'complete':
-      return { toast: (await apply({ type: 'complete' })) ?? '✅ Done' };
+      return { toast: (await apply({ type: 'complete' }, 'Already done')) ?? '✅ Done' };
     case 'skip':
-      return { toast: (await apply({ type: 'skip' })) ?? '⏭ Skipped' };
+      return { toast: (await apply({ type: 'skip' }, 'Already skipped')) ?? '⏭ Skipped' };
     case 'start':
-      return { toast: (await apply({ type: 'start' })) ?? '▶️ Started' };
+      return { toast: (await apply({ type: 'start' }, 'Already started')) ?? '▶️ Started' };
+    case 'milestone':
+      return {
+        toast:
+          (await apply(
+            { type: 'milestone', milestoneId: action.milestoneId, done: true },
+            'Already ticked off',
+          )) ?? '☑️ Milestone done',
+      };
     case 'snooze': {
       const until = snoozeUntil(action.key, snooze);
       if (!until) return { toast: 'That time has already passed.' };
       return {
         toast:
-          (await apply({ type: 'snooze', until })) ??
+          (await apply({ type: 'snooze', until }, 'Already snoozed')) ??
           `⏰ Snoozed until ${formatSnoozeUntil(until, snooze.timezone)}`,
       };
     }

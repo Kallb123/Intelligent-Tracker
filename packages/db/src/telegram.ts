@@ -2,7 +2,17 @@ import type { OccurrenceStatus } from '@tracker/shared';
 import { and, asc, desc, eq, gt, inArray, ne, sql } from 'drizzle-orm';
 import type { Database, DbOrTransaction } from './client.js';
 import { uniqueViolation } from './errors.js';
-import { activity, household, member, notification, occurrence, task } from './schema/index.js';
+import { MILESTONE_DONE_ACTIVITY } from './occurrence-actions.js';
+import { completedMilestoneIds } from './reminders.js';
+import {
+  activity,
+  household,
+  member,
+  notification,
+  occurrence,
+  task,
+  taskMilestone,
+} from './schema/index.js';
 import type { Household, Member, Notification } from './schema/index.js';
 import { generateToken, hashToken } from './tokens.js';
 
@@ -318,6 +328,16 @@ export const OCCURRENCE_ACTOR_KINDS = ['completed', 'skipped', 'started', 'snooz
 
 export type OccurrenceActorKind = (typeof OCCURRENCE_ACTOR_KINDS)[number];
 
+/** One of a task's milestones as an occurrence stands: ticked off or not, and by whom. */
+export interface MilestoneState {
+  done: boolean;
+  /**
+   * The name of the member who last ticked it off; null when that member has since been
+   * deleted. Absent while it is not ticked.
+   */
+  doneBy?: string | null;
+}
+
 /** An occurrence as a Telegram group message shows it: where it stands and who got it there. */
 export interface OccurrenceState {
   occurrenceId: string;
@@ -328,6 +348,11 @@ export interface OccurrenceState {
    * since been deleted. A kind that was never done is absent.
    */
   actors: Partial<Record<OccurrenceActorKind, string | null>>;
+  /**
+   * The task's milestones by id. A milestone that is not here has been deleted from the task
+   * since a reminder for it was queued.
+   */
+  milestones: Record<string, MilestoneState>;
 }
 
 /**
@@ -350,10 +375,50 @@ export async function occurrenceStates(
       occurrenceId: occurrence.id,
       status: occurrence.status,
       snoozedUntil: occurrence.snoozedUntil,
+      taskId: occurrence.taskId,
+      milestoneProgress: occurrence.milestoneProgress,
     })
     .from(occurrence)
     .innerJoin(task, eq(task.id, occurrence.taskId))
     .where(and(eq(task.householdId, householdId), inArray(occurrence.id, occurrenceIds)));
+  if (rows.length === 0) return [];
+
+  const milestoneRows = await db
+    .select({ taskId: taskMilestone.taskId, id: taskMilestone.id })
+    .from(taskMilestone)
+    .where(
+      inArray(
+        taskMilestone.taskId,
+        rows.map((row) => row.taskId),
+      ),
+    );
+  const milestoneIdsByTask = new Map<string, string[]>();
+  for (const { taskId, id } of milestoneRows) {
+    const ids = milestoneIdsByTask.get(taskId);
+    if (ids) ids.push(id);
+    else milestoneIdsByTask.set(taskId, [id]);
+  }
+  // Whoever ticked each milestone off last, one row per occurrence and milestone.
+  const tickMilestoneId = sql<string | null>`${activity.data}->>'milestoneId'`;
+  const ticks = await db
+    .selectDistinctOn([activity.occurrenceId, tickMilestoneId], {
+      occurrenceId: activity.occurrenceId,
+      milestoneId: tickMilestoneId,
+      name: member.name,
+    })
+    .from(activity)
+    .leftJoin(member, eq(member.id, activity.memberId))
+    .where(
+      and(
+        eq(activity.householdId, householdId),
+        inArray(activity.occurrenceId, occurrenceIds),
+        eq(activity.kind, MILESTONE_DONE_ACTIVITY),
+      ),
+    )
+    .orderBy(activity.occurrenceId, tickMilestoneId, desc(activity.createdAt), desc(activity.id));
+  const tickedBy = new Map(
+    ticks.map((tick) => [`${tick.occurrenceId}:${tick.milestoneId}`, tick.name]),
+  );
 
   const latest = await db
     .selectDistinctOn([activity.occurrenceId, activity.kind], {
@@ -375,12 +440,19 @@ export async function occurrenceStates(
     )
     .orderBy(activity.occurrenceId, activity.kind, desc(activity.createdAt), desc(activity.id));
 
-  return rows.map((row) => {
+  return rows.map(({ taskId, milestoneProgress, ...row }) => {
     const actors: OccurrenceState['actors'] = {};
     for (const entry of latest) {
       if (entry.occurrenceId !== row.occurrenceId) continue;
       actors[entry.kind.slice('occurrence.'.length) as OccurrenceActorKind] = entry.name;
     }
-    return { ...row, actors };
+    const ticked = new Set(completedMilestoneIds(milestoneProgress));
+    const milestones: OccurrenceState['milestones'] = {};
+    for (const id of milestoneIdsByTask.get(taskId) ?? []) {
+      milestones[id] = ticked.has(id)
+        ? { done: true, doneBy: tickedBy.get(`${row.occurrenceId}:${id}`) ?? null }
+        : { done: false };
+    }
+    return { ...row, actors, milestones };
   });
 }

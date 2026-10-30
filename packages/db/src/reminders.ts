@@ -293,6 +293,7 @@ export async function queueDueReminders(
       dueAt: occ.dueAt?.toISOString() ?? null,
       fireAt: rem.fireAt.toISOString(),
       assigneeId: occ.assigneeId,
+      ...(rem.data.milestoneId !== undefined ? { milestoneId: rem.data.milestoneId } : {}),
       ...(rem.data.milestoneTitle !== undefined ? { milestoneTitle: rem.data.milestoneTitle } : {}),
       ...(rem.data.overdueDays !== undefined ? { overdueDays: rem.data.overdueDays } : {}),
       ...(t.effortMinutes !== null ? { effortMinutes: t.effortMinutes } : {}),

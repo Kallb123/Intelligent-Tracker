@@ -45,7 +45,14 @@ function line(
 }
 
 function open(occurrenceId: string, overrides: Partial<OccurrenceState> = {}): OccurrenceState {
-  return { occurrenceId, status: 'active', snoozedUntil: null, actors: {}, ...overrides };
+  return {
+    occurrenceId,
+    status: 'active',
+    snoozedUntil: null,
+    actors: {},
+    milestones: {},
+    ...overrides,
+  };
 }
 
 function render(lines: RenderLine[], states: OccurrenceState[], extra: Partial<RenderInput> = {}) {
@@ -261,7 +268,15 @@ describe('renderMessage', () => {
     const menu = render([line(OCC_A)], [open(OCC_A)], {
       snoozeMenu: { occurrenceId: OCC_A, choices },
     });
-    for (const button of [...plain.keyboard.flat(), ...menu.keyboard.flat()]) {
+    const milestone = render(
+      [line(OCC_A, { kind: 'milestone', milestoneId: '55555555-5555-4555-8555-555555555555' })],
+      [open(OCC_A, { milestones: { '55555555-5555-4555-8555-555555555555': { done: false } } })],
+    );
+    for (const button of [
+      ...plain.keyboard.flat(),
+      ...menu.keyboard.flat(),
+      ...milestone.keyboard.flat(),
+    ]) {
       expect(Buffer.byteLength(button.callback_data)).toBeLessThanOrEqual(64);
     }
   });
@@ -355,6 +370,124 @@ describe('escalated overdue lines', () => {
   it('are an ordinary line when not escalated', () => {
     const plain = line(OCC_A, { kind: 'overdue', overdueDays: 4 });
     expect(render([plain], [open(OCC_A)]).text).not.toMatch(/🚨|<b>/);
+  });
+});
+
+describe('milestone reminders', () => {
+  const MILESTONE = '55555555-5555-4555-8555-555555555555';
+  const OTHER_MILESTONE = '66666666-6666-4666-8666-666666666666';
+  const milestoneLine = (occurrenceId = OCC_A, milestoneId = MILESTONE) =>
+    line(occurrenceId, { kind: 'milestone', milestoneId, milestoneTitle: 'Get quotes' });
+  const texts = (keyboard: { text: string }[][]) => keyboard.map((row) => row.map((b) => b.text));
+
+  it('offers a milestone button above the occurrence buttons', () => {
+    const { text, keyboard } = render(
+      [milestoneLine()],
+      [open(OCC_A, { milestones: { [MILESTONE]: { done: false } } })],
+    );
+
+    expect(text).toContain('Get quotes — Put the bins out');
+    expect(texts(keyboard)).toEqual([
+      ['☑️ Milestone done'],
+      ['✅ Done', '▶️ Started', '⏰ Snooze', '⏭ Skip'],
+    ]);
+    expect(decodeCallback(keyboard[0]?.[0]?.callback_data ?? '')).toEqual({
+      type: 'milestone',
+      occurrenceId: OCC_A,
+      milestoneId: MILESTONE,
+    });
+  });
+
+  it('numbers the milestone button by its line when there are several lines', () => {
+    const { keyboard } = render(
+      [line(OCC_B), milestoneLine(OCC_A)],
+      [open(OCC_A, { milestones: { [MILESTONE]: { done: false } } }), open(OCC_B)],
+    );
+    expect(texts(keyboard)).toEqual([
+      ['✅ 1', '▶️ 1', '⏰ 1', '⏭ 1'],
+      ['☑️ 2'],
+      ['✅ 2', '▶️ 2', '⏰ 2', '⏭ 2'],
+    ]);
+  });
+
+  it('gives each milestone of one occurrence its own button, once however many reminders', () => {
+    const { keyboard } = render(
+      [milestoneLine(OCC_A, MILESTONE), milestoneLine(OCC_A, OTHER_MILESTONE), milestoneLine()],
+      [
+        open(OCC_A, {
+          milestones: { [MILESTONE]: { done: false }, [OTHER_MILESTONE]: { done: false } },
+        }),
+      ],
+    );
+    expect(keyboard[0]?.map((b) => b.text)).toEqual(['☑️ 1', '☑️ 2']);
+    expect(keyboard).toHaveLength(2);
+  });
+
+  it('strikes a ticked milestone through with who ticked it, and drops the buttons', () => {
+    const { text, keyboard } = render(
+      [milestoneLine()],
+      [open(OCC_A, { milestones: { [MILESTONE]: { done: true, doneBy: 'Sam' } } })],
+    );
+    expect(text).toBe('<s>Alex: Get quotes — Put the bins out</s>\n✅ Milestone done by Sam');
+    expect(keyboard).toEqual([]);
+  });
+
+  it('leaves out who ticked it when that is not known', () => {
+    const { text } = render(
+      [milestoneLine()],
+      [open(OCC_A, { milestones: { [MILESTONE]: { done: true, doneBy: null } } })],
+    );
+    expect(text).toContain('\n✅ Milestone done');
+    expect(text).not.toContain(' by ');
+  });
+
+  it('keeps the occurrence buttons while another line of it is still open', () => {
+    const { text, keyboard } = render(
+      [milestoneLine(), line(OCC_A)],
+      [open(OCC_A, { milestones: { [MILESTONE]: { done: true, doneBy: 'Sam' } } })],
+    );
+    expect(text).toContain('1. <s>Alex: Get quotes');
+    expect(text).toContain('2. <a href="tg://user?id=1001">Alex</a>: Put the bins out');
+    expect(texts(keyboard)).toEqual([['✅ Done', '▶️ Started', '⏰ Snooze', '⏭ Skip']]);
+  });
+
+  it('marks a milestone deleted from the task as removed, without buttons', () => {
+    const { text, keyboard } = render([milestoneLine()], [open(OCC_A)]);
+    expect(text).toContain('\n🗑 Removed');
+    expect(text.startsWith('<s>')).toBe(true);
+    expect(keyboard).toEqual([]);
+  });
+
+  it('says the occurrence is done when the whole job was completed', () => {
+    const { text, keyboard } = render(
+      [milestoneLine()],
+      [
+        open(OCC_A, {
+          status: 'done',
+          actors: { completed: 'Sam' },
+          milestones: { [MILESTONE]: { done: false } },
+        }),
+      ],
+    );
+    expect(text).toContain('\n✅ Done by Sam');
+    expect(keyboard).toEqual([]);
+  });
+
+  it('has no milestone button for a reminder queued before it carried the milestone id', () => {
+    const { keyboard } = render(
+      [line(OCC_A, { kind: 'milestone', milestoneTitle: 'Get quotes' })],
+      [open(OCC_A)],
+    );
+    expect(texts(keyboard)).toEqual([['✅ Done', '▶️ Started', '⏰ Snooze', '⏭ Skip']]);
+  });
+
+  it('shows the snooze choices alone while they are open', () => {
+    const { keyboard } = render(
+      [milestoneLine()],
+      [open(OCC_A, { milestones: { [MILESTONE]: { done: false } } })],
+      { snoozeMenu: { occurrenceId: OCC_A, choices: [{ key: 'tomorrow', label: 'Tomorrow' }] } },
+    );
+    expect(texts(keyboard)).toEqual([['Tomorrow'], ['↩ Back']]);
   });
 });
 

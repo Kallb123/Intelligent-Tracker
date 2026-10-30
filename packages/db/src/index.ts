@@ -92,6 +92,7 @@ export {
   unlinkMember,
   type LinkedMember,
   type MemberLinkResult,
+  type MilestoneState,
   type OccurrenceActorKind,
   type OccurrenceState,
   type TelegramLinkCode,

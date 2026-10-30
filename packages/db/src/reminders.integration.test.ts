@@ -699,14 +699,15 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
 
     it('carries milestone and overdue details in the payload', async () => {
       const { t } = await setup({ reminderProfile: 'persistent' });
-      await db
+      const [m] = await db
         .insert(taskMilestone)
-        .values({ taskId: t.id, title: 'Get quotes', offsetDaysBeforeDue: 3, position: 0 });
+        .values({ taskId: t.id, title: 'Get quotes', offsetDaysBeforeDue: 3, position: 0 })
+        .returning();
       await replanReminders(db, { now: NOW });
       await queueDueReminders(db, { now: at('2026-07-17T18:30:00Z') });
       expect(
         (await notifications()).map((n) => n.payload).find((p) => p.kind === 'milestone'),
-      ).toMatchObject({ milestoneTitle: 'Get quotes' });
+      ).toMatchObject({ milestoneId: m?.id, milestoneTitle: 'Get quotes' });
 
       await replanReminders(db, { now: at('2026-07-21T09:00:00Z') });
       await queueDueReminders(db, { now: at('2026-07-22T18:30:00Z') });
