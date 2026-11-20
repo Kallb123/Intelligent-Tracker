@@ -1194,6 +1194,51 @@ describe('Task editor', () => {
     expect(wrapper.find('button[aria-label="Move Sam up"]').exists()).toBe(true);
   });
 
+  it('clears the due date of a one-off, all-day or timed, and saves it undated', async () => {
+    const { wrapper, server } = await open(
+      { 'POST /api/tasks': () => json({ task: task() }, 201) },
+      '/tasks/new',
+    );
+    const clear = () => wrapper.get('button[aria-label="Clear due date"]');
+    const dateInput = () => wrapper.get('#task-due-date').element as HTMLInputElement;
+
+    await fillTitle(wrapper, 'Someday');
+    await clear().trigger('click');
+    expect(dateInput().value).toBe('');
+    expect(wrapper.find('button[aria-label="Clear due date"]').exists()).toBe(false);
+    await save(wrapper);
+    expect(lastBody(server, 'POST /api/tasks')).toMatchObject({
+      allDay: true,
+      dueDate: null,
+      dueAt: null,
+    });
+  });
+
+  it('does not save a timed task without a due date', async () => {
+    const { wrapper, server } = await open({}, '/tasks/new');
+
+    await fillTitle(wrapper, 'Call at some point');
+    await wrapper.get('#task-all-day').setValue(false);
+    await wrapper.get('button[aria-label="Clear due date"]').trigger('click');
+    await save(wrapper);
+
+    expect(wrapper.get('#task-due-date-error').text()).toContain('dueAt is required');
+    expect(server.callsTo('POST /api/tasks')).toHaveLength(0);
+  });
+
+  it('says a repeating task needs a due date after it is cleared', async () => {
+    const { wrapper, server } = await open({}, '/tasks/new');
+
+    await fillTitle(wrapper, 'Bins');
+    await wrapper.get('#repeat-kind').setValue('daily');
+    await wrapper.get('button[aria-label="Clear due date"]').trigger('click');
+    expect(wrapper.get('.preview').text()).toContain('Choose a due date');
+    await save(wrapper);
+
+    expect(wrapper.get('#task-due-date-error').text()).toContain('dueDate is required');
+    expect(server.callsTo('POST /api/tasks')).toHaveLength(0);
+  });
+
   it('checks the form before calling the api', async () => {
     const { wrapper, server } = await open({}, '/tasks/new');
 

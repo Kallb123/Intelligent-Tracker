@@ -9,6 +9,7 @@ import Textarea from 'primevue/textarea';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError, getApi } from '../api/index.js';
+import DateInput from '../components/DateInput.vue';
 import FormField from '../components/FormField.vue';
 import NumberInput from '../components/NumberInput.vue';
 import RecurrenceBuilder from '../components/RecurrenceBuilder.vue';
@@ -187,6 +188,15 @@ function removeMilestone(index: number): void {
   form.value?.milestones.splice(index, 1);
 }
 
+/** An undated task is only possible for an all-day one-off, so only that case says so. */
+const dueDateHint = computed(() =>
+  form.value?.recurrence.kind !== 'once'
+    ? 'Where the series starts. Later dates follow the repeat below.'
+    : form.value.allDay
+      ? 'Leave empty for a task with no date.'
+      : undefined,
+);
+
 /**
  * Checks the form with the same rules the api applies. Returns the body to send, or undefined
  * with the field messages in `errors`. An unfinished repeat (no weekday ticked) is reported
@@ -328,19 +338,14 @@ async function remove(): Promise<void> {
         <FormField
           id="task-due-date"
           label="Due date"
-          :hint="
-            form.recurrence.kind === 'once'
-              ? undefined
-              : 'Where the series starts. Later dates follow the repeat below.'
-          "
+          :hint="dueDateHint"
           :error="errors['dueDate'] ?? errors['dueAt']"
         >
-          <InputText
+          <DateInput
             id="task-due-date"
             v-model="form.dueDate"
-            type="date"
+            clear-label="Clear due date"
             :invalid="!!(errors['dueDate'] ?? errors['dueAt'])"
-            fluid
           />
         </FormField>
         <FormField v-if="!form.allDay" id="task-due-time" label="Due time">
