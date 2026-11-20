@@ -95,9 +95,7 @@ jobs:
   # then runs the end-to-end tests against it.
   docker:
     name: docker + e2e
-    # Pinned: ubuntu-latest is now 26.04, which Playwright 1.56 cannot install Chromium on.
-    # Move back to ubuntu-latest when @playwright/test is upgraded to a version that supports it.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       # The worker ticks every 2s instead of every minute (deploy/docker-compose.e2e.yml).
