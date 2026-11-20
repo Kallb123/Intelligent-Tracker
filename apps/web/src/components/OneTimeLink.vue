@@ -2,6 +2,7 @@
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import { ref } from 'vue';
+import { useClipboard } from '../composables/useClipboard.js';
 import { formatDateTime } from '../format.js';
 import { useSessionStore } from '../stores/session.js';
 
@@ -22,19 +23,16 @@ const props = withDefaults(
 const emit = defineEmits<{ dismiss: [] }>();
 
 const session = useSessionStore();
+const clipboard = useClipboard();
 const copied = ref(false);
 const copyFailed = ref(false);
 
 async function copy(): Promise<void> {
   copied.value = false;
   copyFailed.value = false;
-  try {
-    await navigator.clipboard.writeText(props.link.url);
-    copied.value = true;
-  } catch {
-    // No clipboard access (insecure origin, denied): the field is selectable instead.
-    copyFailed.value = true;
-  }
+  // Without clipboard access the field is selectable instead.
+  if (await clipboard.copy(props.link.url)) copied.value = true;
+  else copyFailed.value = true;
 }
 </script>
 
