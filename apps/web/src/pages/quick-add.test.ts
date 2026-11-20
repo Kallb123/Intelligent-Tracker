@@ -37,6 +37,7 @@ const base: Record<string, Handler> = {
 
 let mounted: VueWrapper | undefined;
 beforeEach(() => {
+  sessionStorage.clear();
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(NOW));
 });
@@ -277,6 +278,30 @@ describe('Quick-add bar', () => {
     await vi.waitFor(() => expect(wrapper.find('#task-title').exists()).toBe(true));
     expect(wrapper.get<HTMLInputElement>('#task-title').element.value).toBe('');
     expect(wrapper.get<HTMLInputElement>('#task-due-date').element.value).toBe('2026-10-11');
+  });
+
+  it('keeps the parsed task when the page is reloaded on the way to the editor', async () => {
+    const { wrapper, router } = await open('/');
+    await add(wrapper, EXAMPLE);
+    // The pending-update guard cancels the navigation and loads the page afresh instead.
+    router.beforeEach((to) => to.name !== 'task-new');
+    await button(wrapper, 'Edit details').trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe('home');
+    wrapper.unmount();
+    mounted = undefined;
+    document.body.innerHTML = '';
+
+    // A full page load of /tasks/new: new app and Pinia, the same tab's sessionStorage.
+    const reloaded = await open('/tasks/new');
+    await vi.waitFor(() => expect(reloaded.wrapper.find('#task-title').exists()).toBe(true));
+
+    expect(reloaded.wrapper.get<HTMLInputElement>('#task-title').element.value).toBe(
+      'Car insurance renews',
+    );
+    expect(reloaded.wrapper.get<HTMLInputElement>('#task-due-date').element.value).toBe(
+      '2026-11-01',
+    );
   });
 
   it('is on All tasks too, and refreshes that list after saving', async () => {

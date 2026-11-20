@@ -9,6 +9,7 @@ import Tag from 'primevue/tag';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError, getApi } from '../api/index.js';
+import CopyTasksPanel from '../components/CopyTasksPanel.vue';
 import PersonFilter from '../components/PersonFilter.vue';
 import QuickAddBar from '../components/QuickAddBar.vue';
 import SelectField from '../components/SelectField.vue';
@@ -108,6 +109,8 @@ const nextMilestone = (t: TaskDto) => describeNextMilestone(t, new Date(), sessi
     </header>
 
     <QuickAddBar @saved="load" />
+
+    <CopyTasksPanel />
 
     <form class="panel filters" role="search" aria-label="Filter tasks" @submit.prevent>
       <div class="field">

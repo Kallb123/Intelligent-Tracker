@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
-import InputText from 'primevue/inputtext';
 import { ref } from 'vue';
+import { useClipboard } from '../composables/useClipboard.js';
 import { formatDateTime } from '../format.js';
 import { useSessionStore } from '../stores/session.js';
+import SelectableText from './SelectableText.vue';
 
 /**
  * Shows a one-time link (or other one-time text to copy, such as a bot command) with a copy
@@ -22,19 +23,16 @@ const props = withDefaults(
 const emit = defineEmits<{ dismiss: [] }>();
 
 const session = useSessionStore();
+const clipboard = useClipboard();
 const copied = ref(false);
 const copyFailed = ref(false);
 
 async function copy(): Promise<void> {
   copied.value = false;
   copyFailed.value = false;
-  try {
-    await navigator.clipboard.writeText(props.link.url);
-    copied.value = true;
-  } catch {
-    // No clipboard access (insecure origin, denied): the field is selectable instead.
-    copyFailed.value = true;
-  }
+  // Without clipboard access the field is selectable instead.
+  if (await clipboard.copy(props.link.url)) copied.value = true;
+  else copyFailed.value = true;
 }
 </script>
 
@@ -43,13 +41,7 @@ async function copy(): Promise<void> {
     <h2>{{ title }}</h2>
     <p>{{ description }}</p>
     <div class="link-row">
-      <InputText
-        :model-value="link.url"
-        readonly
-        fluid
-        :aria-label="label"
-        @focus="($event.target as HTMLInputElement).select()"
-      />
+      <SelectableText :text="link.url" :label="label" />
       <Button
         type="button"
         :label="copied ? 'Copied' : 'Copy'"
