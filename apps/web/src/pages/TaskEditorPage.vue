@@ -74,7 +74,10 @@ onMounted(async () => {
 function startNew(): void {
   const today = localToday(new Date(), timeZone.value);
   // A draft is waiting when the quick-add sent us here with "Edit details".
-  form.value = drafts.take() ?? newTaskForm(today, session.member?.id ?? '');
+  const draft = drafts.take();
+  form.value = draft
+    ? formFromTask(draft, timeZone.value)
+    : newTaskForm(today, session.member?.id ?? '');
   archived.value = false;
   nextUpId.value = null;
 }

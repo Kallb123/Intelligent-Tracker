@@ -4,9 +4,8 @@ import {
   type QuickAddMatchKind,
   type QuickAddParse,
 } from '@tracker/core';
-import { taskBodySchema } from '@tracker/shared';
+import { taskBodySchema, type TaskBody } from '@tracker/shared';
 import type { TaskInput } from '../api/types.js';
-import { formFromTask, type TaskForm } from './task-form.js';
 
 /**
  * Turning a quick-add parse into what the web sends or edits. Kept apart from the component so it
@@ -21,13 +20,12 @@ export function quickAddBody(parse: QuickAddParse, memberId: string | undefined)
   return withDefaultAssignee(parse.task, memberId) as TaskInput;
 }
 
-/** The task editor's form for the parsed task, so "Edit details" starts from what was understood. */
-export function quickAddForm(
-  parse: QuickAddParse,
-  memberId: string | undefined,
-  timeZone: string,
-): TaskForm {
-  return formFromTask(taskBodySchema.parse(withDefaultAssignee(parse.task, memberId)), timeZone);
+/**
+ * The parsed task as a validated body, for the task editor, so "Edit details" starts from what was
+ * understood. Throws a `ZodError` when it is not a task the editor can show.
+ */
+export function quickAddTask(parse: QuickAddParse, memberId: string | undefined): TaskBody {
+  return taskBodySchema.parse(withDefaultAssignee(parse.task, memberId));
 }
 
 /** A stretch of the typed text; `kind` is set when the parser understood it. */

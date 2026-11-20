@@ -1,13 +1,24 @@
-import { defaultRecurrence } from '@tracker/core';
+import type { TaskBody } from '@tracker/shared';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { newTaskForm } from '../tasks/task-form.js';
 import { TASK_DRAFT_KEY, useTaskDraftStore } from './task-draft.js';
 
-const form = () => ({
-  ...newTaskForm('2026-11-01', 'm1'),
+const form = (): TaskBody => ({
   title: 'Car insurance renews',
-  recurrence: defaultRecurrence('yearly'),
+  notes: '',
+  tags: [],
+  priority: 1,
+  reminderSlot: 'morning',
+  scheduleKind: 'fixed',
+  allDay: true,
+  dueDate: '2026-11-01',
+  rrule: 'FREQ=YEARLY',
+  workingDaysOnly: false,
+  remindOffsetDays: 0,
+  reminderProfile: 'standard',
+  assignmentMode: 'fixed',
+  assigneeIds: [],
+  milestones: [],
 });
 
 /** A page load: a new Pinia, while sessionStorage stays. */
@@ -55,12 +66,29 @@ describe('task draft store', () => {
     expect(reload().take()).toBeNull();
   });
 
-  it.each(['not json{', 'null', '42', '{"title":1}', '{"title":"x"}'])(
-    'ignores stored garbage %s',
-    (raw) => {
-      sessionStorage.setItem(TASK_DRAFT_KEY, raw);
-      expect(useTaskDraftStore().take()).toBeNull();
-      expect(sessionStorage.getItem(TASK_DRAFT_KEY)).toBeNull();
-    },
-  );
+  it('drops corrupt JSON', () => {
+    sessionStorage.setItem(TASK_DRAFT_KEY, 'not json{');
+    expect(useTaskDraftStore().take()).toBeNull();
+    expect(sessionStorage.getItem(TASK_DRAFT_KEY)).toBeNull();
+  });
+
+  it('drops a draft with an invalid enum value', () => {
+    sessionStorage.setItem(
+      TASK_DRAFT_KEY,
+      JSON.stringify({ ...form(), scheduleKind: 'fortnightly' }),
+    );
+    expect(useTaskDraftStore().take()).toBeNull();
+  });
+
+  it('drops a draft with a missing field', () => {
+    const missing: Partial<TaskBody> = form();
+    delete missing.title;
+    sessionStorage.setItem(TASK_DRAFT_KEY, JSON.stringify(missing));
+    expect(useTaskDraftStore().take()).toBeNull();
+  });
+
+  it('keeps a valid body across a fresh pinia', () => {
+    sessionStorage.setItem(TASK_DRAFT_KEY, JSON.stringify(form()));
+    expect(reload().take()).toEqual(form());
+  });
 });

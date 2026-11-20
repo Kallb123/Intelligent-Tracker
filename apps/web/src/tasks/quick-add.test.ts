@@ -1,7 +1,8 @@
 import { parseQuickAdd } from '@tracker/core';
 import { UK_TEMPLATES, taskBodySchema } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
-import { highlightMatches, quickAddBody, quickAddForm } from './quick-add.js';
+import { highlightMatches, quickAddBody, quickAddTask } from './quick-add.js';
+import { formFromTask } from './task-form.js';
 
 const TZ = 'Europe/London';
 const NOW = new Date('2026-10-11T10:00:00Z');
@@ -47,9 +48,12 @@ describe('quickAddBody', () => {
   });
 });
 
-describe('quickAddForm', () => {
+/** The editor form "Edit details" opens on. */
+const form = (p: ReturnType<typeof parse>) => formFromTask(quickAddTask(p, ME), TZ);
+
+describe('quickAddTask', () => {
   it('fills the editor form from the parse, for the person adding it', () => {
-    expect(quickAddForm(parse(EXAMPLE), ME, TZ)).toMatchObject({
+    expect(form(parse(EXAMPLE))).toMatchObject({
       title: 'Car insurance renews',
       category: 'Car',
       allDay: true,
@@ -68,15 +72,13 @@ describe('quickAddForm', () => {
   });
 
   it('leaves the profile on the household default when the parse set none', () => {
-    const form = quickAddForm(parse('Water the plants every week'), ME, TZ);
-    expect(form.reminderProfile).toBe('');
-    expect(form.recurrence).toMatchObject({ kind: 'weekly' });
+    const f = form(parse('Water the plants every week'));
+    expect(f.reminderProfile).toBe('');
+    expect(f.recurrence).toMatchObject({ kind: 'weekly' });
   });
 
   it('uses the named assignee', () => {
-    expect(quickAddForm(parse('Put the bins out every Monday @Sam'), ME, TZ).fixedAssignee).toBe(
-      SAM,
-    );
+    expect(form(parse('Put the bins out every Monday @Sam')).fixedAssignee).toBe(SAM);
   });
 });
 

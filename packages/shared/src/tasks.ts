@@ -305,6 +305,11 @@ export const occurrenceCompletionResponseSchema = z.object({
 
 export const OCCURRENCE_VIEWS = ['today', 'upcoming', 'overdue'] as const;
 
+/** The most occurrences one `GET /api/occurrences` returns (its `limit`). */
+export const MAX_OCCURRENCE_LIMIT = 500;
+/** The furthest ahead, in days, the `upcoming` view of `GET /api/occurrences` looks. */
+export const MAX_UPCOMING_DAYS = 366;
+
 /** Query of `GET /api/occurrences`. */
 export const occurrenceListQuerySchema = z.object({
   view: z.enum(OCCURRENCE_VIEWS).default('today'),
@@ -312,8 +317,8 @@ export const occurrenceListQuerySchema = z.object({
   memberId: z.uuid().optional(),
   taskId: z.uuid().optional(),
   /** How far ahead the `upcoming` view looks. */
-  days: z.coerce.number().int().min(1).max(366).default(30),
-  limit: z.coerce.number().int().min(1).max(500).default(200),
+  days: z.coerce.number().int().min(1).max(MAX_UPCOMING_DAYS).default(30),
+  limit: z.coerce.number().int().min(1).max(MAX_OCCURRENCE_LIMIT).default(200),
 });
 
 /** Body of `POST /api/occurrences/:id/snooze`: exactly one of an end time or a number of days. */

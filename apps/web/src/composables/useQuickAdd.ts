@@ -12,7 +12,7 @@ import { describeError, getApi } from '../api/index.js';
 import { useMembersStore } from '../stores/members.js';
 import { useSessionStore } from '../stores/session.js';
 import { useTaskDraftStore } from '../stores/task-draft.js';
-import { quickAddBody, quickAddForm } from '../tasks/quick-add.js';
+import { quickAddBody, quickAddTask } from '../tasks/quick-add.js';
 
 /** What the confirmation card shows: the understanding of `text`, as it was when parsed. */
 export interface QuickAddPreview {
@@ -128,7 +128,7 @@ export function useQuickAdd(onSaved: () => void) {
     if (!current) return;
     error.value = '';
     try {
-      drafts.set(quickAddForm(current.parse, session.member?.id, session.timeZone));
+      drafts.set(quickAddTask(current.parse, session.member?.id));
       await router.push({ name: 'task-new' });
     } catch (err) {
       if (!(err instanceof ZodError)) throw err;

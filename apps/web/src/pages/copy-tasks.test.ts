@@ -1,6 +1,7 @@
 import type { MemberDto, OccurrenceDto } from '@tracker/shared';
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useSessionStore } from '../stores/session.js';
 import { apiError, fakeServer, json, mountApp, session, type Handler } from '../test-util.js';
 
 // Sunday 11 October 2026, 11:00 in London (BST).
@@ -177,5 +178,49 @@ describe('Copy tasks panel', () => {
     await pending;
     await flushPromises();
     expect(wrapper.findAll('.copy-tasks button')[0]!.attributes('disabled')).toBeUndefined();
+  });
+
+  it('disables Only me, and does not filter, without a signed-in member', async () => {
+    const { wrapper, server, pinia } = await open({
+      'GET /api/occurrences': json({ occurrences: [bins] }),
+    });
+    const store = useSessionStore(pinia);
+    store.info = { ...store.info!, member: null } as never;
+    await flushPromises();
+
+    const box = wrapper.get('#copy-only-me');
+    expect(box.attributes('disabled')).toBeDefined();
+    await click(wrapper, 'Copy today');
+    expect(server.callsTo('GET /api/occurrences').map((c) => c.search)).toEqual([
+      'view=today&limit=500',
+    ]);
+  });
+
+  it('shows the text to select by hand when the clipboard refuses, and clears it next time', async () => {
+    writeText.mockRejectedValue(new Error('denied'));
+    const { wrapper } = await open({
+      'GET /api/occurrences': json({ occurrences: [bins] }),
+    });
+
+    await click(wrapper, 'Copy today');
+    const area = wrapper.get<HTMLTextAreaElement>('.copy-tasks textarea');
+    expect(area.element.value).toContain('Put the bins out — Alex');
+    expect(area.attributes('readonly')).toBeDefined();
+
+    writeText.mockResolvedValue();
+    await click(wrapper, 'Copy today');
+    expect(wrapper.find('.copy-tasks textarea').exists()).toBe(false);
+  });
+
+  it('says when a list came back full and may have been cut', async () => {
+    const full = Array.from({ length: 500 }, (_, i) => occurrence(`Task ${i}`));
+    const { wrapper } = await open({ 'GET /api/occurrences': json({ occurrences: full }) });
+
+    await click(wrapper, 'Copy today');
+
+    expect(status(wrapper)).toBe(
+      'Copied 500 tasks (some lists may have been cut at 500; see the app for the rest)',
+    );
+    expect(writeText.mock.calls[0]?.[0]).toContain('Some lists may have been cut at 500 tasks');
   });
 });

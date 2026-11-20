@@ -1,5 +1,10 @@
 import { addLocalDays } from '@tracker/core';
-import { formatDayHeading, type OccurrenceDto } from '@tracker/shared';
+import {
+  formatDayHeading,
+  MAX_OCCURRENCE_LIMIT,
+  MAX_UPCOMING_DAYS,
+  type OccurrenceDto,
+} from '@tracker/shared';
 import { formatTime } from '../format.js';
 import { dueDateOf, groupByDate } from './occurrences.js';
 
@@ -12,8 +17,9 @@ export interface CopyQuery {
   limit: number;
 }
 
-const LIMIT = 500;
-const TODAY_VIEW: CopyQuery = { view: 'today', limit: LIMIT };
+/** Occurrences asked for per request; the api returns no more than this. */
+export const COPY_LIMIT = MAX_OCCURRENCE_LIMIT;
+const TODAY_VIEW: CopyQuery = { view: 'today', limit: COPY_LIMIT };
 
 /**
  * The api requests that together hold everything a bucket needs. The today view is everything due
@@ -22,12 +28,20 @@ const TODAY_VIEW: CopyQuery = { view: 'today', limit: LIMIT };
 export function queriesFor(bucket: CopyBucket): CopyQuery[] {
   switch (bucket) {
     case 'week':
-      return [TODAY_VIEW, { view: 'upcoming', days: 6, limit: LIMIT }];
+      return [TODAY_VIEW, { view: 'upcoming', days: 6, limit: COPY_LIMIT }];
     case 'all':
-      return [TODAY_VIEW, { view: 'upcoming', days: 366, limit: LIMIT }];
+      return [TODAY_VIEW, { view: 'upcoming', days: MAX_UPCOMING_DAYS, limit: COPY_LIMIT }];
     default:
       return [TODAY_VIEW];
   }
+}
+
+/**
+ * Whether any response came back full. It may have been cut at the limit, or may be complete: the
+ * api caps `limit` at 500, so one more cannot be asked for.
+ */
+export function wasCut(responseSizes: readonly number[], limit = COPY_LIMIT): boolean {
+  return responseSizes.some((size) => size >= limit);
 }
 
 /** Keeps the occurrences a bucket covers, once each (an item in its prep window can be in both views). */
@@ -75,6 +89,8 @@ export interface CopyListOptions {
   timeZone: string;
   /** A member id to their name, "Anyone" for none. */
   nameOf: (id: string | null) => string;
+  /** The api lists may have been cut at the limit (see `wasCut`); the text then says so. */
+  cut?: boolean;
 }
 
 export interface CopyList {
@@ -91,7 +107,7 @@ export interface CopyList {
  */
 export function buildCopyList(
   occurrences: readonly OccurrenceDto[],
-  { bucket, today, timeZone, nameOf }: CopyListOptions,
+  { bucket, today, timeZone, nameOf, cut = false }: CopyListOptions,
 ): CopyList {
   const items = selectForBucket(occurrences, bucket, today, timeZone).sort(byDue(timeZone));
   if (items.length === 0) return { text: '', count: 0 };
@@ -120,5 +136,7 @@ export function buildCopyList(
     const title = group.date === null ? 'No date' : formatDayHeading(group.date, today);
     sections.push([title, ...group.occurrences.map((o) => line(o, false))].join('\n'));
   }
+  if (cut)
+    sections.push(`Some lists may have been cut at ${COPY_LIMIT} tasks; see the app for the rest.`);
   return { text: [heading(bucket, today), ...sections].join('\n\n'), count: items.length };
 }

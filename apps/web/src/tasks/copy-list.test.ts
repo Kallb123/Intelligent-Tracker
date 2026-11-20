@@ -1,6 +1,12 @@
 import type { OccurrenceDto } from '@tracker/shared';
 import { describe, expect, it } from 'vitest';
-import { buildCopyList, queriesFor, selectForBucket, type CopyListOptions } from './copy-list.js';
+import {
+  buildCopyList,
+  queriesFor,
+  selectForBucket,
+  wasCut,
+  type CopyListOptions,
+} from './copy-list.js';
 
 const TZ = 'Europe/London';
 const TODAY = '2026-10-11'; // Sunday
@@ -173,5 +179,23 @@ describe('buildCopyList', () => {
       options('today'),
     );
     expect(text.indexOf('Earlier')).toBeLessThan(text.indexOf('Later'));
+  });
+});
+
+describe('wasCut', () => {
+  it('is true when any response is as long as the limit', () => {
+    expect(wasCut([3, 500])).toBe(true);
+    expect(wasCut([3, 499])).toBe(false);
+    expect(wasCut([])).toBe(false);
+  });
+});
+
+describe('buildCopyList when cut', () => {
+  it('ends with a line saying so', () => {
+    const { text } = buildCopyList([today], { ...options('today'), cut: true });
+    expect(
+      text.endsWith('\n\nSome lists may have been cut at 500 tasks; see the app for the rest.'),
+    ).toBe(true);
+    expect(buildCopyList([today], options('today')).text).not.toContain('cut');
   });
 });

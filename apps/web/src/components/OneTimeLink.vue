@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
-import InputText from 'primevue/inputtext';
 import { ref } from 'vue';
 import { useClipboard } from '../composables/useClipboard.js';
 import { formatDateTime } from '../format.js';
 import { useSessionStore } from '../stores/session.js';
+import SelectableText from './SelectableText.vue';
 
 /**
  * Shows a one-time link (or other one-time text to copy, such as a bot command) with a copy
@@ -41,13 +41,7 @@ async function copy(): Promise<void> {
     <h2>{{ title }}</h2>
     <p>{{ description }}</p>
     <div class="link-row">
-      <InputText
-        :model-value="link.url"
-        readonly
-        fluid
-        :aria-label="label"
-        @focus="($event.target as HTMLInputElement).select()"
-      />
+      <SelectableText :text="link.url" :label="label" />
       <Button
         type="button"
         :label="copied ? 'Copied' : 'Copy'"
