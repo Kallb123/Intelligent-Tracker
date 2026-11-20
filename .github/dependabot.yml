@@ -1,0 +1,47 @@
+# Dependabot version updates (weekly). Security updates are switched on separately in the
+# repository settings.
+#
+# npm PRs change what ships in the images, but Dependabot does not bump the version in the root
+# package.json. Before merging one, push a commit to its branch that bumps PATCH (see AGENTS.md),
+# or the update is not published. GitHub Actions PRs only touch CI and need no bump.
+#
+# Docker images are left out on purpose: the Node base image is pinned through an ARG that
+# Dependabot cannot update (it moves with .nvmrc), caddy:2-alpine already floats on Caddy 2, and
+# a new Postgres major needs a manual dump and restore.
+version: 2
+
+updates:
+  # One pnpm workspace: Dependabot reads the root pnpm-lock.yaml and updates the package.json
+  # files in apps/*, packages/* and e2e from it.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: deps
+      prefix-development: deps-dev
+    groups:
+      # Minor and patch updates arrive as one PR a week; majors get a PR each.
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # @types/node follows the Node major in .nvmrc and the Dockerfile, not the latest Node.
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - '*'
