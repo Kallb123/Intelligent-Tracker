@@ -1,4 +1,4 @@
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { describe, expect, it } from 'vitest';
 import { readVapidSettings, vapidKeysMatch } from './vapid-config.js';
 

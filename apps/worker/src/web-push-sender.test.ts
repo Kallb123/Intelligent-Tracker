@@ -1,9 +1,10 @@
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebPushSender, PUSH_SEND_TIMEOUT_MS } from './web-push-sender.js';
 
 vi.mock('web-push', () => ({
-  default: { setVapidDetails: vi.fn(), sendNotification: vi.fn(async () => ({})) },
+  setVapidDetails: vi.fn(),
+  sendNotification: vi.fn(async () => ({})),
 }));
 
 const config = { publicKey: 'pub', privateKey: 'priv', subject: 'mailto:admin@example.com' };

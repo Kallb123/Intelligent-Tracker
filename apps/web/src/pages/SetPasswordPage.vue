@@ -117,8 +117,8 @@ async function submit(): Promise<void> {
     <form v-else-if="info" novalidate @submit.prevent="submit">
       <p class="muted">
         {{ purpose === 'invite' ? 'Choose a password to finish joining.' : '' }}
-        You will log in as <strong>{{ info.username }}</strong
-        >. This link expires on {{ formatDateTime(info.expiresAt) }}.
+        You will log in as <strong>{{ info.username }}</strong>. This link expires on
+        {{ formatDateTime(info.expiresAt) }}.
       </p>
 
       <Message v-if="failure" severity="error" role="alert">{{ failure }}</Message>
