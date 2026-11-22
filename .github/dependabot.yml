@@ -33,9 +33,9 @@ updates:
       - dependency-name: '@types/node'
         update-types:
           - version-update:semver-major
-      # PrimeVue 5 and @primeuix/themes 3 leave MIT for the commercial PrimeUI licence, which needs
-      # a licence key even on its free Community tier. primeicons is already PrimeUI from 8 (the
-      # version in use; 7 is MIT), so its rule holds at 8. Majors are a deliberate decision.
+      # PrimeVue 5, @primeuix/themes 3 and primeicons 8 leave MIT for the commercial PrimeUI
+      # licence, which needs a licence key even on its free Community tier. These rules hold
+      # primevue at 4, the themes at 2 and primeicons at 7. Majors are a deliberate decision.
       - dependency-name: primevue
         update-types:
           - version-update:semver-major
