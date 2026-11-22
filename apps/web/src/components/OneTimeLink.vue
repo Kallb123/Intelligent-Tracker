@@ -55,8 +55,9 @@ async function copy(): Promise<void> {
     </p>
     <p class="muted">
       Works once. Expires on
-      <time :datetime="link.expiresAt">{{ formatDateTime(link.expiresAt, session.timeZone) }}</time
-      >.
+      <time :datetime="link.expiresAt">{{
+        formatDateTime(link.expiresAt, session.timeZone)
+      }}</time>.
     </p>
     <div v-if="$slots.default" class="button-row">
       <slot />

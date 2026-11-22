@@ -13,16 +13,16 @@
     "openapi": "tsx src/write-openapi.ts"
   },
   "dependencies": {
-    "@fastify/cookie": "^11.1.3",
-    "@fastify/swagger": "^9.9.2",
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/swagger": "^9.9.5",
     "@tracker/core": "workspace:*",
     "@tracker/db": "workspace:*",
     "@tracker/shared": "workspace:*",
     "drizzle-orm": "^0.45.4",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.8",
     "fastify-type-provider-zod": "^7.0.0",
-    "hash-wasm": "^4.12.0",
-    "zod": "^4.6.5"
+    "hash-wasm": "^4.13.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "tsx": "^4.23.15"
