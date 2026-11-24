@@ -219,7 +219,10 @@ place to show the result. Long titles and names are cut with "…" so a message 
 4096 characters, and reminders that were due more than 24 hours ago (the bot was down) are given up
 instead of posted late. A Telegram account that is already connected to a member is never moved by
 someone else's link: it has to be disconnected in the app first, and a `/linkgroup` code is used up
-even when the group is refused.
+even when the group is refused. An admin can switch each kind of message the group is sent (the
+five reminder kinds, the morning digest and the week-ahead digest) on or off from the web app's House
+group panel; all are on by default, and in-app notifications, Web Push and the commands below are
+not affected.
 
 The bot also answers these commands in the house group (in a private chat it points you there, and
 in any other group it stays silent):

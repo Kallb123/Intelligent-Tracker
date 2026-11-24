@@ -57,6 +57,13 @@
       "when": 1792773255990,
       "tag": "0007_web_push",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795547680964,
+      "tag": "0008_telegram_notification_toggles",
+      "breakpoints": true
     }
   ]
 }

@@ -87,6 +87,7 @@ export {
   redeemGroupLinkCode,
   redeemMemberLinkCode,
   TELEGRAM_LINK_CODE_TTL_MS,
+  setTelegramNotifications,
   telegramMessageNotifications,
   unlinkGroup,
   unlinkMember,

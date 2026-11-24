@@ -7,7 +7,12 @@ import {
   type PlannedReminder,
   type PlanRemindersInput,
 } from '@tracker/core';
-import { instantToWall, OPEN_OCCURRENCE_STATUSES, type ReminderPayload } from '@tracker/shared';
+import {
+  instantToWall,
+  OPEN_OCCURRENCE_STATUSES,
+  telegramNotificationEnabled,
+  type ReminderPayload,
+} from '@tracker/shared';
 import {
   and,
   asc,
@@ -162,7 +167,10 @@ function isEveningSlot(at: Date, h: { timezone: string; eveningSlot: string }): 
  * A household that has linked a Telegram group (`telegram_group_chat_id`) also gets one
  * `telegram_group` row per reminder, with no member: the bot posts the reminders due together as
  * one message that mentions the assignee. A household without a group gets none, so linking a
- * group later does not replay reminders that were already queued.
+ * group later does not replay reminders that were already queued. A kind the household has
+ * switched off for its group (`telegram_disabled_notifications`) gets no such row either, though
+ * its in-app and push rows are queued as usual. Rows already pending when a kind is switched off
+ * may still be posted; only reminders queued afterwards are held back.
  *
  * With `webPush` set (the worker does when the server has VAPID keys), each recipient who has at
  * least one `push_subscription` also gets one `web_push` row per reminder, for the worker to send
@@ -327,7 +335,10 @@ export async function queueDueReminders(
         });
       }
     }
-    if (context.household.telegramGroupChatId !== null) {
+    if (
+      context.household.telegramGroupChatId !== null &&
+      telegramNotificationEnabled(context.household.telegramDisabledNotifications, rem.kind)
+    ) {
       outbox.push({
         householdId: t.householdId,
         memberId: null,

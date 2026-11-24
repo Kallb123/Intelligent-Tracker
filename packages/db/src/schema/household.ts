@@ -32,6 +32,13 @@ export const household = pgTable('household', {
   // SHA-256 (hex) of the one-time code the admin sends as `/linkgroup <code>`; cleared when used.
   telegramGroupLinkCode: text('telegram_group_link_code').unique(),
   telegramGroupLinkExpiresAt: timestamp('telegram_group_link_expires_at', { withTimezone: true }),
+  // The Telegram notification types an admin switched OFF for the house group (see
+  // `TELEGRAM_NOTIFICATION_TYPES` in @tracker/shared). A list of what is off, not what is on, so
+  // a type added later is on by default and existing households see no change.
+  telegramDisabledNotifications: text('telegram_disabled_notifications')
+    .array()
+    .notNull()
+    .default(sql`'{}'::text[]`),
   defaultReminderProfile: reminderProfile('default_reminder_profile')
     .notNull()
     .default(HOUSEHOLD_DEFAULTS.defaultReminderProfile),

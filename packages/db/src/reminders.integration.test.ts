@@ -1171,6 +1171,36 @@ describe.skipIf(!adminUrl)('reminders (integration)', () => {
         expect(unlinked.h.telegramGroupChatId).toBeNull();
       });
 
+      it('is not queued for a kind the household switched off, but in-app still is', async () => {
+        await setup();
+        await db.update(household).set({
+          telegramGroupChatId: -100_5,
+          telegramDisabledNotifications: ['heads_up', 'retired_kind'],
+        });
+        await replanReminders(db, { now: NOW });
+
+        const result = await queueDueReminders(db, { now: DUE_NOW });
+
+        expect(result).toMatchObject({ queued: 1, notifications: 1 });
+        expect((await notifications()).map((n) => n.channel)).toEqual(['in_app']);
+      });
+
+      it('is still queued for a kind that is not switched off', async () => {
+        await setup();
+        await db.update(household).set({
+          telegramGroupChatId: -100_6,
+          telegramDisabledNotifications: ['nudge', 'morning'],
+        });
+        await replanReminders(db, { now: NOW });
+
+        await queueDueReminders(db, { now: DUE_NOW });
+
+        expect((await notifications()).map((n) => n.channel).sort()).toEqual([
+          'in_app',
+          'telegram_group',
+        ]);
+      });
+
       it('does not queue a reminder twice when the queue runs again', async () => {
         await setup();
         await db.update(household).set({ telegramGroupChatId: -100_3 });

@@ -1,0 +1,1 @@
+ALTER TABLE "household" ADD COLUMN "telegram_disabled_notifications" text[] DEFAULT '{}'::text[] NOT NULL;

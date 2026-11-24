@@ -48,6 +48,7 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
       ['DELETE', '/api/telegram/link'],
       ['POST', '/api/telegram/group-link'],
       ['DELETE', '/api/telegram/group-link'],
+      ['PATCH', '/api/telegram/notifications'],
     ] as const;
 
     it.each(routes)('%s %s needs a session', async (method, url) => {
@@ -79,6 +80,15 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
         botUsername: 'tracker_bot',
         groupLinked: false,
         memberLinked: false,
+        notifications: {
+          heads_up: true,
+          milestone: true,
+          nudge: true,
+          due: true,
+          overdue: true,
+          morning: true,
+          week_ahead: true,
+        },
       });
     });
 
@@ -201,6 +211,72 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
       expect((await sam.client.get('/api/telegram')).json<Json>().memberLinked).toBe(false);
       // Unlinking when nothing is linked is fine too.
       expect((await sam.client.delete('/api/telegram/link')).statusCode).toBe(204);
+    });
+  });
+
+  describe('notification switches', () => {
+    const disabled = async () => (await householdRow())?.telegramDisabledNotifications;
+
+    it('switches types off and on, keeping the ones it does not mention', async () => {
+      const off = await admin.patch('/api/telegram/notifications', {
+        nudge: false,
+        morning: false,
+      });
+      expect(off.statusCode).toBe(200);
+      expect(off.json<Json>().notifications).toMatchObject({
+        nudge: false,
+        morning: false,
+        due: true,
+        week_ahead: true,
+      });
+      expect((await disabled())?.sort()).toEqual(['morning', 'nudge']);
+
+      const on = await admin.patch('/api/telegram/notifications', { nudge: true, overdue: false });
+      expect(on.json<Json>().notifications).toMatchObject({
+        nudge: true,
+        morning: false,
+        overdue: false,
+      });
+      expect((await disabled())?.sort()).toEqual(['morning', 'overdue']);
+      expect((await admin.get('/api/telegram')).json<Json>().notifications).toMatchObject({
+        morning: false,
+        nudge: true,
+      });
+    });
+
+    it('is idempotent', async () => {
+      await admin.patch('/api/telegram/notifications', { due: false });
+      await admin.patch('/api/telegram/notifications', { due: false });
+      expect(await disabled()).toEqual(['due']);
+    });
+
+    it('is admin only', async () => {
+      const sam = await addMember(app, admin);
+      const res = await sam.client.patch('/api/telegram/notifications', { due: false });
+      expect(res.statusCode).toBe(403);
+      expect(await disabled()).toEqual([]);
+    });
+
+    it('only touches the admin`s own household', async () => {
+      const outsider = await addOutsider(app, handle);
+      await admin.patch('/api/telegram/notifications', { due: false });
+      const other = await handle.db
+        .select()
+        .from(household)
+        .where(eq(household.id, outsider.householdId));
+      expect(other[0]?.telegramDisabledNotifications).toEqual([]);
+    });
+
+    it.each([
+      ['an unknown key', { bogus: false }],
+      ['an unknown key next to a known one', { due: false, bogus: true }],
+      ['an empty body', {}],
+      ['a non-boolean', { due: 'no' }],
+      ['null', { due: null }],
+    ])('refuses %s', async (_name, body) => {
+      const res = await admin.patch('/api/telegram/notifications', body);
+      expect(res.statusCode).toBe(400);
+      expect(await disabled()).toEqual([]);
     });
   });
 

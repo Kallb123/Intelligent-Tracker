@@ -316,6 +316,11 @@ Everything goes to **one house group chat**.
   needs to know which Telegram user is which member. In the web UI each member clicks
   "Connect Telegram", which opens `t.me/<bot>?start=<one-time code>`. That one-off private chat
   records their `telegram_user_id`. After that, all interaction happens in the group.
+- **Notification switches (admin):** each type the group is sent on its own (heads-up, milestone,
+  nudge, due, overdue, morning digest, week-ahead digest) can be switched off for the household in
+  the same panel. All are on by default; the household stores the list that is off
+  (`telegram_disabled_notifications`). A reminder of a switched-off kind still reaches the in-app
+  bell and Web Push, and the on-demand commands are unaffected.
 - **Mentions:** reminders tag the assignee with a `tg://user?id=…` mention, which notifies them
   even if they've muted the group (provided they haven't turned off mention notifications).
   Rotation and "anyone" tasks tag the current assignee, or say "Anyone 🙋".

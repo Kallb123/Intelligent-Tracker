@@ -9,7 +9,7 @@ import {
   type DigestKey,
   type Household,
 } from '@tracker/db';
-import type { DigestKind } from '@tracker/shared';
+import { telegramNotificationEnabled, type DigestKind } from '@tracker/shared';
 import { GrammyError, type Api } from 'grammy';
 import type { BotDeps } from './deps.js';
 import { renderMorningDigest, renderWeekAhead } from './digest.js';
@@ -84,6 +84,8 @@ export async function deliverDigests(db: Database, api: Api, deps: BotDeps): Pro
       });
       for (const { kind, localDate } of due) {
         const key = { householdId: household.id, kind, localDate };
+        // Checked before claiming, so switching the digest back on within its window sends it.
+        if (!telegramNotificationEnabled(household.telegramDisabledNotifications, kind)) continue;
         if (notBefore.has(backoffKey(key))) continue;
         if (!(await claimDigest(db, { ...key, now }))) continue;
         let text: string | null;
