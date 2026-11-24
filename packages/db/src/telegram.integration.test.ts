@@ -24,6 +24,7 @@ import {
   occurrenceStates,
   redeemGroupLinkCode,
   redeemMemberLinkCode,
+  setTelegramNotifications,
   TELEGRAM_LINK_CODE_TTL_MS,
   telegramMessageNotifications,
   unlinkGroup,
@@ -88,6 +89,70 @@ describe.skipIf(!adminUrl)('telegram linking (integration)', () => {
     return m;
   };
   const later = (ms: number) => new Date(NOW.getTime() + ms);
+
+  describe('setTelegramNotifications', () => {
+    it('starts with every type on', async () => {
+      const h = await newHousehold();
+      expect(h.telegramDisabledNotifications).toEqual([]);
+    });
+
+    it('switches types off and on, merging with what is already off', async () => {
+      const h = await newHousehold();
+
+      const first = await setTelegramNotifications(db, h.id, { nudge: false, morning: false });
+      expect(first).toMatchObject({ nudge: false, morning: false, due: true, heads_up: true });
+
+      const second = await setTelegramNotifications(db, h.id, { nudge: true, due: false });
+      expect(second).toMatchObject({ nudge: true, morning: false, due: false });
+      expect((await reload(h.id)).telegramDisabledNotifications.sort()).toEqual(['due', 'morning']);
+    });
+
+    it('does not duplicate a type switched off twice, and keeps unknown stored strings', async () => {
+      const h = await newHousehold();
+      await db
+        .update(household)
+        .set({ telegramDisabledNotifications: ['retired_kind'] })
+        .where(eq(household.id, h.id));
+
+      await setTelegramNotifications(db, h.id, { due: false });
+      await setTelegramNotifications(db, h.id, { due: false });
+
+      expect((await reload(h.id)).telegramDisabledNotifications.sort()).toEqual([
+        'due',
+        'retired_kind',
+      ]);
+    });
+
+    it('changes nothing for an empty patch, and returns null for an unknown household', async () => {
+      const h = await newHousehold();
+      await setTelegramNotifications(db, h.id, { due: false });
+      expect(await setTelegramNotifications(db, h.id, {})).toMatchObject({ due: false });
+      expect(
+        await setTelegramNotifications(db, '00000000-0000-4000-8000-000000000000', { due: false }),
+      ).toBeNull();
+    });
+
+    it('keeps both changes when two admins switch different types at once', async () => {
+      const h = await newHousehold();
+      await Promise.all([
+        setTelegramNotifications(db, h.id, { overdue: false }),
+        setTelegramNotifications(db, h.id, { week_ahead: false }),
+        setTelegramNotifications(db, h.id, { heads_up: false }),
+      ]);
+      expect((await reload(h.id)).telegramDisabledNotifications.sort()).toEqual([
+        'heads_up',
+        'overdue',
+        'week_ahead',
+      ]);
+    });
+
+    it('only touches its own household', async () => {
+      const a = await newHousehold();
+      const b = await newHousehold();
+      await setTelegramNotifications(db, a.id, { due: false });
+      expect((await reload(b.id)).telegramDisabledNotifications).toEqual([]);
+    });
+  });
 
   describe('group link code', () => {
     it('is stored as a hash with an expiry, and replaced by the next code', async () => {

@@ -1,4 +1,4 @@
-import { occurrence, task, telegramDigest } from '@tracker/db';
+import { household as householdTable, occurrence, task, telegramDigest } from '@tracker/db';
 import { eq } from 'drizzle-orm';
 import { HttpError } from 'grammy';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -74,6 +74,34 @@ describe.skipIf(!adminUrl)('scheduled digests (integration)', () => {
     // The next morning it goes out again.
     expect(await deliver(harness, new Date('2026-11-03T08:00:00Z'))).toBe(1);
     expect(telegram.to('sendMessage')).toHaveLength(2);
+  });
+
+  it('skips a digest that is switched off without claiming it, so switching it on still sends it', async () => {
+    const harness = await setup();
+    await test.db
+      .update(householdTable)
+      .set({ telegramDisabledNotifications: ['morning'] })
+      .where(eq(householdTable.id, harness.household.id));
+
+    expect(await deliver(harness, MONDAY_MORNING)).toBe(0);
+    expect(harness.telegram.calls).toEqual([]);
+    expect(await claims()).toEqual([]);
+
+    await test.db
+      .update(householdTable)
+      .set({ telegramDisabledNotifications: [] })
+      .where(eq(householdTable.id, harness.household.id));
+    expect(await deliver(harness, new Date(MONDAY_MORNING.getTime() + 60_000))).toBe(1);
+    expect(await claims()).toHaveLength(1);
+  });
+
+  it('only skips the digest kind that is switched off', async () => {
+    const harness = await setup();
+    await test.db.update(householdTable).set({ telegramDisabledNotifications: ['week_ahead'] });
+
+    expect(await deliver(harness, SUNDAY_MORNING)).toBe(1);
+    expect(await deliver(harness, SUNDAY_EVENING)).toBe(0);
+    expect((await claims()).map((c) => c.kind)).toEqual(['morning']);
   });
 
   it('sends nothing before the morning slot, or long after it', async () => {

@@ -1,4 +1,11 @@
-import type { OccurrenceStatus } from '@tracker/shared';
+import {
+  telegramNotificationsFromDisabled,
+  TELEGRAM_NOTIFICATION_TYPES,
+  type OccurrenceStatus,
+  type TelegramNotifications,
+  type TelegramNotificationsPatch,
+  type TelegramNotificationType,
+} from '@tracker/shared';
 import { and, asc, desc, eq, gt, inArray, ne, sql } from 'drizzle-orm';
 import type { Database, DbOrTransaction } from './client.js';
 import { uniqueViolation } from './errors.js';
@@ -125,6 +132,43 @@ export async function unlinkGroup(db: DbOrTransaction, householdId: string): Pro
       telegramGroupLinkExpiresAt: null,
     })
     .where(eq(household.id, householdId));
+}
+
+/**
+ * Applies a patch to the household's Telegram notification switches and returns the switches as
+ * they are afterwards. The new off-list is worked out by one UPDATE from the column's current
+ * value, not read and written back by the caller, so two admins switching different types at the
+ * same moment both keep their change. Types the patch does not mention keep their setting, and
+ * strings in the column that are no longer a known type are left alone. An empty patch changes
+ * nothing. Returns null when the household does not exist.
+ */
+export async function setTelegramNotifications(
+  db: DbOrTransaction,
+  householdId: string,
+  patch: TelegramNotificationsPatch,
+): Promise<TelegramNotifications | null> {
+  const off = TELEGRAM_NOTIFICATION_TYPES.filter((type) => patch[type] === false);
+  const on = TELEGRAM_NOTIFICATION_TYPES.filter((type) => patch[type] === true);
+  const list = (types: TelegramNotificationType[]) =>
+    sql`array[${sql.join(
+      types.map((type) => sql`${type}`),
+      sql`, `,
+    )}]::text[]`;
+  const current = household.telegramDisabledNotifications;
+  // Current list minus the types being switched on, plus the types being switched off (once each).
+  let next = sql`${current}`;
+  if (on.length > 0) {
+    next = sql`array(select t from unnest(${next}) as t where t <> all(${list(on)}))`;
+  }
+  if (off.length > 0) {
+    next = sql`array(select distinct t from unnest(${next} || ${list(off)}) as t)`;
+  }
+  const [updated] = await db
+    .update(household)
+    .set({ telegramDisabledNotifications: next })
+    .where(eq(household.id, householdId))
+    .returning({ disabled: household.telegramDisabledNotifications });
+  return updated ? telegramNotificationsFromDisabled(updated.disabled) : null;
 }
 
 /**

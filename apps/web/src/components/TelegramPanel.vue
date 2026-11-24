@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import type { GroupLinkResponse, MemberLinkResponse, TelegramStatus } from '@tracker/shared';
+import {
+  TELEGRAM_NOTIFICATION_TYPES,
+  type GroupLinkResponse,
+  type MemberLinkResponse,
+  type TelegramNotificationType,
+  type TelegramStatus,
+} from '@tracker/shared';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import Tag from 'primevue/tag';
+import ToggleSwitch from 'primevue/toggleswitch';
 import { onMounted, ref } from 'vue';
 import { describeError, getApi } from '../api/index.js';
 import { useSessionStore } from '../stores/session.js';
@@ -14,6 +21,42 @@ import OneTimeLink from './OneTimeLink.vue';
  * status is fetched again to see whether that has happened.
  */
 const session = useSessionStore();
+
+/**
+ * What each switch is called and does. Keyed by type, so a new notification type fails the type
+ * check until it has copy here.
+ */
+const NOTIFICATION_COPY: Record<TelegramNotificationType, { label: string; description: string }> =
+  {
+    heads_up: {
+      label: 'Heads-ups',
+      description: 'The first reminder of a job, when its preparation window opens.',
+    },
+    milestone: {
+      label: 'Milestones',
+      description: 'Reminders for the steps of a job, on the day each one is due.',
+    },
+    nudge: {
+      label: 'Nudges',
+      description: 'Reminders between the heads-up and the due day, for jobs not yet done.',
+    },
+    due: {
+      label: 'Due today',
+      description: 'The reminder on the day a job is due.',
+    },
+    overdue: {
+      label: 'Overdue',
+      description: 'Repeat reminders for a job that is past its due date.',
+    },
+    morning: {
+      label: 'Morning digest',
+      description: "The day's jobs, posted every morning.",
+    },
+    week_ahead: {
+      label: 'Week ahead',
+      description: "The coming week's jobs, posted on Sunday evenings.",
+    },
+  };
 
 const status = ref<TelegramStatus | null>(null);
 const failure = ref('');
@@ -81,6 +124,33 @@ const unlinkGroup = () =>
     groupLink.value = null;
     confirmingGroupUnlink.value = false;
   });
+
+/** The switches whose save is still in flight. */
+const saving = ref<TelegramNotificationType[]>([]);
+
+/**
+ * Saves one switch straight away. The switch moves first; if the save fails it moves back and
+ * the api's message is shown. On success the server's record is the truth.
+ */
+async function setNotification(type: TelegramNotificationType, on: boolean): Promise<void> {
+  if (!status.value || saving.value.includes(type)) return;
+  const before = status.value.notifications[type];
+  failure.value = '';
+  status.value.notifications[type] = on;
+  saving.value.push(type);
+  // Only this switch's key is written back, into whatever status is current by then: another
+  // switch may be saving at the same time, and a refresh may have replaced the status.
+  try {
+    const { data } = await getApi().PATCH('/api/telegram/notifications', { body: { [type]: on } });
+    if (!data) throw new Error('The change was not saved');
+    if (status.value) status.value.notifications[type] = data.notifications[type];
+  } catch (err) {
+    if (status.value) status.value.notifications[type] = before;
+    failure.value = describeError(err);
+  } finally {
+    saving.value = saving.value.filter((t) => t !== type);
+  }
+}
 
 onMounted(refresh);
 </script>
@@ -200,6 +270,30 @@ onMounted(refresh);
           @click="linkGroup"
         />
       </div>
+      <template v-if="status.groupLinked">
+        <h3 id="telegram-notifications-heading">What the bot posts</h3>
+        <p class="muted">
+          Choose which messages the bot posts in the house group. In-app and phone notifications are
+          not affected.
+        </p>
+        <ul class="notification-list" aria-labelledby="telegram-notifications-heading">
+          <li v-for="type in TELEGRAM_NOTIFICATION_TYPES" :key="type" class="notification-row">
+            <ToggleSwitch
+              :model-value="status.notifications[type]"
+              :input-id="`telegram-notify-${type}`"
+              :disabled="saving.includes(type)"
+              :pt="{ input: { 'aria-describedby': `telegram-notify-${type}-description` } }"
+              @update:model-value="setNotification(type, $event)"
+            />
+            <div>
+              <label :for="`telegram-notify-${type}`">{{ NOTIFICATION_COPY[type].label }}</label>
+              <p :id="`telegram-notify-${type}-description`" class="muted">
+                {{ NOTIFICATION_COPY[type].description }}
+              </p>
+            </div>
+          </li>
+        </ul>
+      </template>
     </template>
   </section>
 
@@ -220,3 +314,28 @@ onMounted(refresh);
     />
   </OneTimeLink>
 </template>
+
+<style scoped>
+.notification-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.notification-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.notification-row label {
+  font-weight: 600;
+}
+
+.notification-row p {
+  margin: 0;
+}
+</style>

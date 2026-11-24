@@ -22,6 +22,7 @@ const household = {
   morningSlot: '08:00:00',
   eveningSlot: '18:00:00',
   telegramGroupChatId: -1001,
+  telegramDisabledNotifications: [] as string[],
 };
 
 describe('deliverDigests', () => {

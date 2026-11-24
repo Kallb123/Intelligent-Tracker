@@ -1,4 +1,4 @@
-import type { MemberDto } from '@tracker/shared';
+import { TELEGRAM_NOTIFICATION_TYPES, type MemberDto } from '@tracker/shared';
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMembersStore } from '../stores/members.js';
@@ -652,7 +652,21 @@ describe('MembersPage', () => {
 });
 
 const TELEGRAM = 'GET /api/telegram';
-const notLinked = { botUsername: 'tracker_bot', groupLinked: false, memberLinked: false };
+const allOn = {
+  heads_up: true,
+  milestone: true,
+  nudge: true,
+  due: true,
+  overdue: true,
+  morning: true,
+  week_ahead: true,
+};
+const notLinked = {
+  botUsername: 'tracker_bot',
+  groupLinked: false,
+  memberLinked: false,
+  notifications: allOn,
+};
 
 describe('AccountPage', () => {
   it('changes the password', async () => {
@@ -919,6 +933,114 @@ describe('Telegram on the AccountPage', () => {
         'Not linked',
       );
       expect(wrapper.text()).not.toContain('Stop sending reminders');
+    });
+  });
+
+  describe('notification switches', () => {
+    const NOTIFY = 'PATCH /api/telegram/notifications';
+    const linked = { ...notLinked, groupLinked: true };
+    const switchFor = (wrapper: VueWrapper, type: string) =>
+      wrapper.get(`input#telegram-notify-${type}`);
+
+    it('lists one labelled switch per type for an admin with a linked group', async () => {
+      const { wrapper } = await open(
+        {
+          [ME]: json(session()),
+          [TELEGRAM]: json({ ...linked, notifications: { ...allOn, nudge: false } }),
+        },
+        '/account',
+      );
+
+      const inputs = wrapper.findAll('input[id^="telegram-notify-"]');
+      expect(inputs.map((i) => i.attributes('id'))).toEqual(
+        TELEGRAM_NOTIFICATION_TYPES.map((t) => `telegram-notify-${t}`),
+      );
+      expect(wrapper.get('label[for="telegram-notify-morning"]').text()).toBe('Morning digest');
+      const night = switchFor(wrapper, 'week_ahead');
+      expect(night.attributes('aria-describedby')).toBe('telegram-notify-week_ahead-description');
+      expect(wrapper.get('#telegram-notify-week_ahead-description').text()).toContain('Sunday');
+      expect((switchFor(wrapper, 'nudge').element as HTMLInputElement).checked).toBe(false);
+      expect((switchFor(wrapper, 'due').element as HTMLInputElement).checked).toBe(true);
+    });
+
+    it('is not shown when the group is not linked, or to a member', async () => {
+      const unlinked = await open(
+        { [ME]: json(session()), [TELEGRAM]: json(notLinked) },
+        '/account',
+      );
+      expect(unlinked.wrapper.find('input[id^="telegram-notify-"]').exists()).toBe(false);
+      unlinked.wrapper.unmount();
+
+      const { wrapper } = await open(
+        { [ME]: json(session({ role: 'member' })), [TELEGRAM]: json(linked) },
+        '/account',
+      );
+      expect(wrapper.find('input[id^="telegram-notify-"]').exists()).toBe(false);
+    });
+
+    it('saves a toggle straight away with just that key', async () => {
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json(linked),
+        [NOTIFY]: json({ notifications: { ...allOn, overdue: false } }),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+
+      await switchFor(wrapper, 'overdue').setValue(false);
+      await flushPromises();
+
+      expect(server.callsTo(NOTIFY)).toHaveLength(1);
+      expect(server.callsTo(NOTIFY)[0]?.body).toEqual({ overdue: false });
+      expect(server.callsTo(NOTIFY)[0]?.headers.get('x-csrf-token')).toBe('csrf-abc');
+      expect((switchFor(wrapper, 'overdue').element as HTMLInputElement).checked).toBe(false);
+      expect((switchFor(wrapper, 'overdue').element as HTMLInputElement).disabled).toBe(false);
+      expect((switchFor(wrapper, 'due').element as HTMLInputElement).checked).toBe(true);
+    });
+
+    it('keeps both switches right when two saves finish in reverse order', async () => {
+      const pending: ((r: Response) => void)[] = [];
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json(linked),
+        [NOTIFY]: () => new Promise<Response>((resolve) => pending.push(resolve)),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+      const checked = (type: string) =>
+        (switchFor(wrapper, type).element as HTMLInputElement).checked;
+
+      await switchFor(wrapper, 'due').setValue(false);
+      await switchFor(wrapper, 'overdue').setValue(false);
+      await flushPromises();
+      expect(pending).toHaveLength(2);
+
+      // The second save finishes first, with a record that predates the first change.
+      pending[1]?.(json({ notifications: { ...allOn, overdue: false } }));
+      await flushPromises();
+      pending[0]?.(json({ notifications: { ...allOn, due: false } }));
+      await flushPromises();
+
+      expect(checked('due')).toBe(false);
+      expect(checked('overdue')).toBe(false);
+      expect(checked('nudge')).toBe(true);
+    });
+
+    it('puts the switch back and shows the error when saving fails', async () => {
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json(linked),
+        [NOTIFY]: apiError(500, 'internal', 'Could not save'),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+
+      await switchFor(wrapper, 'due').setValue(false);
+      await flushPromises();
+
+      expect(wrapper.get('[role="alert"]').text()).toBe('Could not save');
+      expect((switchFor(wrapper, 'due').element as HTMLInputElement).checked).toBe(true);
+      expect((switchFor(wrapper, 'due').element as HTMLInputElement).disabled).toBe(false);
     });
   });
 });

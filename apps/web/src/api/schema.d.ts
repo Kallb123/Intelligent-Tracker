@@ -3432,6 +3432,15 @@ export interface paths {
                             botUsername: string | null;
                             groupLinked: boolean;
                             memberLinked: boolean;
+                            notifications: {
+                                heads_up: boolean;
+                                milestone: boolean;
+                                nudge: boolean;
+                                due: boolean;
+                                overdue: boolean;
+                                morning: boolean;
+                                week_ahead: boolean;
+                            };
                         };
                     };
                 };
@@ -3673,6 +3682,103 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/telegram/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Switch house-group notifications on or off (admin)
+         * @description Only the types in the body change; the rest keep their setting. Applies to what the bot posts in the house group on its own (each reminder kind and the digests), not to in-app notifications, Web Push or the bot commands. Returns every switch afterwards.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        heads_up?: boolean;
+                        milestone?: boolean;
+                        nudge?: boolean;
+                        due?: boolean;
+                        overdue?: boolean;
+                        morning?: boolean;
+                        week_ahead?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            notifications: {
+                                heads_up: boolean;
+                                milestone: boolean;
+                                nudge: boolean;
+                                due: boolean;
+                                overdue: boolean;
+                                morning: boolean;
+                                week_ahead: boolean;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
         trace?: never;
     };
 }
