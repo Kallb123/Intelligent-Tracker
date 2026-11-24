@@ -133,17 +133,19 @@ const saving = ref<TelegramNotificationType[]>([]);
  * the api's message is shown. On success the server's record is the truth.
  */
 async function setNotification(type: TelegramNotificationType, on: boolean): Promise<void> {
-  const current = status.value;
-  if (!current || saving.value.includes(type)) return;
-  const before = current.notifications[type];
+  if (!status.value || saving.value.includes(type)) return;
+  const before = status.value.notifications[type];
   failure.value = '';
-  current.notifications[type] = on;
+  status.value.notifications[type] = on;
   saving.value.push(type);
+  // Only this switch's key is written back, into whatever status is current by then: another
+  // switch may be saving at the same time, and a refresh may have replaced the status.
   try {
     const { data } = await getApi().PATCH('/api/telegram/notifications', { body: { [type]: on } });
-    if (data) current.notifications = data.notifications;
+    if (!data) throw new Error('The change was not saved');
+    if (status.value) status.value.notifications[type] = data.notifications[type];
   } catch (err) {
-    current.notifications[type] = before;
+    if (status.value) status.value.notifications[type] = before;
     failure.value = describeError(err);
   } finally {
     saving.value = saving.value.filter((t) => t !== type);

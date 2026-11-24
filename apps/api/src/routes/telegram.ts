@@ -196,7 +196,8 @@ export function registerTelegramRoutes(app: FastifyInstance, ctx: ApiContext): v
         request.body,
       );
       // The caller's household exists (they have a session in it), so null cannot happen.
-      return { notifications: notifications as NonNullable<typeof notifications> };
+      if (!notifications) throw new Error('The signed-in member has no household');
+      return { notifications };
     },
   );
 }

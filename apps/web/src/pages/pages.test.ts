@@ -998,6 +998,34 @@ describe('Telegram on the AccountPage', () => {
       expect((switchFor(wrapper, 'due').element as HTMLInputElement).checked).toBe(true);
     });
 
+    it('keeps both switches right when two saves finish in reverse order', async () => {
+      const pending: ((r: Response) => void)[] = [];
+      const server = fakeServer({
+        [ME]: json(session()),
+        [TELEGRAM]: json(linked),
+        [NOTIFY]: () => new Promise<Response>((resolve) => pending.push(resolve)),
+      });
+      const { wrapper } = await mountApp(server, '/account');
+      mounted = wrapper;
+      const checked = (type: string) =>
+        (switchFor(wrapper, type).element as HTMLInputElement).checked;
+
+      await switchFor(wrapper, 'due').setValue(false);
+      await switchFor(wrapper, 'overdue').setValue(false);
+      await flushPromises();
+      expect(pending).toHaveLength(2);
+
+      // The second save finishes first, with a record that predates the first change.
+      pending[1]?.(json({ notifications: { ...allOn, overdue: false } }));
+      await flushPromises();
+      pending[0]?.(json({ notifications: { ...allOn, due: false } }));
+      await flushPromises();
+
+      expect(checked('due')).toBe(false);
+      expect(checked('overdue')).toBe(false);
+      expect(checked('nudge')).toBe(true);
+    });
+
     it('puts the switch back and shows the error when saving fails', async () => {
       const server = fakeServer({
         [ME]: json(session()),
